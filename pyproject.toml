@@ -4,16 +4,7 @@ version = "0.1.0"
 description = "Project for research at ICN Laboratory"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "gymnasium>=1.1.1",
-    "kubernetes>=33.1.0",
-    "numpy>=2.3.0",
-    "torch",
-    "torchvision",
-    "torchaudio",
-    "stable-baselines3[extra]>=2.6.0",
-    "ipykernel>=6.29.5",
-]
+dependencies = []
 
 [tool.uv.sources]
 torch = [
@@ -30,3 +21,16 @@ torchaudio = [
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "gymnasium>=1.1.1",
+    "kubernetes>=33.1.0",
+    "numpy>=2.3.0",
+    "torch>=2.7.1",
+    "torchaudio>=2.7.1",
+    "torchvision>=0.22.1",
+    "stable-baselines3[extra]>=2.6.0",
+    "ipykernel>=6.29.5",
+    "nbqa>=1.9.1",
+]

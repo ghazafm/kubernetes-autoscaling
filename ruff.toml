@@ -1,0 +1,58 @@
+exclude = [
+    ".venv/*",
+    ]
+
+# Mininal python version we support is 3.8
+target-version = "py38"
+
+lint.select = [
+    "E",  # pycodestyle
+    "W",  # pycodestyle
+    "F",  # Pyflakes
+    "PL", # pylint
+    "I", # isort
+    "B", # flake8-bugbear
+    "A", # flake8-builtins
+    "S", # flake8-bandit
+    "ISC", # flake8-implicit-str-concat
+    "ICN", # flake8-import-conventions
+    "PIE", # flake8-pie
+    "Q", # flake8-quotes
+    "RET", # flake8-return
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    "RUF", # Ruff-specific rules
+    "YTT", # flake8-2020
+    "UP", # pyupgrade
+    "C4", # flake8-comprehensions
+    "PTH", # flake8-use-pathlib
+    "G", # flake8-logging-format
+    "INP", # flake8-no-pep420
+    "T20", # flake8-print
+]
+
+lint.ignore = [
+    "UP006", # https://github.com/charliermarsh/ruff/pull/4427
+    "UP007", # https://github.com/charliermarsh/ruff/pull/4427
+    # Mutable class attributes should be annotated with `typing.ClassVar`
+    # Too many violations
+    "RUF012",
+    # Logging statement uses f-string
+    "G004",
+]
+
+[lint.per-file-ignores]
+# python scripts in bin/ needs some python path configurations before import
+"bin/*.py" = [
+    # E402: module-import-not-at-top-of-file
+    "E402",
+    # S603: `subprocess` call: check for execution of untrusted input
+    # these are dev tools and do not have risks of malicious inputs.
+    "S603",
+    # T201 `print` found
+    # print() is allowed in bin/ as they are dev tools.
+    "T201",
+]
+
+[lint.pylint]
+max-args = 15
