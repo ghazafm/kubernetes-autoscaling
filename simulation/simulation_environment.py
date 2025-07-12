@@ -11,7 +11,11 @@ from pyparsing import Any
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filename=f"simulation_environment_{time.strftime('%Y%m%d_%H%M%S')}.log",
+    filemode="a",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 
