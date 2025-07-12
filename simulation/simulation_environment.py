@@ -147,14 +147,14 @@ class K8sAutoscalerEnv(Env):
 
     def step(self, action):
         mapped_action = action - self.action_step
-        logging.info(
-            f"Action taken: {mapped_action} (raw: {action}), New replica state: "
-            f"{self.replica_state}"
-        )
 
         self.replica_state = max(
             self.min_replicas,
             min(self.max_replicas, self.replica_state + mapped_action),
+        )
+        logging.info(
+            f"Action taken: {mapped_action} (raw: {action}), New replica state: "
+            f"{self.replica_state}"
         )
         self.iteration -= 1
         self._scale_deployment()
