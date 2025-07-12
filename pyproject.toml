@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Project for research at ICN Laboratory"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "gymnasium>=1.1.1",
+    "numpy>=2.3.0",
+]
 
 [tool.uv.sources]
 torch = [
