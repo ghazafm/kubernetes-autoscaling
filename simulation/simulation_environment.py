@@ -240,7 +240,7 @@ class K8sAutoscalerEnv(Env):
             "target_memory": self.target_memory,
         }
         if self.verbose:
-            logging.info(
+            logging.debug(
                 f"Step info: {info}, Reward: {reward}, Terminated: {terminated}, "
                 f"Truncated: {truncated}",
             )
@@ -323,7 +323,7 @@ class K8sAutoscalerEnv(Env):
                     logging.info(f"All {desired_replicas} pods are ready")
                     return True, desired_replicas, ready_replicas
 
-                logging.info(
+                logging.debug(
                     f"Waiting for pods: {ready_replicas}/{desired_replicas} ready"
                 )
                 time.sleep(5)
