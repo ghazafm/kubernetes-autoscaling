@@ -83,7 +83,13 @@ class K8sAutoscalerEnv(Env):
         )
 
     def get_metrics(self, replicas):
+        counter = 0
         while True:
+            if counter >= self.timeout:
+                logging.warning(
+                    f"Timeout reached while fetching metrics after {self.timeout}s"
+                )
+            counter += 1
             metric_data = self.api.list_namespaced_custom_object(
                 group="metrics.k8s.io",
                 version="v1beta1",
@@ -127,6 +133,7 @@ class K8sAutoscalerEnv(Env):
 
             if replica >= replicas:
                 break
+            time.sleep(1)
 
         logging.info(f"Fetched metrics for {replica} replicas.")
         cpu_usage_mean = np.mean(cpu_usage) if cpu_usage else 0
@@ -169,7 +176,10 @@ class K8sAutoscalerEnv(Env):
                 f" -{cluster_penalty}"
             )
         else:
-            logging.info("CLUSTER HEALTH: All pods are ready")
+            logging.info(
+                "CLUSTER HEALTH: All pods are ready: "
+                f"{ready_replicas}/{desired_replicas}"
+            )
 
         cpu_reward = 0
         if ready_replicas == self.min_replicas:
@@ -320,7 +330,6 @@ class K8sAutoscalerEnv(Env):
                     desired_replicas = 0
 
                 if ready_replicas >= desired_replicas > 0:
-                    logging.info(f"All {desired_replicas} pods are ready")
                     return True, desired_replicas, ready_replicas
 
                 logging.debug(
