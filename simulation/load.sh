@@ -5,7 +5,7 @@ uv run load.py \
     --duration 172800 \
     --base-rps 1000 \
     --max-rps 10000000 \
-    --max-concurrent 200 \
+    --max-concurrent 50 \
     --stress-probability 0.3 \
     --dynamic-stress \
     --verbose
