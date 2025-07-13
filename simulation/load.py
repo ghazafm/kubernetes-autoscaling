@@ -68,7 +68,14 @@ class SimpleLoadTester:
 
         logger.info(f"Starting load tester - Target: {self.target_url}")
 
-        connector = aiohttp.TCPConnector(limit=self.max_concurrent)
+        connector = aiohttp.TCPConnector(
+            limit=self.max_concurrent,
+            limit_per_host=5,
+            ttl_dns_cache=30,
+            use_dns_cache=True,
+            keepalive_timeout=10,
+            enable_cleanup_closed=True,
+        )
         timeout = aiohttp.ClientTimeout(total=10)
         self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
 

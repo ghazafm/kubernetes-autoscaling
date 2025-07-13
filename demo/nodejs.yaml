@@ -40,15 +40,15 @@ spec:
             const data = crypto.randomBytes(1024 * 100);
             if (parsedUrl.pathname === '/stress') {
               for (let i = 0; i < 20; i++) {
-                const data = crypto.randomBytes(1024 * 512);
+                const data = crypto.randomBytes(1024 * 256);
                 memoryStore.push(data);
               }
             } else {
-              const data = crypto.randomBytes(1024 * 100);
+              const data = crypto.randomBytes(1024 * 50);
               memoryStore.push(data);
             }
 
-            if (memoryStore.length > 100) {
+            if (memoryStore.length > 50) {
               memoryStore = memoryStore.slice(-100);
             }
 
@@ -79,6 +79,7 @@ spec:
   selector:
     app: nodejs
   type: LoadBalancer
+  sessionAffinity: None
   ports:
   - port: 80
     targetPort: 3000
