@@ -11,7 +11,7 @@ env = K8sAutoscalerEnv(
     iteration=100,
     verbose=True,
     action_step=50,
-    timeout=30,
+    timeout=40,
     max_replicas=500,
 )
 log_path = Path("training") / "logs"
