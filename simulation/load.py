@@ -110,6 +110,8 @@ class SimpleLoadTester:
                 await response.text()
                 end_time = time.time()
 
+                self.stats["total_requests"] += 1
+
                 response_time = end_time - start_time
                 self.stats["response_times"].append(response_time)
                 if len(self.stats["response_times"]) > self.MAX_RESPONSE_TIMES:
@@ -134,6 +136,10 @@ class SimpleLoadTester:
         except Exception as e:
             self.stats["total_requests"] += 1
             self.stats["failed_requests"] += 1
+            if is_stress:
+                self.stats["stress_requests"] += 1
+            else:
+                self.stats["normal_requests"] += 1
             logger.debug(f"Request failed: {e}")
 
     async def run_load_generation(self):
@@ -361,6 +367,14 @@ async def run_adaptive_load_test(args):
         await load_tester.stop()
 
         final_stats = load_tester.get_stats()
+        stress_rate = (
+            load_tester.stats["stress_requests"]
+            / max(1, load_tester.stats["total_requests"])
+        ) * 100
+        final_stats["stress_rate"] = stress_rate
+        final_stats["normal_requests"] = load_tester.stats["normal_requests"]
+        final_stats["stress_requests"] = load_tester.stats["stress_requests"]
+
         logger.info("Final Statistics:")
         logger.info(f"  Duration: {final_stats['elapsed_time']:.1f}s")
         logger.info(f"  Total Requests: {final_stats['total_requests']}")
