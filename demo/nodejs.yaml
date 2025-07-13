@@ -20,9 +20,9 @@ spec:
         resources:
           requests:
             memory: "64Mi"
-            cpu: "100m"
+            cpu: "50m"
           limits:
-            memory: "128Mi"
+            memory: "192Mi"
             cpu: "200m"
         command: ["node", "-e"]
         args:
@@ -40,15 +40,15 @@ spec:
             const data = crypto.randomBytes(1024 * 100);
             if (parsedUrl.pathname === '/stress') {
               for (let i = 0; i < 20; i++) {
-                const data = crypto.randomBytes(1024 * 256);
+                const data = crypto.randomBytes(1024 * 512);
                 memoryStore.push(data);
               }
             } else {
-              const data = crypto.randomBytes(1024 * 50);
+              const data = crypto.randomBytes(1024 * 128);
               memoryStore.push(data);
             }
 
-            if (memoryStore.length > 50) {
+            if (memoryStore.length > 100) {
               memoryStore = memoryStore.slice(-100);
             }
 

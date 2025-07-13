@@ -41,7 +41,7 @@ class SimpleLoadTester:
         self,
         target_url: str,
         max_rps: int = 50,
-        max_concurrent: int = 20,
+        max_concurrent: int = 50,
         stress_probability: float = 0.1,
     ):
         self.target_url = target_url
@@ -70,14 +70,17 @@ class SimpleLoadTester:
 
         connector = aiohttp.TCPConnector(
             limit=self.max_concurrent,
-            limit_per_host=5,
-            ttl_dns_cache=30,
-            use_dns_cache=True,
-            keepalive_timeout=10,
+            limit_per_host=self.max_concurrent,
+            ttl_dns_cache=5,
+            use_dns_cache=False,
+            keepalive_timeout=1,
             enable_cleanup_closed=True,
+            force_close=True,
         )
         timeout = aiohttp.ClientTimeout(total=10)
-        self.session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+        self.session = aiohttp.ClientSession(
+            connector=connector, timeout=timeout, headers={"Connection": "close"}
+        )
 
         self.running = True
         self.stats["start_time"] = time.time()
