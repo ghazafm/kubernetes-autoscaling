@@ -8,7 +8,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 env = K8sAutoscalerEnv(
     min_replicas=1,
-    max_replicas=50,
+    max_replicas=500,
     iteration=100,
     namespace="default",
     deployment_name="nodejs-deployment",
