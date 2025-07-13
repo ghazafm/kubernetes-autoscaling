@@ -13,6 +13,8 @@ dependencies = [
     "torchaudio>=2.7.1",
     "torchvision>=0.22.1",
     "stable-baselines3[extra]>=2.6.0",
+    "aiohttp>=3.12.14",
+    "requests>=2.32.4",
 ]
 
 # [tool.uv.sources]

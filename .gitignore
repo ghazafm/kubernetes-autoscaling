@@ -10,3 +10,4 @@ wheels/
 .venv
 simulation/training/*
 *.log
+*.json
