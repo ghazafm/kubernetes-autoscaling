@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import math
-import random
+import random  # nosec B404
 import signal
 import sys
 import time
@@ -35,10 +35,19 @@ logger = logging.getLogger(__name__)
 class SimpleLoadTester:
     """Simple load tester with adaptive patterns"""
 
-    def __init__(self, target_url: str, max_rps: int = 50, max_concurrent: int = 20):
+    MAX_RESPONSE_TIMES = 1000
+
+    def __init__(
+        self,
+        target_url: str,
+        max_rps: int = 50,
+        max_concurrent: int = 20,
+        stress_probability: float = 0.1,
+    ):
         self.target_url = target_url
         self.max_rps = max_rps
         self.max_concurrent = max_concurrent
+        self.stress_probability = stress_probability
         self.session: Optional[aiohttp.ClientSession] = None
         self.running = False
         self.current_rps = 1.0
@@ -46,6 +55,8 @@ class SimpleLoadTester:
             "total_requests": 0,
             "successful_requests": 0,
             "failed_requests": 0,
+            "stress_requests": 0,
+            "normal_requests": 0,
             "start_time": None,
             "response_times": [],
         }
@@ -75,21 +86,47 @@ class SimpleLoadTester:
         if self.session:
             await self.session.close()
 
+    def get_request_url(self) -> str:
+        """Get request URL (normal or stress endpoint)"""
+        if random.random() < self.stress_probability:  # noqa: S311
+            return (
+                f"{self.target_url}/stress"
+                if not self.target_url.endswith("/")
+                else f"{self.target_url}stress"
+            )
+        return self.target_url
+
     async def make_request(self):
         """Make a single HTTP request"""
         if not self.session:
             return
 
+        request_url = self.get_request_url()
+        is_stress = "/stress" in request_url
+
         start_time = time.time()
         try:
-            async with self.session.get(self.target_url) as response:
+            async with self.session.get(request_url) as response:
                 await response.text()
                 end_time = time.time()
 
-                self.stats["total_requests"] += 1
-                self.stats["response_times"].append(end_time - start_time)
+                response_time = end_time - start_time
+                self.stats["response_times"].append(response_time)
+                if len(self.stats["response_times"]) > self.MAX_RESPONSE_TIMES:
+                    self.stats["response_times"] = self.stats["response_times"][
+                        -self.MAX_RESPONSE_TIMES :
+                    ]
+                if len(self.stats["response_times"]) > self.MAX_RESPONSE_TIMES:
+                    self.stats["response_times"] = self.stats["response_times"][-1000:]
 
-                if 200 <= response.status < 300:
+                if is_stress:
+                    self.stats["stress_requests"] += 1
+                else:
+                    self.stats["normal_requests"] += 1
+
+                OK = 200
+                OK_RANGE = 300
+                if OK <= response.status < OK_RANGE:
                     self.stats["successful_requests"] += 1
                 else:
                     self.stats["failed_requests"] += 1
@@ -105,10 +142,7 @@ class SimpleLoadTester:
 
         while self.running:
             try:
-                if self.current_rps > 0:
-                    delay = 1.0 / self.current_rps
-                else:
-                    delay = 1.0
+                delay = 1.0 / self.current_rps if self.current_rps > 0 else 1.0
 
                 active_tasks = {task for task in active_tasks if not task.done()}
 
@@ -194,12 +228,12 @@ class LoadPatternGenerator:
             return self.base_rps
 
         if pattern == "random":
-            return self.base_rps + random.uniform(0.2, 1.0) * (
+            return self.base_rps + random.uniform(0.2, 1.0) * (  # noqa: S311
                 self.max_rps - self.base_rps
             )
 
         if pattern == "burst":
-            if random.random() < 0.1:
+            if random.random() < 0.1:  # noqa: S311
                 return self.max_rps
             return self.base_rps * 0.3
 
@@ -217,6 +251,30 @@ class LoadPatternGenerator:
             return self.base_rps + (self.max_rps - self.base_rps) * multiplier
 
         return self.base_rps
+
+    def get_stress_probability(self, pattern: str, elapsed_time: float) -> float:
+        """Get stress probability for a given pattern"""
+
+        if pattern == "burst":
+            return 0.25
+
+        if pattern == "spike":
+            cycle_time = elapsed_time % 180
+            if 60 <= cycle_time <= 90:
+                return 0.30
+            return 0.05
+
+        if pattern == "realistic":
+            daily_progress = (elapsed_time / 600) * 24
+            hour = daily_progress % 24
+
+            if 9 <= hour <= 17:
+                return 0.15
+            if 6 <= hour <= 9 or 17 <= hour <= 22:
+                return 0.10
+            return 0.05
+
+        return 0.10
 
 
 async def run_adaptive_load_test(args):
@@ -279,6 +337,12 @@ async def run_adaptive_load_test(args):
                 current_pattern, pattern_elapsed
             )
 
+            if args.dynamic_stress:
+                stress_prob = pattern_generator.get_stress_probability(
+                    current_pattern, pattern_elapsed
+                )
+                load_tester.stress_probability = stress_prob
+
             load_tester.current_rps = target_rps
 
             if current_time - last_stats_time >= 30:
@@ -302,7 +366,10 @@ async def run_adaptive_load_test(args):
         logger.info(f"  Total Requests: {final_stats['total_requests']}")
         logger.info(f"  Successful: {final_stats['successful_requests']}")
         logger.info(f"  Failed: {final_stats['failed_requests']}")
+        logger.info(f"  Normal Requests: {final_stats['normal_requests']}")
+        logger.info(f"  Stress Requests: {final_stats['stress_requests']}")
         logger.info(f"  Success Rate: {final_stats['success_rate']:.1f}%")
+        logger.info(f"  Stress Rate: {final_stats['stress_rate']:.1f}%")
         logger.info(f"  Average Response Time: {final_stats['avg_response_time']:.3f}s")
         logger.info(f"  Average RPS: {final_stats['actual_rps']:.1f}")
 
@@ -364,6 +431,17 @@ def main():
         type=int,
         default=120,
         help="Duration of each pattern in adaptive mode (default: 120)",
+    )
+    parser.add_argument(
+        "--stress-probability",
+        type=float,
+        default=0.1,
+        help="Probability of using stress endpoint (default: 0.1)",
+    )
+    parser.add_argument(
+        "--dynamic-stress",
+        action="store_true",
+        help="Enable dynamic stress probability based on pattern",
     )
 
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")

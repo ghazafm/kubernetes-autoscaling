@@ -18,7 +18,7 @@ env = K8sAutoscalerEnv(
     max_memory=85,
     verbose=False,
     action_step=100,
-    timeout=40,
+    timeout=60,
 )
 log_path = Path("training") / "logs"
 model = DQN(policy="MlpPolicy", env=env, verbose=1, tensorboard_log=str(log_path))

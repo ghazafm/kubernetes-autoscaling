@@ -29,18 +29,27 @@ spec:
         - |
           const http = require('http');
           const crypto = require('crypto');
+          const url = require('url');
 
           // Pre-allocate some memory
           let memoryStore = [];
 
           const server = http.createServer((req, res) => {
+            const parsedUrl = url.parse(req.url, true);
             // Simulate memory-intensive operations
-            const data = crypto.randomBytes(1024 * 100); // 100KB per request
-            memoryStore.push(data);
+            const data = crypto.randomBytes(1024 * 500);
+            if (parsedUrl.pathname === '/stress') {
+              for (let i = 0; i < 20; i++) {
+                const data = crypto.randomBytes(1024 * 1024);
+                memoryStore.push(data);
+              }
+            } else {
+              const data = crypto.randomBytes(1024 * 100);
+              memoryStore.push(data);
+            }
 
-            // Keep only last 50 requests in memory
-            if (memoryStore.length > 50) {
-              memoryStore = memoryStore.slice(-50);
+            if (memoryStore.length > 100) {
+              memoryStore = memoryStore.slice(-100);
             }
 
             // CPU-intensive task
