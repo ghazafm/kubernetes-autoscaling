@@ -75,7 +75,6 @@ class SimpleLoadTester:
             use_dns_cache=False,
             keepalive_timeout=1,
             enable_cleanup_closed=True,
-            force_close=True,
         )
         timeout = aiohttp.ClientTimeout(total=10)
         self.session = aiohttp.ClientSession(
