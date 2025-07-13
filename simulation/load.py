@@ -70,10 +70,10 @@ class SimpleLoadTester:
 
         connector = aiohttp.TCPConnector(
             limit=self.max_concurrent,
-            limit_per_host=self.max_concurrent,
-            ttl_dns_cache=5,
+            limit_per_host=min(10, self.max_concurrent),
+            ttl_dns_cache=1,
             use_dns_cache=False,
-            keepalive_timeout=1,
+            keepalive_timeout=0.5,
             enable_cleanup_closed=True,
         )
         timeout = aiohttp.ClientTimeout(total=10)

@@ -39,29 +39,58 @@ spec:
             // Simulate memory-intensive operations
             const data = crypto.randomBytes(1024 * 100);
             if (parsedUrl.pathname === '/stress') {
-              for (let i = 0; i < 20; i++) {
-                const data = crypto.randomBytes(1024 * 512);
+              for (let i = 0; i < 15; i++) {
+                const data = crypto.randomBytes(1024 * 256);
                 memoryStore.push(data);
+              }
+              let result = 0;
+              for (let i = 0; i < 200000; i++) {
+                result += Math.random() * Math.random();
+                if (i % 2000 === 0) {
+                  crypto.createHash('sha256').update(String(result)).digest('hex');
+                }
               }
             } else {
               const data = crypto.randomBytes(1024 * 128);
               memoryStore.push(data);
+
+              let result = 0;
+              for (let i = 0; i < 50000; i++) {
+                result += Math.random() * Math.random();
+                if (i % 1000 === 0) {
+                  JSON.stringify({iteration: i, result: result});
+                }
+              }
             }
 
-            if (memoryStore.length > 100) {
-              memoryStore = memoryStore.slice(-100);
+            if (memoryStore.length > 40) {
+              memoryStore = memoryStore.slice(-40);
             }
 
-            // CPU-intensive task
+            if (memoryStore.length > 30) {
+              if (global.gc) {
+                global.gc();
+              }
+            }
+
             let result = 0;
             for (let i = 0; i < 10000; i++) {
               result += Math.random() * Math.random();
             }
 
+            const memUsage = process.memoryUsage();
+            const memoryMB = Math.round(memUsage.rss / 1024 / 1024);
+            const limitMB = 192;
+            const usagePercent = Math.round((memoryMB / limitMB) * 100);
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
               message: 'Hello World',
-              memory: process.memoryUsage(),
+              memory: memUsage,
+              memoryMB: memoryMB,
+              limitMB: limitMB,
+              usagePercent: usagePercent,
+              memoryStoreSize: memoryStore.length,
               result: result,
               timestamp: new Date().toISOString()
             }));
