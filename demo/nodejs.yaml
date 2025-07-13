@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: nodejs-deployment
 spec:
-  replicas: 1
+  replicas: 50
   selector:
     matchLabels:
       app: nodejs
@@ -63,11 +63,11 @@ spec:
               }
             }
 
-            if (memoryStore.length > 40) {
-              memoryStore = memoryStore.slice(-40);
+            if (memoryStore.length > 80) {
+              memoryStore = memoryStore.slice(-80);
             }
 
-            if (memoryStore.length > 30) {
+            if (memoryStore.length > 40) {
               if (global.gc) {
                 global.gc();
               }
