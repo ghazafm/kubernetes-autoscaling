@@ -53,10 +53,9 @@ class K8sAutoscalerEnv(Env):
         self.action_step = action_step
         if action_range <= 0:
             raise ValueError("action_step must be a positive integer")
-        # Use regular Discrete space for SB3 compatibility
+
         self.action_space = Discrete(action_range)
 
-        # [cpu, memory, replicas]
         self.observation_space = Box(
             low=np.array([0, 0, 1], dtype=np.float32),
             high=np.array([100, 100, 50], dtype=np.float32),
@@ -70,6 +69,15 @@ class K8sAutoscalerEnv(Env):
         self.target_memory = [min_memory, max_memory]
         self.max_replicas = max_replicas
         self.min_replicas = min_replicas
+
+        self.cpu_limit_cores, self.memory_limit_mb = (
+            self._get_deployment_resource_limits()
+        )
+        logging.info(
+            f"Deployment resource limits - CPU: {self.cpu_limit_cores} cores, "
+            f"Memory: {self.memory_limit_mb} MB"
+        )
+
         self.init_iteration = iteration
         self.iteration = iteration
 
@@ -88,11 +96,18 @@ class K8sAutoscalerEnv(Env):
 
     def get_metrics(self, replicas):
         counter = 0
+        replica = 0
+        cpu_usage = []
+        memory_usage = []
+        logging.info(f"Fetching metrics for {replicas} replicas.....")
+
         while True:
             if counter >= self.timeout:
                 logging.warning(
                     f"Timeout reached while fetching metrics after {self.timeout}s"
                 )
+                logging.info(f"Fetched replica {replica}/{replicas}")
+                break
             counter += 1
             metric_data = self.api.list_namespaced_custom_object(
                 group="metrics.k8s.io",
@@ -111,38 +126,30 @@ class K8sAutoscalerEnv(Env):
             for item in metric_data["items"]:
                 if self.deployment_name in item["metadata"]["name"]:
                     cpu_str = item["containers"][0]["usage"]["cpu"]
-                    if cpu_str.endswith("n"):
-                        cpu_value = float(cpu_str[:-1]) / 1000000000
-                    elif cpu_str.endswith("m"):
-                        cpu_value = float(cpu_str[:-1]) / 1000
-                    else:
-                        cpu_value = float(cpu_str)
+                    cpu_value = self._parse_cpu_value(cpu_str)
 
-                    cpu_percentage = (cpu_value / 0.5) * 100
+                    cpu_percentage = (cpu_value / self.cpu_limit_cores) * 100
 
                     memory_str = item["containers"][0]["usage"]["memory"]
-                    if memory_str.endswith("Ki"):
-                        memory_mb = float(memory_str[:-2]) / 1024
-                    elif memory_str.endswith("Mi"):
-                        memory_mb = float(memory_str[:-2])
-                    elif memory_str.endswith("Gi"):
-                        memory_mb = float(memory_str[:-2]) * 1024
-                    else:
-                        memory_mb = float(memory_str) / (1024 * 1024)
+                    memory_mb = self._parse_memory_value(memory_str)
 
-                    memory_percentage = (memory_mb / 128) * 100
+                    memory_percentage = (memory_mb / self.memory_limit_mb) * 100
                     cpu_usage.append(cpu_percentage)
                     memory_usage.append(memory_percentage)
                     replica += 1
 
-            if replica >= replicas:
+            if replica == replicas:
                 break
             time.sleep(1)
 
-        logging.info(f"Fetched metrics for {replica} replicas.")
         cpu_usage_mean = np.mean(cpu_usage) if cpu_usage else 0
         memory_usage_mean = np.mean(memory_usage) if memory_usage else 0
-        logging.info(f"CPU usage: {cpu_usage_mean}, Memory usage: {memory_usage_mean}")
+        logging.info(
+            f"CPU usage: {cpu_usage_mean:.2f}% (limit: {self.cpu_limit_cores} cores)"
+        )
+        logging.info(
+            f"Memory usage: {memory_usage_mean:.2f}% (limit: {self.memory_limit_mb} MB)"
+        )
         return cpu_usage_mean, memory_usage_mean, replica
 
     def step(self, action):
@@ -169,7 +176,6 @@ class K8sAutoscalerEnv(Env):
             "stability_bonus": 0,
         }
 
-        # 1. CLUSTER HEALTH PENALTY
         unschedulable_pods = max(0, desired_replicas - ready_replicas)
         if unschedulable_pods > 0 and not ready:
             cluster_penalty = unschedulable_pods * 25
@@ -306,7 +312,7 @@ class K8sAutoscalerEnv(Env):
             "target_memory": self.target_memory,
         }
         return (
-            self.replica_state,
+            np.array([cpu_usage, memory_usage, self.replica_state], dtype=np.float32),
             info,
         )
 
@@ -348,3 +354,69 @@ class K8sAutoscalerEnv(Env):
         logging.warning(f"Timeout waiting for pods to be ready after {self.timeout}s")
 
         return False, desired_replicas, ready_replicas
+
+    def _get_deployment_resource_limits(self):
+        """
+        Get CPU and memory resource limits from the deployment specification.
+        Returns: tuple of (cpu_limit_cores, memory_limit_mb)
+        """
+        # Default values
+        default_cpu = 0.2
+        default_memory = 128
+
+        try:
+            deployment = self.cluster.read_namespaced_deployment(
+                name=self.deployment_name, namespace=self.namespace
+            )
+
+            spec = getattr(deployment, "spec", None)
+            template = getattr(spec, "template", None) if spec else None
+            template_spec = getattr(template, "spec", None) if template else None
+            containers = (
+                getattr(template_spec, "containers", None) if template_spec else None
+            )
+
+            if not containers or len(containers) == 0:
+                logging.warning("No containers found in deployment, using defaults")
+                return default_cpu, default_memory
+
+            container = containers[0]
+            resources = getattr(container, "resources", None)
+            limits = getattr(resources, "limits", None) if resources else None
+
+            if not limits:
+                logging.warning("No resource limits defined, using defaults")
+                return default_cpu, default_memory
+
+            cpu_limit_str = limits.get("cpu", "200m")
+            memory_limit_str = limits.get("memory", "128Mi")
+
+            cpu_limit_cores = self._parse_cpu_value(cpu_limit_str)
+            memory_limit_mb = self._parse_memory_value(memory_limit_str)
+
+            return cpu_limit_cores, memory_limit_mb
+
+        except Exception as e:
+            logging.warning(f"Could not get deployment resource limits: {e}")
+            return default_cpu, default_memory
+
+    def _parse_cpu_value(self, cpu_str):
+        """Parse CPU value from kubernetes format to cores (float)"""
+        if cpu_str.endswith("m"):
+            return float(cpu_str[:-1]) / 1000
+        if cpu_str.endswith("n"):
+            return float(cpu_str[:-1]) / 1000000000
+        return float(cpu_str)
+
+    def _parse_memory_value(self, memory_str):
+        """Parse memory value from kubernetes format to MB (float)"""
+        if memory_str.endswith("Ki"):
+            return float(memory_str[:-2]) / 1024
+        if memory_str.endswith("Mi"):
+            return float(memory_str[:-2])
+        if memory_str.endswith("Gi"):
+            return float(memory_str[:-2]) * 1024
+        if memory_str.endswith("Ti"):
+            return float(memory_str[:-2]) * 1024 * 1024
+
+        return float(memory_str) / (1024 * 1024)
