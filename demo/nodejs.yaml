@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejs-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodejs
+  template:
+    metadata:
+      labels:
+        app: nodejs
+    spec:
+      containers:
+      - name: app
+        image: node:18-alpine
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+        command: ["node", "-e"]
+        args:
+        - |
+          const http = require('http');
+          const crypto = require('crypto');
+
+          // Pre-allocate some memory
+          let memoryStore = [];
+
+          const server = http.createServer((req, res) => {
+            // Simulate memory-intensive operations
+            const data = crypto.randomBytes(1024 * 100); // 100KB per request
+            memoryStore.push(data);
+
+            // Keep only last 50 requests in memory
+            if (memoryStore.length > 50) {
+              memoryStore = memoryStore.slice(-50);
+            }
+
+            // CPU-intensive task
+            let result = 0;
+            for (let i = 0; i < 10000; i++) {
+              result += Math.random() * Math.random();
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              message: 'Hello World',
+              memory: process.memoryUsage(),
+              result: result,
+              timestamp: new Date().toISOString()
+            }));
+          });
+
+          server.listen(3000, () => {
+            console.log('Server running on port 3000');
+          });
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nodejs-deployment
+spec:
+  selector:
+    app: nodejs
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+    nodePort: 30002

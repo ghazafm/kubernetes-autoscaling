@@ -7,15 +7,21 @@ from stable_baselines3 import DQN
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 env = K8sAutoscalerEnv(
-    deployment_name="nginx-deployment",
+    min_replicas=1,
+    max_replicas=50,
     iteration=100,
-    verbose=True,
-    action_step=50,
+    namespace="default",
+    deployment_name="nodejs-deployment",
+    min_cpu=20,
+    min_memory=20,
+    max_cpu=85,
+    max_memory=85,
+    verbose=False,
+    action_step=100,
     timeout=40,
-    max_replicas=500,
 )
 log_path = Path("training") / "logs"
 model = DQN(policy="MlpPolicy", env=env, verbose=1, tensorboard_log=str(log_path))
 model.learn(total_timesteps=10000)
-simulation_path = Path("training") / "model" / "Shower_Model_DQN"
+simulation_path = Path("training") / "model" / "Nodejs_Model_DQN"
 model.save(simulation_path)
