@@ -180,6 +180,7 @@ class K8sAutoscalerEnv(Env):
                     f"Timeout reached while fetching metrics after {self.timeout}s"
                 )
                 logging.info(f"Fetched replica {replica}/{replicas}")
+                timeout = True
                 break
             counter += 1
             try:
@@ -250,8 +251,10 @@ class K8sAutoscalerEnv(Env):
         ready, desired_replicas, ready_replicas = self._wait_for_pods_ready()
         cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
 
+        not_fetchable_replicas = max(0, self.replica_state - ready_replicas)
         cpu_available, memory_available = self.get_node_resource_usage()
         unschedulable_replicas = max(0, desired_replicas - ready_replicas)
+        unschedulable_replicas += not_fetchable_replicas
 
         reward = 0
         reward_breakdown = {

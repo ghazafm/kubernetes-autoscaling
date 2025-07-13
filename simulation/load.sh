@@ -1,0 +1,11 @@
+uv run load.py \
+    --url http://10.34.4.248:30002 \
+    --adaptive \
+    --pattern-duration 180 \
+    --duration 172800 \
+    --base-rps 1000 \
+    --max-rps 10000000 \
+    --max-concurrent 200 \
+    --stress-probability 0.3 \
+    --dynamic-stress \
+    --verbose
