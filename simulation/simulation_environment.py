@@ -1,3 +1,4 @@
+import collections
 import logging
 import random
 import time
@@ -25,6 +26,7 @@ class K8sAutoscalerEnv(Env):
     OPTIMAL_USAGE_MAX = 70.0
     HIGH_USAGE_THRESHOLD = 80.0
     CRITICAL_USAGE_THRESHOLD = 85.0
+    MIN_HISTORY_SIZE = 2
 
     def __init__(
         self,
@@ -35,8 +37,8 @@ class K8sAutoscalerEnv(Env):
         deployment_name: str = "default",
         min_cpu: float = 20,
         min_memory: float = 20,
-        max_cpu: float = 100,
-        max_memory: float = 100,
+        max_cpu: float = 90,
+        max_memory: float = 90,
         verbose: bool = False,
         action_step: int = 1,
         timeout: int = 60,
@@ -45,6 +47,7 @@ class K8sAutoscalerEnv(Env):
         self.verbose = verbose
         self.cluster = client.AppsV1Api()
         self.api = client.CustomObjectsApi()
+        self.core = client.CoreV1Api()
         self.namespace = namespace
         self.deployment_name = deployment_name
         self.timeout = timeout
@@ -57,10 +60,20 @@ class K8sAutoscalerEnv(Env):
         self.action_space = Discrete(action_range)
 
         self.observation_space = Box(
-            low=np.array([0, 0, 1], dtype=np.float32),
-            high=np.array([100, 100, 50], dtype=np.float32),
-            dtype=np.float32,
+            low=np.array([0, 0, 0, 0, 1, 0, -1, 0, 0], dtype=np.float32),
+            high=np.array([100, 100, 100, 100, 500, 100, 1, 1, 1], dtype=np.float32),
         )
+        """
+        cpu_usage,
+        memory_usage,
+        cpu_available,
+        memory_available,
+        current_replicas,
+        unschedulable_replicas,
+        replica_trend,
+        time_since_last_scale,
+        resource_pressure_score
+        """
 
         self.replica_state = (
             min_replicas + 1 if min_replicas < max_replicas - 1 else min_replicas
@@ -69,6 +82,7 @@ class K8sAutoscalerEnv(Env):
         self.target_memory = [min_memory, max_memory]
         self.max_replicas = max_replicas
         self.min_replicas = min_replicas
+        self.node_cpu_total, self.node_memory_total = self._get_node_capacity()
 
         self.cpu_limit_cores, self.memory_limit_mb = (
             self._get_deployment_resource_limits()
@@ -77,9 +91,68 @@ class K8sAutoscalerEnv(Env):
             f"Deployment resource limits - CPU: {self.cpu_limit_cores} cores, "
             f"Memory: {self.memory_limit_mb} MB"
         )
+        self.replica_history = collections.deque(maxlen=3)
+        self.last_scale_time = time.time()
+        self.last_action = 0
 
         self.init_iteration = iteration
         self.iteration = iteration
+
+    def _calculate_replica_trend(self):
+        """Calculate recent scaling trend"""
+        if len(self.replica_history) >= self.MIN_HISTORY_SIZE:
+            recent_change = self.replica_history[-1] - self.replica_history[-2]
+            return np.tanh(recent_change / 5)  # untuk normalisasi
+        return 0.0
+
+    """
+    Perlu menghitung resource pressure karena jika hanya melihat CPU dan Memory,
+    ada beberapa kasus dengan jumlah memory dan cpu sama namun berat sebelah
+    """
+
+    def _calculate_resource_pressure(self, cpu_usage, memory_usage):
+        """Calculate overall resource pressure score"""
+        cpu_denominator = max(1, 100 - self.target_cpu[1])
+        memory_denominator = max(1, 100 - self.target_memory[1])
+
+        cpu_pressure = max(0, (cpu_usage - self.target_cpu[1]) / cpu_denominator)
+        memory_pressure = max(
+            0, (memory_usage - self.target_memory[1]) / memory_denominator
+        )
+        return min(1.0, (cpu_pressure + memory_pressure) / 2)
+
+    def _get_observation(
+        self,
+        cpu_usage,
+        memory_usage,
+        cpu_available,
+        memory_available,
+        unschedulable_replicas,
+    ):
+        """Get enhanced observation with temporal and contextual features"""
+
+        self.replica_history.append(self.replica_state)
+
+        replica_trend = self._calculate_replica_trend()
+
+        time_since_scale = min(1.0, (time.time() - self.last_scale_time) / 300)
+
+        resource_pressure = self._calculate_resource_pressure(cpu_usage, memory_usage)
+
+        return np.array(
+            [
+                cpu_usage,
+                memory_usage,
+                cpu_available,
+                memory_available,
+                self.replica_state,
+                unschedulable_replicas,
+                replica_trend,
+                time_since_scale,
+                resource_pressure,
+            ],
+            dtype=np.float32,
+        )
 
     def _scale_deployment(self):
         logging.info(
@@ -109,12 +182,18 @@ class K8sAutoscalerEnv(Env):
                 logging.info(f"Fetched replica {replica}/{replicas}")
                 break
             counter += 1
-            metric_data = self.api.list_namespaced_custom_object(
-                group="metrics.k8s.io",
-                version="v1beta1",
-                namespace="default",
-                plural="pods",
-            )
+            try:
+                metric_data = self.api.list_namespaced_custom_object(
+                    group="metrics.k8s.io",
+                    version="v1beta1",
+                    namespace=self.namespace,
+                    plural="pods",
+                )
+            except Exception as e:
+                logging.warning(f"Error fetching metrics: {e}")
+                time.sleep(1)
+                continue
+
             replica = 0
             cpu_usage = []
             memory_usage = []
@@ -159,6 +238,9 @@ class K8sAutoscalerEnv(Env):
             self.min_replicas,
             min(self.max_replicas, self.replica_state + mapped_action),
         )
+
+        if mapped_action != 0:
+            self.last_scale_time = time.time()
         logging.info(
             f"Action taken: {mapped_action} (raw: {action}), New replica state: "
             f"{self.replica_state}"
@@ -168,6 +250,9 @@ class K8sAutoscalerEnv(Env):
         ready, desired_replicas, ready_replicas = self._wait_for_pods_ready()
         cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
 
+        cpu_available, memory_available = self.get_node_resource_usage()
+        unschedulable_replicas = max(0, desired_replicas - ready_replicas)
+
         reward = 0
         reward_breakdown = {
             "resource_efficiency": 0,
@@ -176,13 +261,12 @@ class K8sAutoscalerEnv(Env):
             "stability_bonus": 0,
         }
 
-        unschedulable_pods = max(0, desired_replicas - ready_replicas)
-        if unschedulable_pods > 0 and not ready:
-            cluster_penalty = unschedulable_pods * 25
+        if unschedulable_replicas > 0 and not ready:
+            cluster_penalty = unschedulable_replicas * 25
             reward -= cluster_penalty
             reward_breakdown["cluster_health"] = -cluster_penalty
             logging.warning(
-                f"CLUSTER PENALTY: {unschedulable_pods} unschedulable pods ="
+                f"CLUSTER PENALTY: {unschedulable_replicas} unschedulable pods ="
                 f" -{cluster_penalty}"
             )
         else:
@@ -205,9 +289,8 @@ class K8sAutoscalerEnv(Env):
             waste_factor = (self.target_cpu[0] - cpu_usage) / self.target_cpu[0]
             cpu_reward = -ready_replicas * waste_factor * 3
         elif cpu_usage > self.target_cpu[1]:
-            overload_factor = (cpu_usage - self.target_cpu[1]) / (
-                100 - self.target_cpu[1]
-            )
+            cpu_denominator = max(1, 100 - self.target_cpu[1])
+            overload_factor = (cpu_usage - self.target_cpu[1]) / cpu_denominator
             cpu_reward = -8 - overload_factor * 8
         else:
             mid_point = (self.target_cpu[0] + self.target_cpu[1]) / 2
@@ -230,9 +313,10 @@ class K8sAutoscalerEnv(Env):
             ]
             memory_reward = -ready_replicas * waste_factor * 3
         elif memory_usage > self.target_memory[1]:
-            overload_factor = (memory_usage - self.target_memory[1]) / (
-                100 - self.target_memory[1]
-            )
+            memory_denominator = max(1, 100 - self.target_memory[1])
+            overload_factor = (
+                memory_usage - self.target_memory[1]
+            ) / memory_denominator
             memory_reward = -8 - overload_factor * 8
         else:
             mid_point = (self.target_memory[0] + self.target_memory[1]) / 2
@@ -247,6 +331,14 @@ class K8sAutoscalerEnv(Env):
             terminated = False
             truncated = False
 
+        observation = self._get_observation(
+            cpu_usage,
+            memory_usage,
+            cpu_available,
+            memory_available,
+            unschedulable_replicas,
+        )
+
         info = {
             "current_replicas": self.replica_state,
             "actual_replicas": replica,
@@ -258,7 +350,14 @@ class K8sAutoscalerEnv(Env):
             "memory_usage": memory_usage,
             "target_cpu": self.target_cpu,
             "target_memory": self.target_memory,
+            "cpu_available": cpu_available,
+            "memory_available": memory_available,
+            "unschedulable_replicas": unschedulable_replicas,
+            "replica_trend": observation[6],
+            "time_since_last_scale": observation[7],
+            "resource_pressure_score": observation[8],
         }
+
         if self.verbose:
             logging.debug(
                 f"Step info: {info}, Reward: {reward}, Terminated: {terminated}, "
@@ -266,9 +365,9 @@ class K8sAutoscalerEnv(Env):
             )
             logging.info(f"Replicas: {replica}")
         logging.info(f"Reward: {reward}")
-        logging.info("===========================")
+        logging.info("======================================================")
         return (
-            np.array([cpu_usage, memory_usage, self.replica_state], dtype=np.float32),
+            observation,
             reward,
             terminated,
             truncated,
@@ -288,14 +387,24 @@ class K8sAutoscalerEnv(Env):
 
         self.iteration = self.init_iteration
 
-        max_initial_replicas = min(self.max_replicas, 10)
-        self.replica_state = np.random.randint(
-            self.min_replicas, max_initial_replicas + 1
-        )
+        self.replica_history.clear()
+        self.last_scale_time = time.time()
+        self.last_action = 0
 
         self._scale_deployment()
         _, _, ready_replicas = self._wait_for_pods_ready()
         cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
+
+        cpu_available, memory_available = self.get_node_resource_usage()
+
+        unschedulable_replicas = 0
+        observation = self._get_observation(
+            cpu_usage,
+            memory_usage,
+            cpu_available,
+            memory_available,
+            unschedulable_replicas,
+        )
 
         info = {
             "current_replicas": self.replica_state,
@@ -307,9 +416,17 @@ class K8sAutoscalerEnv(Env):
             "memory_usage": memory_usage,
             "target_cpu": self.target_cpu,
             "target_memory": self.target_memory,
+            "cpu_available": cpu_available,
+            "memory_available": memory_available,
+            "unschedulable_replicas": unschedulable_replicas,
+            "replica_trend": observation[6],
+            "time_since_last_scale": observation[7],
+            "resource_pressure_score": observation[8],
         }
+
+        logging.info(f"Reset observation: {observation}")
         return (
-            np.array([cpu_usage, memory_usage, self.replica_state], dtype=np.float32),
+            observation,
             info,
         )
 
@@ -336,7 +453,7 @@ class K8sAutoscalerEnv(Env):
                 else:
                     desired_replicas = 0
 
-                if ready_replicas >= desired_replicas > 0:
+                if ready_replicas == desired_replicas > 0:
                     return True, desired_replicas, ready_replicas
 
                 logging.debug(
@@ -396,6 +513,128 @@ class K8sAutoscalerEnv(Env):
         except Exception as e:
             logging.warning(f"Could not get deployment resource limits: {e}")
             return default_cpu, default_memory
+
+    def _get_node_capacity(self):
+        """Get total CPU and memory capacity across all nodes"""
+        try:
+            nodes = self.core.list_node()
+            total_cpu = 0
+            total_memory = 0
+            schedulable_nodes = 0
+
+            for node in nodes.items:
+                if getattr(node.spec, "unschedulable", False):
+                    logging.debug(f"Node {node.metadata.name}: SKIPPED (unschedulable)")
+                    continue
+
+                taints = getattr(node.spec, "taints", []) or []
+                has_no_schedule_taint = any(
+                    taint.effect == "NoSchedule"
+                    and taint.key == "node-role.kubernetes.io/control-plane"
+                    for taint in taints
+                )
+
+                if has_no_schedule_taint:
+                    logging.info(
+                        f"Node {node.metadata.name}: SKIPPED (control plane taint)"
+                    )
+                    continue
+
+                allocatable = node.status.allocatable
+                cpu_str = allocatable.get("cpu", "0")
+                memory_str = allocatable.get("memory", "0")
+
+                cpu_cores = self._parse_cpu_value(cpu_str)
+                memory_mb = self._parse_memory_value(memory_str)
+
+                total_cpu += cpu_cores
+                total_memory += memory_mb
+                schedulable_nodes += 1
+
+                logging.info(
+                    f"Node {node.metadata.name}: CPU={cpu_cores:.2f} cores, "
+                    f"Memory={memory_mb:.2f} MB"
+                )
+
+            logging.info(f"Total schedulable nodes: {schedulable_nodes}")
+            logging.info(
+                f"Total capacity: CPU={total_cpu:.2f} cores, "
+                f"Memory={total_memory:.2f} MB"
+            )
+            return total_cpu, total_memory
+
+        except Exception as e:
+            logging.warning(f"Could not get node capacity: {e}")
+            return 6.0, 5820.0
+
+    def get_node_resource_usage(self):
+        """Get current resource usage across schedulable nodes only"""
+        try:
+            node_metrics = self.api.list_cluster_custom_object(
+                group="metrics.k8s.io", version="v1beta1", plural="nodes"
+            )
+
+            nodes = self.core.list_node()
+            schedulable_node_names = set()
+
+            for node in nodes.items:
+                if getattr(node.spec, "unschedulable", False):
+                    continue
+
+                taints = getattr(node.spec, "taints", []) or []
+                has_no_schedule_taint = any(
+                    taint.effect == "NoSchedule"
+                    and taint.key == "node-role.kubernetes.io/control-plane"
+                    for taint in taints
+                )
+
+                if not has_no_schedule_taint:
+                    schedulable_node_names.add(node.metadata.name)
+
+            total_cpu_used = 0
+            total_memory_used = 0
+
+            if node_metrics and "items" in node_metrics:
+                for node in node_metrics["items"]:
+                    node_name = node["metadata"]["name"]
+
+                    if node_name not in schedulable_node_names:
+                        logging.debug(
+                            f"Node {node_name}: SKIPPED from metrics (not schedulable)"
+                        )
+                        continue
+
+                    cpu_str = node["usage"]["cpu"]
+                    memory_str = node["usage"]["memory"]
+
+                    cpu_cores = self._parse_cpu_value(cpu_str)
+                    memory_mb = self._parse_memory_value(memory_str)
+
+                    total_cpu_used += cpu_cores
+                    total_memory_used += memory_mb
+
+                    logging.debug(
+                        f"Node {node_name}: CPU usage={cpu_cores:.3f} cores, Memory "
+                        f"usage={memory_mb:.2f} MB"
+                    )
+
+            cpu_available_percent = max(
+                0, 100 - (total_cpu_used / self.node_cpu_total * 100)
+            )
+            memory_available_percent = max(
+                0, 100 - (total_memory_used / self.node_memory_total * 100)
+            )
+
+            logging.info(
+                f"Node availability - CPU: {cpu_available_percent:.1f}%, "
+                f"Memory: {memory_available_percent:.1f}%"
+            )
+
+            return cpu_available_percent, memory_available_percent
+
+        except Exception as e:
+            logging.warning(f"Could not get node resource usage: {e}")
+            return 50.0, 50.0
 
     def _parse_cpu_value(self, cpu_str):
         """Parse CPU value from kubernetes format to cores (float)"""
