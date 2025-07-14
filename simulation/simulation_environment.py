@@ -355,6 +355,7 @@ class K8sAutoscalerEnv(Env):
             "cluster_health": 0,
             "stability_bonus": 0,
             "metrics_penalty": 0,
+            "critical_override": 0,
         }
 
         performance_score = self._calculate_performance_score(
@@ -386,12 +387,18 @@ class K8sAutoscalerEnv(Env):
                 f"pods = -{cluster_penalty:.1f}"
             )
         else:
-            reward += 5
-            reward_breakdown["cluster_health"] = 5
-            logging.info(
-                "CLUSTER HEALTH: All pods are ready: "
-                f"{ready_replicas}/{self.replica_state}"
+            critical_zone = (
+                cpu_usage > self.CPU_LIMIT_THRESHOLD
+                or memory_usage > self.MEMORY_LIMIT_THRESHOLD
             )
+            if not critical_zone:
+                reward += 5
+                reward_breakdown["cluster_health"] = 5
+                logging.info(
+                    "CLUSTER HEALTH: All pods are ready: "
+                    f"{ready_replicas}/{self.replica_state}"
+                )
+
         if not_fetchable_replicas > 0:
             metrics_penalty = min(5, not_fetchable_replicas * 1)
             reward -= metrics_penalty
@@ -408,6 +415,19 @@ class K8sAutoscalerEnv(Env):
         reward += stability_bonus
         reward_breakdown["stability_bonus"] = stability_bonus
 
+        critical_cpu = cpu_usage > self.CPU_LIMIT_THRESHOLD
+        critical_memory = memory_usage > self.MEMORY_LIMIT_THRESHOLD
+
+        if (critical_cpu or critical_memory) and reward > 0:
+            critical_override = -reward
+            reward = min(reward, -10)
+            reward_breakdown["critical_override"] = critical_override
+            logging.error(
+                f"CRITICAL ZONE OVERRIDE: Reward capped at {reward:.1f} "
+                f"(was {reward - critical_override:.1f}) - "
+                f"CPU: {cpu_usage:.1f}%, Memory: {memory_usage:.1f}%"
+            )
+
         logging.info(f"Reward breakdown: {reward_breakdown}")
         logging.info(
             f"CPU: {cpu_usage:.2f}% | Memory: {memory_usage:.2f}% | "
@@ -417,46 +437,77 @@ class K8sAutoscalerEnv(Env):
         return reward
 
     def _calculate_performance_score(self, cpu_usage, memory_usage, ready_replicas):
-        """Calculate performance-based reward - primary scoring mechanism"""
+        """Calculate performance-based reward with incremental threshold penalties"""
         score = 0
 
-        if cpu_usage > self.CPU_LIMIT_THRESHOLD:
-            score -= (cpu_usage - self.CPU_LIMIT_THRESHOLD) * 5
-            logging.warning(
-                "CRITICAL: CPU exceeds limit by "
-                f"{cpu_usage - self.CPU_LIMIT_THRESHOLD:.2f}%"
-            )
-        elif cpu_usage > self.CPU_WARNING_THRESHOLD:
-            score -= (cpu_usage - self.CPU_WARNING_THRESHOLD) * 3
-            logging.warning(f"HIGH: CPU near limit at {cpu_usage:.2f}%")
-        elif cpu_usage > self.target_cpu[1]:
-            score -= (cpu_usage - self.target_cpu[1]) * 1.5
+        cpu_penalty = self._calculate_incremental_penalty(
+            cpu_usage,
+            [
+                (self.target_cpu[1], 1.0),
+                (self.MODERATE_CPU_THRESHOLD, 2.0),
+                (self.CPU_WARNING_THRESHOLD, 5.0),
+                (self.CPU_LIMIT_THRESHOLD, 10.0),
+            ],
+            "CPU",
+        )
+        score -= cpu_penalty
 
-        if memory_usage > self.MEMORY_LIMIT_THRESHOLD:
-            score -= (memory_usage - self.MEMORY_LIMIT_THRESHOLD) * 4
-            logging.warning(
-                "CRITICAL: Memory exceeds limit by "
-                f"{memory_usage - self.MEMORY_LIMIT_THRESHOLD:.2f}%"
-            )
-        elif memory_usage > self.MEMORY_WARNING_THRESHOLD:
-            score -= (memory_usage - self.MEMORY_WARNING_THRESHOLD) * 2
-            logging.warning(f"HIGH: Memory near limit at {memory_usage:.2f}%")
-        elif memory_usage > self.target_memory[1]:
-            score -= (memory_usage - self.target_memory[1]) * 1
+        memory_penalty = self._calculate_incremental_penalty(
+            memory_usage,
+            [
+                (self.target_memory[1], 0.8),
+                (self.MODERATE_MEMORY_THRESHOLD, 1.5),
+                (self.MEMORY_WARNING_THRESHOLD, 4.0),
+                (self.MEMORY_LIMIT_THRESHOLD, 8.0),
+            ],
+            "Memory",
+        )
+        score -= memory_penalty
 
         cpu_optimal = self.target_cpu[0] <= cpu_usage <= self.target_cpu[1]
         memory_optimal = self.target_memory[0] <= memory_usage <= self.target_memory[1]
 
-        if cpu_optimal and memory_optimal:
-            score += 25
-        elif cpu_optimal or memory_optimal:
-            score += 10
+        critical_threshold_check = (
+            cpu_usage < self.CPU_LIMIT_THRESHOLD
+            and memory_usage < self.MEMORY_LIMIT_THRESHOLD
+        )
+        if critical_threshold_check:
+            if cpu_optimal and memory_optimal:
+                score += 25
+                logging.info("OPTIMAL: Both CPU and memory in target range")
+            elif cpu_optimal or memory_optimal:
+                score += 12
+                if cpu_optimal:
+                    logging.info("GOOD: CPU in optimal range")
+                if memory_optimal:
+                    logging.info("GOOD: Memory in optimal range")
 
-        if cpu_usage > 0 and memory_usage > 0:
-            resource_balance = 1 - abs(cpu_usage - memory_usage) / 100
-            score += resource_balance * 5
+            if cpu_usage > 0 and memory_usage > 0:
+                resource_balance = 1 - abs(cpu_usage - memory_usage) / 100
+                balance_bonus = resource_balance * 3
+                score += balance_bonus
+                logging.debug(f"Resource balance bonus: +{balance_bonus:.2f}")
 
         return score
+
+    def _calculate_incremental_penalty(self, usage, thresholds, resource_type):
+        """Calculate incremental penalties based on threshold violations"""
+        total_penalty = 0
+
+        for threshold, penalty_rate in thresholds:
+            if usage > threshold:
+                range_violation = min(usage - threshold, 100 - threshold)
+                range_penalty = range_violation * penalty_rate
+                total_penalty += range_penalty
+
+                logging.warning(
+                    f"{resource_type} VIOLATION: {usage:.2f}% > {threshold}% "
+                    f"= -{range_penalty:.2f} (rate: {penalty_rate}x)"
+                )
+            else:
+                break
+
+        return total_penalty
 
     def _calculate_efficiency_score(self, cpu_usage, memory_usage, ready_replicas):
         """Calculate resource efficiency score"""
@@ -485,21 +536,37 @@ class K8sAutoscalerEnv(Env):
     def _calculate_scaling_penalty(
         self, mapped_action, cpu_usage, memory_usage, ready_replicas
     ):
-        """Penalize inappropriate scaling decisions"""
+        """Penalize inappropriate scaling decisions with stricter rules"""
         penalty = 0
 
         if mapped_action < 0:
-            if cpu_usage > self.target_cpu[1] or memory_usage > self.target_memory[1]:
-                penalty += abs(mapped_action) * 2
+            critical_zone = (
+                cpu_usage > self.CPU_LIMIT_THRESHOLD
+                or memory_usage > self.MEMORY_LIMIT_THRESHOLD
+            )
+            warning_zone = (
+                cpu_usage > self.CPU_WARNING_THRESHOLD
+                or memory_usage > self.MEMORY_WARNING_THRESHOLD
+            )
+
+            if critical_zone:
+                penalty += abs(mapped_action) * 10
                 logging.warning(
-                    f"INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
-                    f"MEM={memory_usage:.1f}%"
+                    f"SEVERE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
+                    f"MEM={memory_usage:.1f}% - CRITICAL ZONE"
                 )
-            elif (
-                cpu_usage > self.MODERATE_CPU_THRESHOLD
-                or memory_usage > self.MODERATE_MEMORY_THRESHOLD
-            ):
-                penalty += abs(mapped_action) * 1
+            elif warning_zone:
+                penalty += abs(mapped_action) * 5
+                logging.warning(
+                    f"HIGH INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
+                    f"MEM={memory_usage:.1f}% - WARNING ZONE"
+                )
+            elif cpu_usage > self.target_cpu[1] or memory_usage > self.target_memory[1]:
+                penalty += abs(mapped_action) * 3
+                logging.warning(
+                    f"MODERATE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
+                    f"MEM={memory_usage:.1f}% - ABOVE TARGET"
+                )
 
         elif (
             mapped_action > 0
@@ -507,15 +574,18 @@ class K8sAutoscalerEnv(Env):
             and memory_usage < self.LOW_USAGE_MEMORY
             and ready_replicas > self.MIN_REPLICAS_FOR_WASTE_CHECK
         ):
-            penalty += mapped_action * 1.5
+            penalty += mapped_action * 3
             logging.warning(
-                f"INAPPROPRIATE SCALE UP: CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%"
+                f"INAPPROPRIATE SCALE UP: CPU={cpu_usage:.1f}%, "
+                f"MEM={memory_usage:.1f}% - RESOURCES UNDERUTILIZED"
             )
 
         if abs(mapped_action) > self.LARGE_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 0.5
+            penalty += abs(mapped_action) * 1.0
+            logging.warning(f"LARGE ACTION PENALTY: {abs(mapped_action)} replicas")
         elif abs(mapped_action) > self.MEDIUM_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 0.2
+            penalty += abs(mapped_action) * 0.5
+            logging.info(f"Medium action penalty: {abs(mapped_action)} replicas")
 
         return penalty
 
@@ -524,9 +594,9 @@ class K8sAutoscalerEnv(Env):
         bonus = 0
 
         if mapped_action == 0:
-            bonus += 2
-        if 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
             bonus += 3
+        if 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
+            bonus += 2
         elif (
             self.SMALL_ACTION_THRESHOLD
             < abs(mapped_action)
