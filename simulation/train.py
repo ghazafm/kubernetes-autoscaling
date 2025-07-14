@@ -54,8 +54,8 @@ env = K8sAutoscalerEnv(
 model = DQN(
     policy="MlpPolicy",
     env=env,
-    learning_rate=1e-4,
     verbose=1,
+    tensorboard_log=str(Path("training") / "logs" / "DQN"),
 )
 
 logging.info("🚀 Starting training...")
