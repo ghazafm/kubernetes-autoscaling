@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: nodejs-deployment
 spec:
-  replicas: 50
+  replicas: 1
   selector:
     matchLabels:
       app: nodejs
@@ -34,33 +34,81 @@ spec:
           // Pre-allocate some memory
           let memoryStore = [];
 
+          function fibonacci(n) {
+            if (n <= 1) return n;
+            return fibonacci(n - 1) + fibonacci(n - 2);
+          }
+
+          function isPrime(num) {
+            if (num <= 1) return false;
+            if (num <= 3) return true;
+            if (num % 2 === 0 || num % 3 === 0) return false;
+            for (let i = 5; i * i <= num; i += 6) {
+              if (num % i === 0 || num % (i + 2) === 0) return false;
+            }
+            return true;
+          }
+
+          function findPrimes(limit) {
+            const primes = [];
+            for (let i = 2; i < limit; i++) {
+              if (isPrime(i)) primes.push(i);
+            }
+            return primes;
+          }
+
           const server = http.createServer((req, res) => {
             const parsedUrl = url.parse(req.url, true);
             // Simulate memory-intensive operations
             const data = crypto.randomBytes(1024 * 100);
             if (parsedUrl.pathname === '/stress') {
-              for (let i = 0; i < 15; i++) {
+              for (let i = 0; i < 25; i++) {
                 const data = crypto.randomBytes(1024 * 256);
                 memoryStore.push(data);
               }
+
               let result = 0;
-              for (let i = 0; i < 200000; i++) {
+              for (let i = 0; i < 500000; i++) {
                 result += Math.random() * Math.random();
-                if (i % 2000 === 0) {
+                if (i % 1000 === 0) {
                   crypto.createHash('sha256').update(String(result)).digest('hex');
                 }
               }
+
+              // CPU-intensive fibonacci
+              const fibResult = fibonacci(35);
+
+              // Find primes up to 10000
+              const primes = findPrimes(10000);
+
+              // Matrix multiplication for CPU load
+              const size = 100;
+              const matrix1 = Array(size).fill().map(() => Array(size).fill(Math.random()));
+              const matrix2 = Array(size).fill().map(() => Array(size).fill(Math.random()));
+              const resultMatrix = Array(size).fill().map(() => Array(size).fill(0));
+
+              for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                  for (let k = 0; k < size; k++) {
+                    resultMatrix[i][j] += matrix1[i][k] * matrix2[k][j];
+                  }
+                }
+              }
+
             } else {
               const data = crypto.randomBytes(1024 * 128);
               memoryStore.push(data);
 
               let result = 0;
-              for (let i = 0; i < 50000; i++) {
+              for (let i = 0; i < 150000; i++) {
                 result += Math.random() * Math.random();
-                if (i % 1000 === 0) {
+                if (i % 500 === 0) {
                   JSON.stringify({iteration: i, result: result});
                 }
               }
+              const fibResult = fibonacci(30);
+
+              const primes = findPrimes(5000);
             }
 
             if (memoryStore.length > 80) {
@@ -74,8 +122,11 @@ spec:
             }
 
             let result = 0;
-            for (let i = 0; i < 10000; i++) {
+            for (let i = 0; i < 20000; i++) {
               result += Math.random() * Math.random();
+              if (i % 100 === 0) {
+                Math.sin(result) * Math.cos(result);
+              }
             }
 
             const memUsage = process.memoryUsage();

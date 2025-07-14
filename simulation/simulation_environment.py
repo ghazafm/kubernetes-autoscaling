@@ -27,6 +27,21 @@ class K8sAutoscalerEnv(Env):
     HIGH_USAGE_THRESHOLD = 80.0
     CRITICAL_USAGE_THRESHOLD = 85.0
     MIN_HISTORY_SIZE = 2
+    CPU_LIMIT_THRESHOLD = 100.0
+    MEMORY_LIMIT_THRESHOLD = 100.0
+    CPU_WARNING_THRESHOLD = 95.0
+    MEMORY_WARNING_THRESHOLD = 95.0
+    MODERATE_CPU_THRESHOLD = 80.0
+    MODERATE_MEMORY_THRESHOLD = 80.0
+    MIN_EFFICIENT_CPU = 30.0
+    MIN_EFFICIENT_MEMORY = 20.0
+    LOW_USAGE_CPU = 10.0
+    LOW_USAGE_MEMORY = 10.0
+    MIN_REPLICAS_FOR_WASTE_CHECK = 2
+    LARGE_ACTION_THRESHOLD = 20
+    MEDIUM_ACTION_THRESHOLD = 10
+    SMALL_ACTION_THRESHOLD = 5
+    MIN_METRICS_RELIABILITY = 0.9
 
     def __init__(
         self,
@@ -102,7 +117,7 @@ class K8sAutoscalerEnv(Env):
         """Calculate recent scaling trend"""
         if len(self.replica_history) >= self.MIN_HISTORY_SIZE:
             recent_change = self.replica_history[-1] - self.replica_history[-2]
-            return np.tanh(recent_change / 5)  # untuk normalisasi
+            return np.tanh(recent_change / 5)
         return 0.0
 
     """
@@ -180,7 +195,6 @@ class K8sAutoscalerEnv(Env):
                     f"Timeout reached while fetching metrics after {self.timeout}s"
                 )
                 logging.info(f"Fetched replica {replica}/{replicas}")
-                timeout = True
                 break
             counter += 1
             try:
@@ -251,82 +265,24 @@ class K8sAutoscalerEnv(Env):
         ready, desired_replicas, ready_replicas = self._wait_for_pods_ready()
         cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
 
-        not_fetchable_replicas = max(0, self.replica_state - ready_replicas)
         cpu_available, memory_available = self.get_node_resource_usage()
+
         unschedulable_replicas = max(0, desired_replicas - ready_replicas)
-        unschedulable_replicas += not_fetchable_replicas
+        not_fetchable_replicas = max(0, ready_replicas - replica)
 
-        reward = 0
-        reward_breakdown = {
-            "resource_efficiency": 0,
-            "scaling_penalty": 0,
-            "cluster_health": 0,
-            "stability_bonus": 0,
-        }
+        metrics_reliability = replica / max(1, ready_replicas)
 
-        if unschedulable_replicas > 0 and not ready:
-            cluster_penalty = unschedulable_replicas * 25
-            reward -= cluster_penalty
-            reward_breakdown["cluster_health"] = -cluster_penalty
-            logging.warning(
-                f"CLUSTER PENALTY: {unschedulable_replicas} unschedulable pods ="
-                f" -{cluster_penalty}"
-            )
-        else:
-            logging.info(
-                "CLUSTER HEALTH: All pods are ready: "
-                f"{ready_replicas}/{desired_replicas}"
-            )
+        reward = self._calculate_total_reward(
+            cpu_usage,
+            memory_usage,
+            ready_replicas,
+            mapped_action,
+            unschedulable_replicas,
+            not_fetchable_replicas,
+            metrics_reliability,
+            ready,
+        )
 
-        cpu_reward = 0
-        if ready_replicas == self.min_replicas:
-            if cpu_usage < self.target_cpu[0]:
-                cpu_reward = 10 - (self.target_cpu[0] - cpu_usage) * 0.1
-            elif cpu_usage > self.target_cpu[1]:
-                cpu_reward = -5 - (cpu_usage - self.target_cpu[1]) * 0.2
-            else:
-                mid_point = (self.target_cpu[0] + self.target_cpu[1]) / 2
-                distance_from_mid = abs(cpu_usage - mid_point)
-                cpu_reward = 12 - distance_from_mid * 0.05
-        elif cpu_usage < self.target_cpu[0]:
-            waste_factor = (self.target_cpu[0] - cpu_usage) / self.target_cpu[0]
-            cpu_reward = -ready_replicas * waste_factor * 3
-        elif cpu_usage > self.target_cpu[1]:
-            cpu_denominator = max(1, 100 - self.target_cpu[1])
-            overload_factor = (cpu_usage - self.target_cpu[1]) / cpu_denominator
-            cpu_reward = -8 - overload_factor * 8
-        else:
-            mid_point = (self.target_cpu[0] + self.target_cpu[1]) / 2
-            distance_from_mid = abs(cpu_usage - mid_point)
-            cpu_reward = 8 - distance_from_mid * 0.03
-
-        memory_reward = 0
-        if ready_replicas == 1:
-            if memory_usage < self.target_memory[0]:
-                memory_reward = 10 - (self.target_memory[0] - memory_usage) * 0.1
-            elif memory_usage > self.target_memory[1]:
-                memory_reward = -5 - (memory_usage - self.target_memory[1]) * 0.2
-            else:
-                mid_point = (self.target_memory[0] + self.target_memory[1]) / 2
-                distance_from_mid = abs(memory_usage - mid_point)
-                memory_reward = 12 - distance_from_mid * 0.05
-        elif memory_usage < self.target_memory[0]:
-            waste_factor = (self.target_memory[0] - memory_usage) / self.target_memory[
-                0
-            ]
-            memory_reward = -ready_replicas * waste_factor * 3
-        elif memory_usage > self.target_memory[1]:
-            memory_denominator = max(1, 100 - self.target_memory[1])
-            overload_factor = (
-                memory_usage - self.target_memory[1]
-            ) / memory_denominator
-            memory_reward = -8 - overload_factor * 8
-        else:
-            mid_point = (self.target_memory[0] + self.target_memory[1]) / 2
-            distance_from_mid = abs(memory_usage - mid_point)
-            memory_reward = 8 - distance_from_mid * 0.03
-
-        reward += cpu_reward + memory_reward
         if self.iteration <= 0:
             terminated = True
             truncated = False
@@ -356,6 +312,8 @@ class K8sAutoscalerEnv(Env):
             "cpu_available": cpu_available,
             "memory_available": memory_available,
             "unschedulable_replicas": unschedulable_replicas,
+            "not_fetchable_replicas": not_fetchable_replicas,
+            "metrics_reliability": metrics_reliability,
             "replica_trend": observation[6],
             "time_since_last_scale": observation[7],
             "resource_pressure_score": observation[8],
@@ -376,6 +334,207 @@ class K8sAutoscalerEnv(Env):
             truncated,
             info,
         )
+
+    def _calculate_total_reward(
+        self,
+        cpu_usage,
+        memory_usage,
+        ready_replicas,
+        mapped_action,
+        unschedulable_replicas,
+        not_fetchable_replicas,
+        metrics_reliability,
+        ready,
+    ):
+        """Calculate the total reward for the current step"""
+        reward = 0
+        reward_breakdown = {
+            "performance_score": 0,
+            "resource_efficiency": 0,
+            "scaling_appropriateness": 0,
+            "cluster_health": 0,
+            "stability_bonus": 0,
+            "metrics_penalty": 0,
+        }
+
+        performance_score = self._calculate_performance_score(
+            cpu_usage, memory_usage, ready_replicas
+        )
+        reward += performance_score
+        reward_breakdown["performance_score"] = performance_score
+
+        efficiency_score = self._calculate_efficiency_score(
+            cpu_usage, memory_usage, ready_replicas
+        )
+        reward += efficiency_score
+        reward_breakdown["resource_efficiency"] = efficiency_score
+
+        scaling_penalty = self._calculate_scaling_penalty(
+            mapped_action, cpu_usage, memory_usage, ready_replicas
+        )
+        reward -= scaling_penalty
+        reward_breakdown["scaling_appropriateness"] = -scaling_penalty
+
+        if unschedulable_replicas > 0 and not ready:
+            cluster_penalty = min(
+                50, unschedulable_replicas * 5 + (unschedulable_replicas**1.5)
+            )
+            reward -= cluster_penalty
+            reward_breakdown["cluster_health"] = -cluster_penalty
+            logging.warning(
+                f"CLUSTER PENALTY: {unschedulable_replicas} unschedulable "
+                f"pods = -{cluster_penalty:.1f}"
+            )
+        else:
+            reward += 5
+            reward_breakdown["cluster_health"] = 5
+            logging.info(
+                "CLUSTER HEALTH: All pods are ready: "
+                f"{ready_replicas}/{self.replica_state}"
+            )
+        if not_fetchable_replicas > 0:
+            metrics_penalty = min(5, not_fetchable_replicas * 1)
+            reward -= metrics_penalty
+            reward_breakdown["metrics_penalty"] = -metrics_penalty
+            logging.warning(
+                f"METRICS ISSUE: {not_fetchable_replicas} pods not fetchable "
+                f"= -{metrics_penalty:.1f} (reliability: {metrics_reliability:.1%})"
+            )
+        if metrics_reliability >= self.MIN_METRICS_RELIABILITY:
+            reward += 1
+            reward_breakdown["metrics_penalty"] = 1
+
+        stability_bonus = self._calculate_stability_bonus(mapped_action)
+        reward += stability_bonus
+        reward_breakdown["stability_bonus"] = stability_bonus
+
+        logging.info(f"Reward breakdown: {reward_breakdown}")
+        logging.info(
+            f"CPU: {cpu_usage:.2f}% | Memory: {memory_usage:.2f}% | "
+            f"Replicas: {ready_replicas}"
+        )
+
+        return reward
+
+    def _calculate_performance_score(self, cpu_usage, memory_usage, ready_replicas):
+        """Calculate performance-based reward - primary scoring mechanism"""
+        score = 0
+
+        if cpu_usage > self.CPU_LIMIT_THRESHOLD:
+            score -= (cpu_usage - self.CPU_LIMIT_THRESHOLD) * 5
+            logging.warning(
+                "CRITICAL: CPU exceeds limit by "
+                f"{cpu_usage - self.CPU_LIMIT_THRESHOLD:.2f}%"
+            )
+        elif cpu_usage > self.CPU_WARNING_THRESHOLD:
+            score -= (cpu_usage - self.CPU_WARNING_THRESHOLD) * 3
+            logging.warning(f"HIGH: CPU near limit at {cpu_usage:.2f}%")
+        elif cpu_usage > self.target_cpu[1]:
+            score -= (cpu_usage - self.target_cpu[1]) * 1.5
+
+        if memory_usage > self.MEMORY_LIMIT_THRESHOLD:
+            score -= (memory_usage - self.MEMORY_LIMIT_THRESHOLD) * 4
+            logging.warning(
+                "CRITICAL: Memory exceeds limit by "
+                f"{memory_usage - self.MEMORY_LIMIT_THRESHOLD:.2f}%"
+            )
+        elif memory_usage > self.MEMORY_WARNING_THRESHOLD:
+            score -= (memory_usage - self.MEMORY_WARNING_THRESHOLD) * 2
+            logging.warning(f"HIGH: Memory near limit at {memory_usage:.2f}%")
+        elif memory_usage > self.target_memory[1]:
+            score -= (memory_usage - self.target_memory[1]) * 1
+
+        cpu_optimal = self.target_cpu[0] <= cpu_usage <= self.target_cpu[1]
+        memory_optimal = self.target_memory[0] <= memory_usage <= self.target_memory[1]
+
+        if cpu_optimal and memory_optimal:
+            score += 25
+        elif cpu_optimal or memory_optimal:
+            score += 10
+
+        if cpu_usage > 0 and memory_usage > 0:
+            resource_balance = 1 - abs(cpu_usage - memory_usage) / 100
+            score += resource_balance * 5
+
+        return score
+
+    def _calculate_efficiency_score(self, cpu_usage, memory_usage, ready_replicas):
+        """Calculate resource efficiency score"""
+        score = 0
+
+        if ready_replicas > self.min_replicas:
+            if cpu_usage < self.target_cpu[0]:
+                waste_factor = (self.target_cpu[0] - cpu_usage) / self.target_cpu[0]
+                score -= ready_replicas * waste_factor * 2
+
+            if memory_usage < self.target_memory[0]:
+                waste_factor = (
+                    self.target_memory[0] - memory_usage
+                ) / self.target_memory[0]
+                score -= ready_replicas * waste_factor * 1.5
+
+        if (
+            ready_replicas == 1
+            and cpu_usage > self.MIN_EFFICIENT_CPU
+            and memory_usage > self.MIN_EFFICIENT_MEMORY
+        ):
+            score += 5
+
+        return score
+
+    def _calculate_scaling_penalty(
+        self, mapped_action, cpu_usage, memory_usage, ready_replicas
+    ):
+        """Penalize inappropriate scaling decisions"""
+        penalty = 0
+
+        if mapped_action < 0:
+            if cpu_usage > self.target_cpu[1] or memory_usage > self.target_memory[1]:
+                penalty += abs(mapped_action) * 2
+                logging.warning(
+                    f"INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
+                    f"MEM={memory_usage:.1f}%"
+                )
+            elif (
+                cpu_usage > self.MODERATE_CPU_THRESHOLD
+                or memory_usage > self.MODERATE_MEMORY_THRESHOLD
+            ):
+                penalty += abs(mapped_action) * 1
+
+        elif (
+            mapped_action > 0
+            and cpu_usage < self.LOW_USAGE_CPU
+            and memory_usage < self.LOW_USAGE_MEMORY
+            and ready_replicas > self.MIN_REPLICAS_FOR_WASTE_CHECK
+        ):
+            penalty += mapped_action * 1.5
+            logging.warning(
+                f"INAPPROPRIATE SCALE UP: CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%"
+            )
+
+        if abs(mapped_action) > self.LARGE_ACTION_THRESHOLD:
+            penalty += abs(mapped_action) * 0.5
+        elif abs(mapped_action) > self.MEDIUM_ACTION_THRESHOLD:
+            penalty += abs(mapped_action) * 0.2
+
+        return penalty
+
+    def _calculate_stability_bonus(self, mapped_action):
+        """Reward stable, gradual scaling decisions"""
+        bonus = 0
+
+        if mapped_action == 0:
+            bonus += 2
+        if 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
+            bonus += 3
+        elif (
+            self.SMALL_ACTION_THRESHOLD
+            < abs(mapped_action)
+            <= self.MEDIUM_ACTION_THRESHOLD
+        ):
+            bonus += 1
+
+        return bonus
 
     def reset(
         self,
@@ -477,7 +636,6 @@ class K8sAutoscalerEnv(Env):
         Get CPU and memory resource limits from the deployment specification.
         Returns: tuple of (cpu_limit_cores, memory_limit_mb)
         """
-        # Default values
         default_cpu = 0.2
         default_memory = 128
 
