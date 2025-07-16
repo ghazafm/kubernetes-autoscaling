@@ -38,4 +38,5 @@ dev = [
     "ipykernel>=6.29.5",
     "ipywidgets>=8.1.7",
     "nbqa>=1.9.1",
+    "tensorboard>=2.19.0",
 ]
