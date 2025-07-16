@@ -21,18 +21,11 @@ logging.basicConfig(
 
 
 class K8sAutoscalerEnv(Env):
-    LOW_USAGE_THRESHOLD = 5.0
-    OPTIMAL_USAGE_MIN = 20.0
-    OPTIMAL_USAGE_MAX = 70.0
-    HIGH_USAGE_THRESHOLD = 80.0
-    CRITICAL_USAGE_THRESHOLD = 85.0
     MIN_HISTORY_SIZE = 2
     CPU_LIMIT_THRESHOLD = 100.0
     MEMORY_LIMIT_THRESHOLD = 100.0
     CPU_WARNING_THRESHOLD = 95.0
     MEMORY_WARNING_THRESHOLD = 95.0
-    MODERATE_CPU_THRESHOLD = 80.0
-    MODERATE_MEMORY_THRESHOLD = 80.0
     MIN_EFFICIENT_CPU = 30.0
     MIN_EFFICIENT_MEMORY = 20.0
     LOW_USAGE_CPU = 10.0
@@ -42,6 +35,15 @@ class K8sAutoscalerEnv(Env):
     MEDIUM_ACTION_THRESHOLD = 10
     SMALL_ACTION_THRESHOLD = 5
     MIN_METRICS_RELIABILITY = 0.9
+
+    CRITICAL_REPLICA_THRESHOLD = 2
+    HIGH_RESOURCE_THRESHOLD = 70.0
+
+    OSCILLATION_WINDOW = 4
+    MIN_SIGN_CHANGES = 2
+    LARGE_REPLICA_SWING = 15
+    OSCILLATION_PENALTY_MULTIPLIER = 50
+    REPLICA_OSCILLATION_MULTIPLIER = 2
 
     def __init__(
         self,
@@ -106,7 +108,8 @@ class K8sAutoscalerEnv(Env):
             f"Deployment resource limits - CPU: {self.cpu_limit_cores} cores, "
             f"Memory: {self.memory_limit_mb} MB"
         )
-        self.replica_history = collections.deque(maxlen=3)
+        self.replica_history = collections.deque(maxlen=5)
+        self.action_history = collections.deque(maxlen=10)
         self.last_scale_time = time.time()
         self.last_action = 0
 
@@ -358,6 +361,16 @@ class K8sAutoscalerEnv(Env):
             "critical_override": 0,
         }
 
+        if self._is_impossible_action(mapped_action, ready_replicas):
+            reward = -500
+            reward_breakdown["critical_override"] = -500
+            logging.error(
+                f"IMPOSSIBLE ACTION: Action {mapped_action} with {ready_replicas} "
+                f"replicas = {reward}"
+            )
+            logging.info(f"Reward breakdown: {reward_breakdown}")
+            return reward
+
         performance_score = self._calculate_performance_score(
             cpu_usage, memory_usage, ready_replicas
         )
@@ -444,7 +457,6 @@ class K8sAutoscalerEnv(Env):
             cpu_usage,
             [
                 (self.target_cpu[1], 1.0),
-                (self.MODERATE_CPU_THRESHOLD, 2.0),
                 (self.CPU_WARNING_THRESHOLD, 5.0),
                 (self.CPU_LIMIT_THRESHOLD, 10.0),
             ],
@@ -456,7 +468,6 @@ class K8sAutoscalerEnv(Env):
             memory_usage,
             [
                 (self.target_memory[1], 0.8),
-                (self.MODERATE_MEMORY_THRESHOLD, 1.5),
                 (self.MEMORY_WARNING_THRESHOLD, 4.0),
                 (self.MEMORY_LIMIT_THRESHOLD, 8.0),
             ],
@@ -539,7 +550,32 @@ class K8sAutoscalerEnv(Env):
         """Penalize inappropriate scaling decisions with stricter rules"""
         penalty = 0
 
+        if mapped_action < 0 and ready_replicas <= self.min_replicas:
+            penalty += 200
+            logging.error(
+                f"CRITICAL PENALTY: Trying to scale below minimum replicas "
+                f"(current: {ready_replicas}, min: {self.min_replicas}) = -200"
+            )
+
+        if mapped_action < 0 and abs(mapped_action) > ready_replicas:
+            overshoot_penalty = abs(mapped_action) - ready_replicas
+            penalty += overshoot_penalty * 50
+            logging.error(
+                f"OVERSHOOT PENALTY: Trying to scale down by {abs(mapped_action)} "
+                f"when only {ready_replicas} replicas exist = -{overshoot_penalty * 50}"
+            )
+
         if mapped_action < 0:
+            if ready_replicas <= self.CRITICAL_REPLICA_THRESHOLD and (
+                cpu_usage > self.HIGH_RESOURCE_THRESHOLD
+                or memory_usage > self.HIGH_RESOURCE_THRESHOLD
+            ):
+                penalty += 300
+                logging.error(
+                    f"CRITICAL: Scaling down at minimum replicas with high usage "
+                    f"(CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%) = -300"
+                )
+
             critical_zone = (
                 cpu_usage > self.CPU_LIMIT_THRESHOLD
                 or memory_usage > self.MEMORY_LIMIT_THRESHOLD
@@ -550,19 +586,19 @@ class K8sAutoscalerEnv(Env):
             )
 
             if critical_zone:
-                penalty += abs(mapped_action) * 10
+                penalty += abs(mapped_action) * 20
                 logging.warning(
                     f"SEVERE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - CRITICAL ZONE"
                 )
             elif warning_zone:
-                penalty += abs(mapped_action) * 5
+                penalty += abs(mapped_action) * 10
                 logging.warning(
                     f"HIGH INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - WARNING ZONE"
                 )
             elif cpu_usage > self.target_cpu[1] or memory_usage > self.target_memory[1]:
-                penalty += abs(mapped_action) * 3
+                penalty += abs(mapped_action) * 5
                 logging.warning(
                     f"MODERATE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - ABOVE TARGET"
@@ -574,29 +610,34 @@ class K8sAutoscalerEnv(Env):
             and memory_usage < self.LOW_USAGE_MEMORY
             and ready_replicas > self.MIN_REPLICAS_FOR_WASTE_CHECK
         ):
-            penalty += mapped_action * 3
+            underutilization_factor = (
+                self.LOW_USAGE_CPU - cpu_usage
+            ) / self.LOW_USAGE_CPU
+            penalty += mapped_action * (5 + underutilization_factor * 10)
             logging.warning(
                 f"INAPPROPRIATE SCALE UP: CPU={cpu_usage:.1f}%, "
                 f"MEM={memory_usage:.1f}% - RESOURCES UNDERUTILIZED"
             )
 
         if abs(mapped_action) > self.LARGE_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 1.0
+            penalty += abs(mapped_action) * 2.0
             logging.warning(f"LARGE ACTION PENALTY: {abs(mapped_action)} replicas")
         elif abs(mapped_action) > self.MEDIUM_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 0.5
+            penalty += abs(mapped_action) * 1.0
             logging.info(f"Medium action penalty: {abs(mapped_action)} replicas")
 
         return penalty
 
     def _calculate_stability_bonus(self, mapped_action):
-        """Reward stable, gradual scaling decisions"""
+        """Reward stable, gradual scaling decisions and penalize oscillations"""
         bonus = 0
 
+        self.action_history.append(mapped_action)
+
         if mapped_action == 0:
+            bonus += 5
+        elif 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
             bonus += 3
-        if 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
-            bonus += 2
         elif (
             self.SMALL_ACTION_THRESHOLD
             < abs(mapped_action)
@@ -604,7 +645,61 @@ class K8sAutoscalerEnv(Env):
         ):
             bonus += 1
 
+        oscillation_penalty = self._detect_oscillation()
+        bonus -= oscillation_penalty
+
+        if self._is_in_good_state() and mapped_action == 0:
+            bonus += 10
+
         return bonus
+
+    def _detect_oscillation(self):
+        """Detect oscillating behavior in recent actions"""
+        if len(self.action_history) < self.OSCILLATION_WINDOW:
+            return 0
+
+        recent_actions = list(self.action_history)[-self.OSCILLATION_WINDOW :]
+
+        sign_changes = 0
+        for i in range(1, len(recent_actions)):
+            if recent_actions[i] * recent_actions[i - 1] < 0:
+                sign_changes += 1
+
+        if sign_changes >= self.MIN_SIGN_CHANGES:
+            penalty = self.OSCILLATION_PENALTY_MULTIPLIER * sign_changes
+            logging.warning(
+                f"OSCILLATION DETECTED: {sign_changes} sign changes = -{penalty}"
+            )
+            return penalty
+
+        if len(self.replica_history) >= self.OSCILLATION_WINDOW:
+            recent_replicas = list(self.replica_history)[-self.OSCILLATION_WINDOW :]
+            replica_range = max(recent_replicas) - min(recent_replicas)
+
+            if replica_range > self.LARGE_REPLICA_SWING:
+                penalty = replica_range * self.REPLICA_OSCILLATION_MULTIPLIER
+                logging.warning(
+                    f"REPLICA OSCILLATION: Range {replica_range} = -{penalty}"
+                )
+                return penalty
+
+        return 0
+
+    def _is_in_good_state(self):
+        """Check if current state is in good operational range"""
+
+        return len(self.replica_history) > 0
+
+    def _is_impossible_action(self, mapped_action, ready_replicas):
+        """Check if the action is impossible given current state"""
+
+        if mapped_action < 0 and ready_replicas <= self.min_replicas:
+            return True
+
+        if mapped_action < 0 and abs(mapped_action) > ready_replicas:
+            return True
+
+        return mapped_action > 0 and ready_replicas + mapped_action > self.max_replicas
 
     def reset(
         self,
@@ -620,6 +715,7 @@ class K8sAutoscalerEnv(Env):
         self.iteration = self.init_iteration
 
         self.replica_history.clear()
+        self.action_history.clear()
         self.last_scale_time = time.time()
         self.last_action = 0
 
