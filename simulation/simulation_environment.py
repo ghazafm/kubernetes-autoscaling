@@ -30,7 +30,6 @@ class K8sAutoscalerEnv(Env):
     MIN_EFFICIENT_MEMORY = 20.0
     LOW_USAGE_CPU = 10.0
     LOW_USAGE_MEMORY = 10.0
-    MIN_REPLICAS_FOR_WASTE_CHECK = 2
     LARGE_ACTION_THRESHOLD = 20
     MEDIUM_ACTION_THRESHOLD = 10
     SMALL_ACTION_THRESHOLD = 5
@@ -44,6 +43,13 @@ class K8sAutoscalerEnv(Env):
     LARGE_REPLICA_SWING = 15
     OSCILLATION_PENALTY_MULTIPLIER = 50
     REPLICA_OSCILLATION_MULTIPLIER = 2
+
+    LARGE_DEPLOYMENT_THRESHOLD = 100
+    MEDIUM_DEPLOYMENT_THRESHOLD = 50
+    VERY_LARGE_DEPLOYMENT_THRESHOLD = 200
+    HIGH_RESOURCE_CPU_THRESHOLD = 1.0
+    HIGH_RESOURCE_MEMORY_THRESHOLD = 512
+    HIGH_AVAILABILITY_MIN_REPLICAS = 3
 
     def __init__(
         self,
@@ -59,6 +65,7 @@ class K8sAutoscalerEnv(Env):
         verbose: bool = False,
         action_step: int = 1,
         timeout: int = 60,
+        waste_check_mode: str = "adaptive",
     ):
         config.load_kube_config()
         self.verbose = verbose
@@ -108,6 +115,15 @@ class K8sAutoscalerEnv(Env):
             f"Deployment resource limits - CPU: {self.cpu_limit_cores} cores, "
             f"Memory: {self.memory_limit_mb} MB"
         )
+
+        self.waste_check_threshold = self._calculate_waste_check_threshold(
+            waste_check_mode
+        )
+        logging.info(
+            f"Dynamic waste check threshold: {self.waste_check_threshold} "
+            f"(mode: {waste_check_mode})"
+        )
+
         self.replica_history = collections.deque(maxlen=5)
         self.action_history = collections.deque(maxlen=10)
         self.last_scale_time = time.time()
@@ -115,6 +131,64 @@ class K8sAutoscalerEnv(Env):
 
         self.init_iteration = iteration
         self.iteration = iteration
+
+    def _calculate_waste_check_threshold(self, mode: str) -> int:
+        """Calculate dynamic waste check threshold based on deployment"""
+
+        # Mode-specific threshold calculation
+        threshold_map = {
+            "fixed": 2,
+            "min_plus_one": max(2, self.min_replicas + 1),
+            "adaptive": self._get_adaptive_threshold(),
+            "percentage": self._get_percentage_threshold(),
+            "context_aware": self._get_context_aware_threshold(),
+        }
+
+        return threshold_map.get(mode, max(2, self.min_replicas + 1))
+
+    def _get_adaptive_threshold(self) -> int:
+        """Get adaptive threshold based on deployment characteristics"""
+        base_threshold = max(2, self.min_replicas + 1)
+
+        # Adjust for large deployments
+        if self.max_replicas > self.LARGE_DEPLOYMENT_THRESHOLD:
+            base_threshold = max(base_threshold, 5)
+        elif self.max_replicas > self.MEDIUM_DEPLOYMENT_THRESHOLD:
+            base_threshold = max(base_threshold, 3)
+
+        # Adjust for resource-intensive applications
+        if (
+            hasattr(self, "cpu_limit_cores")
+            and hasattr(self, "memory_limit_mb")
+            and (
+                self.cpu_limit_cores > self.HIGH_RESOURCE_CPU_THRESHOLD
+                or self.memory_limit_mb > self.HIGH_RESOURCE_MEMORY_THRESHOLD
+            )
+        ):
+            base_threshold = max(base_threshold, 3)
+
+        return base_threshold
+
+    def _get_percentage_threshold(self) -> int:
+        """Get percentage-based threshold"""
+        percentage_threshold = max(1, int(self.max_replicas * 0.1))
+        return max(percentage_threshold, self.min_replicas + 1, 2)
+
+    def _get_context_aware_threshold(self) -> int:
+        """Get context-aware threshold"""
+        base_threshold = max(2, self.min_replicas + 1)
+
+        # High availability scenario
+        if self.min_replicas >= self.HIGH_AVAILABILITY_MIN_REPLICAS:
+            base_threshold = max(base_threshold, self.min_replicas + 2)
+
+        # Very large deployments
+        if self.max_replicas > self.VERY_LARGE_DEPLOYMENT_THRESHOLD:
+            base_threshold = max(base_threshold, 8)
+        elif self.max_replicas > self.LARGE_DEPLOYMENT_THRESHOLD:
+            base_threshold = max(base_threshold, 5)
+
+        return base_threshold
 
     def _calculate_replica_trend(self):
         """Calculate recent scaling trend"""
@@ -608,7 +682,7 @@ class K8sAutoscalerEnv(Env):
             mapped_action > 0
             and cpu_usage < self.LOW_USAGE_CPU
             and memory_usage < self.LOW_USAGE_MEMORY
-            and ready_replicas > self.MIN_REPLICAS_FOR_WASTE_CHECK
+            and ready_replicas > self.waste_check_threshold
         ):
             underutilization_factor = (
                 self.LOW_USAGE_CPU - cpu_usage
@@ -616,7 +690,8 @@ class K8sAutoscalerEnv(Env):
             penalty += mapped_action * (5 + underutilization_factor * 10)
             logging.warning(
                 f"INAPPROPRIATE SCALE UP: CPU={cpu_usage:.1f}%, "
-                f"MEM={memory_usage:.1f}% - RESOURCES UNDERUTILIZED"
+                f"MEM={memory_usage:.1f}% - RESOURCES UNDERUTILIZED "
+                f"(threshold: {self.waste_check_threshold})"
             )
 
         if abs(mapped_action) > self.LARGE_ACTION_THRESHOLD:
