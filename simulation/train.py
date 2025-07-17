@@ -18,19 +18,24 @@ Usage Examples:
     # Resume training with different timesteps
     python train.py -r training/interrupted_model/model -t 25000
 
-    # Full configuration
-    python train.py --resume training/interrupted_model/model \
-                   --timesteps 75000 \
-                   --action-step 15 \
-                   --max-replicas 40 \
-                   --deployment-name my-app \
-                   --namespace production
+    # Full configuration with custom hyperparameters
+    python train.py --timesteps 500000 --action-step 10 --max-replicas 70 \\
+                   --min-cpu 20 --max-cpu 70 --min-memory 20 --max-memory 70 \\
+                   --learning-rate 3e-4 --buffer-size 100000 --batch-size 64 \\
+                   --gamma 0.95 --exploration-fraction 0.3 --verbose
+
+    # Production training with context-aware waste checking
+    python train.py --deployment-name nodejs-deployment --namespace production \\
+                   --timesteps 500000 --iterations 200 --timeout 180 \\
+                   --waste-check-mode context_aware --max-replicas 70 \\
+                   --learning-rate 1e-4 --exploration-initial-eps 0.8
 """
 
 import argparse
 import logging
 import signal
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import urllib3
@@ -111,6 +116,135 @@ def parse_arguments():
         help="Waste check threshold mode",
     )
 
+    # CPU/Memory threshold arguments
+    parser.add_argument(
+        "--min-cpu",
+        type=float,
+        default=20.0,
+        help="Minimum CPU target percentage (default: 20.0)",
+    )
+
+    parser.add_argument(
+        "--max-cpu",
+        type=float,
+        default=70.0,
+        help="Maximum CPU target percentage (default: 70.0)",
+    )
+
+    parser.add_argument(
+        "--min-memory",
+        type=float,
+        default=20.0,
+        help="Minimum memory target percentage (default: 20.0)",
+    )
+
+    parser.add_argument(
+        "--max-memory",
+        type=float,
+        default=70.0,
+        help="Maximum memory target percentage (default: 70.0)",
+    )
+
+    # Environment behavior arguments
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging and detailed output",
+    )
+
+    parser.add_argument(
+        "--min-replicas",
+        type=int,
+        default=1,
+        help="Minimum number of replicas (default: 1)",
+    )
+
+    # DQN hyperparameter arguments
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=1e-4,
+        help="Learning rate for DQN (default: 1e-4)",
+    )
+
+    parser.add_argument(
+        "--buffer-size",
+        type=int,
+        default=1_000_000,
+        help="Experience replay buffer size (default: 1_000_000)",
+    )
+
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Batch size for training (default: 32)",
+    )
+
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.99,
+        help="Discount factor for future rewards (default: 0.99)",
+    )
+
+    parser.add_argument(
+        "--exploration-fraction",
+        type=float,
+        default=0.1,
+        help="Fraction of training for exploration (default: 0.1)",
+    )
+
+    parser.add_argument(
+        "--exploration-initial-eps",
+        type=float,
+        default=1.0,
+        help="Initial exploration rate (default: 1.0)",
+    )
+
+    parser.add_argument(
+        "--exploration-final-eps",
+        type=float,
+        default=0.05,
+        help="Final exploration rate (default: 0.05)",
+    )
+
+    parser.add_argument(
+        "--target-update-interval",
+        type=int,
+        default=10000,
+        help="Target network update interval (default: 10000)",
+    )
+
+    parser.add_argument(
+        "--learning-starts",
+        type=int,
+        default=100,
+        help="Number of steps before learning starts (default: 100)",
+    )
+
+    parser.add_argument(
+        "--train-freq",
+        type=int,
+        default=4,
+        help="Training frequency (default: 4)",
+    )
+
+    parser.add_argument(
+        "--tau",
+        type=float,
+        default=1.0,
+        help="Soft update coefficient for target network (default: 1.0)",
+    )
+
+    parser.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=10.0,
+        help="Maximum gradient norm for clipping (default: 10.0)",
+    )
+
     return parser.parse_args()
 
 
@@ -120,11 +254,11 @@ env = None
 
 def signal_handler(signum, frame):
     """Handle Ctrl+C gracefully"""
-    global model, env
     logging.info("\n\n🛑 Training interrupted by user (Ctrl+C)")
     if model is not None:
         logging.info("💾 Saving model before exit...")
-        save_path = Path("training") / "interrupted_model"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = Path("training") / f"interrupted_model_{timestamp}"
         save_path.mkdir(parents=True, exist_ok=True)
         model.save(save_path / "model")
         logging.info(f"✅ Model saved to: {save_path}")
@@ -140,31 +274,28 @@ def signal_handler(signum, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 
-def main():
-    """Main training function"""
-    global model, env
-
-    args = parse_arguments()
-
-    env = K8sAutoscalerEnv(
-        min_replicas=1,
+def create_environment(args):
+    """Create the K8s autoscaler environment"""
+    return K8sAutoscalerEnv(
+        min_replicas=args.min_replicas,
         max_replicas=args.max_replicas,
         iteration=args.iterations,
         namespace=args.namespace,
         deployment_name=args.deployment_name,
-        min_cpu=20,
-        min_memory=20,
-        max_cpu=85,
-        max_memory=85,
-        verbose=True,
+        min_cpu=args.min_cpu,
+        min_memory=args.min_memory,
+        max_cpu=args.max_cpu,
+        max_memory=args.max_memory,
+        verbose=args.verbose,
         action_step=args.action_step,
         timeout=args.timeout,
         waste_check_mode=args.waste_check_mode,
     )
 
-    # Create or load model
+
+def load_or_create_model(args, env):
+    """Load existing model or create new one"""
     if args.resume:
-        # Resume training from saved model
         model_path = Path(args.resume)
         if not model_path.exists():
             logging.error(f"❌ Model file not found: {model_path}")
@@ -179,48 +310,78 @@ def main():
                 tensorboard_log=str(Path("training") / "logs" / "DQN"),
             )
             logging.info("✅ Model loaded successfully!")
+            return model
         except Exception as e:
             logging.error(f"❌ Failed to load model: {e}")
             sys.exit(1)
     else:
-        # Create new model
         logging.info("🆕 Creating new model...")
-        model = DQN(
+        return DQN(
             policy="MlpPolicy",
             env=env,
+            learning_rate=args.learning_rate,
+            buffer_size=args.buffer_size,
+            learning_starts=args.learning_starts,
+            batch_size=args.batch_size,
+            tau=args.tau,
+            gamma=args.gamma,
+            train_freq=args.train_freq,
+            gradient_steps=1,
+            target_update_interval=args.target_update_interval,
+            exploration_fraction=args.exploration_fraction,
+            exploration_initial_eps=args.exploration_initial_eps,
+            exploration_final_eps=args.exploration_final_eps,
+            max_grad_norm=args.max_grad_norm,
             verbose=1,
             tensorboard_log=str(Path("training") / "logs" / "DQN"),
         )
 
-    # Display training information
+
+def display_training_info(args, env):
+    """Display training configuration information"""
     logging.info("🚀 Starting training...")
     logging.info(f"📊 Action space: {env.action_space}")
     logging.info(f"⏱️  Timesteps: {args.timesteps:,}")
     logging.info(f"🔧 Action step: {args.action_step}")
-    logging.info(f"📏 Max replicas: {args.max_replicas}")
+    logging.info(f"📏 Replicas: {args.min_replicas}-{args.max_replicas}")
+    logging.info(f"🎯 CPU target: {args.min_cpu}%-{args.max_cpu}%")
+    logging.info(f"🧠 Memory target: {args.min_memory}%-{args.max_memory}%")
     logging.info(f"🔄 Iterations per episode: {args.iterations}")
+    logging.info(f"⏰ Timeout: {args.timeout}s")
     logging.info(f"🎯 Deployment: {args.deployment_name} (namespace: {args.namespace})")
     logging.info(
         f"🎛️  Waste check mode: {args.waste_check_mode} "
         f"(threshold: {env.waste_check_threshold})"
     )
+    logging.info(f"🔬 Learning rate: {args.learning_rate}")
+    logging.info(f"💾 Buffer size: {args.buffer_size:,}")
+    logging.info(f"📦 Batch size: {args.batch_size}")
+    logging.info(f"🎲 Gamma: {args.gamma}")
+    logging.info(
+        f"🔍 Exploration: {args.exploration_initial_eps} → "
+        f"{args.exploration_final_eps} (fraction: {args.exploration_fraction})"
+    )
     if args.resume:
         logging.info(f"🔄 Resuming from: {args.resume}")
     logging.info("⏹️  Press Ctrl+C to stop training and save model")
-    logging.info("=" * 60)
+    logging.info("=" * 55)
 
+
+def train_model(model, args):
+    """Train the model and save it"""
     try:
         model.learn(total_timesteps=args.timesteps, progress_bar=True)
-
-        save_path = Path("training") / "completed_model"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = Path("training") / f"completed_model_{timestamp}"
         save_path.mkdir(parents=True, exist_ok=True)
         model.save(save_path / "model")
         logging.info(f"✅ Training completed! Model saved to: {save_path}")
-
     except KeyboardInterrupt:
         signal_handler(None, None)
 
-    # Test the trained model
+
+def test_model(model, env, args):
+    """Test the trained model"""
     logging.info("\n🧪 Testing the trained model for 10 steps...")
     obs, _ = env.reset()
 
@@ -238,6 +399,16 @@ def main():
         if terminated or truncated:
             break
 
+
+def main():
+    """Main training function"""
+
+    args = parse_arguments()
+    env = create_environment(args)
+    model = load_or_create_model(args, env)
+    display_training_info(args, env)
+    train_model(model, args)
+    test_model(model, env, args)
     env.close()
     logging.info("🎉 Done!")
 
