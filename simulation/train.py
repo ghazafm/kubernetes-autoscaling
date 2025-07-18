@@ -72,12 +72,12 @@ def parse_arguments():
         "--action-step",
         "-a",
         type=int,
-        default=25,
+        default=5,
         help="Action step size for replica scaling",
     )
 
     parser.add_argument(
-        "--max-replicas", "-m", type=int, default=50, help="Maximum number of replicas"
+        "--max-replicas", "-m", type=int, default=30, help="Maximum number of replicas"
     )
 
     parser.add_argument(
@@ -127,8 +127,8 @@ def parse_arguments():
     parser.add_argument(
         "--max-cpu",
         type=float,
-        default=70.0,
-        help="Maximum CPU target percentage (default: 70.0)",
+        default=85.0,
+        help="Maximum CPU target percentage (default: 85.0)",
     )
 
     parser.add_argument(
@@ -141,8 +141,8 @@ def parse_arguments():
     parser.add_argument(
         "--max-memory",
         type=float,
-        default=70.0,
-        help="Maximum memory target percentage (default: 70.0)",
+        default=85.0,
+        help="Maximum memory target percentage (default: 85.0)",
     )
 
     # Environment behavior arguments
@@ -156,8 +156,8 @@ def parse_arguments():
     parser.add_argument(
         "--min-replicas",
         type=int,
-        default=1,
-        help="Minimum number of replicas (default: 1)",
+        default=2,
+        help="Minimum number of replicas (default: 2)",
     )
 
     # DQN hyperparameter arguments

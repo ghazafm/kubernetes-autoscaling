@@ -34,6 +34,7 @@ class K8sAutoscalerEnv(Env):
     MEDIUM_ACTION_THRESHOLD = 10
     SMALL_ACTION_THRESHOLD = 5
     MIN_METRICS_RELIABILITY = 0.9
+    HTTP_INTERNAL_SERVER_ERROR = 500
 
     CRITICAL_REPLICA_THRESHOLD = 2
     HIGH_RESOURCE_THRESHOLD = 70.0
@@ -287,7 +288,7 @@ class K8sAutoscalerEnv(Env):
         """Calculate how close to replica capacity limits"""
         if self.replica_state <= self.min_replicas:
             return 0.0
-        # Redundant check removed - replica_state is always bounded by step() method
+
         return (self.replica_state - self.min_replicas) / (
             self.max_replicas - self.min_replicas
         )
@@ -426,17 +427,57 @@ class K8sAutoscalerEnv(Env):
         )
 
     def _scale_deployment(self):
-        logging.info(
-            f"Scaling deployment {self.deployment_name} to {self.replica_state} "
-            "replicas"
-        )
-        self.cluster.patch_namespaced_deployment_scale(
-            name=self.deployment_name,
-            body=client.V1Scale(
-                spec=client.V1ScaleSpec(replicas=int(self.replica_state))
-            ),
-            namespace=self.namespace,
-        )
+        """Scale deployment with retry logic and exponential backoff"""
+        max_retries = 3
+        base_delay = 1.0
+        http_timeout = 30
+
+        for attempt in range(max_retries):
+            try:
+                logging.info(
+                    f"Scaling deployment {self.deployment_name} to "
+                    f"{self.replica_state} replicas (attempt {attempt + 1}/"
+                    f"{max_retries})"
+                )
+
+                self.cluster.patch_namespaced_deployment_scale(
+                    name=self.deployment_name,
+                    body=client.V1Scale(
+                        spec=client.V1ScaleSpec(replicas=int(self.replica_state))
+                    ),
+                    namespace=self.namespace,
+                    _request_timeout=http_timeout,
+                )
+
+                logging.info(
+                    f"Successfully scaled deployment to {self.replica_state} replicas"
+                )
+                return
+
+            except client.ApiException as e:
+                if (
+                    e.status == self.HTTP_INTERNAL_SERVER_ERROR
+                    and "etcdserver: request timed out" in str(e)
+                ):
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2**attempt)
+                        logging.warning(
+                            f"Kubernetes API timeout (attempt {attempt + 1}/"
+                            f"{max_retries}). Retrying in {delay} seconds..."
+                        )
+                        time.sleep(delay)
+                        continue
+
+                    logging.error(
+                        f"Failed to scale deployment after {max_retries} attempts: {e}"
+                    )
+                    raise
+
+                logging.error(f"Unexpected API error during scaling: {e}")
+                raise
+            except Exception as e:
+                logging.error(f"Unexpected error during scaling: {e}")
+                raise
 
     def get_metrics(self, replicas):
         counter = 0
@@ -494,6 +535,77 @@ class K8sAutoscalerEnv(Env):
         memory_usage_mean = np.mean(memory_usage) if memory_usage else 0
         return cpu_usage_mean, memory_usage_mean, replica
 
+    def _handle_scaling_with_fallback(self):
+        """Handle scaling operation with fallback for API errors"""
+        try:
+            self._scale_deployment()
+            ready, desired_replicas, ready_replicas = self._wait_for_pods_ready()
+            cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
+
+            unschedulable_replicas = max(0, desired_replicas - ready_replicas)
+            not_fetchable_replicas = max(0, ready_replicas - replica)
+            metrics_reliability = replica / max(1, ready_replicas)
+
+            return (
+                cpu_usage,
+                memory_usage,
+                replica,
+                ready_replicas,
+                unschedulable_replicas,
+                not_fetchable_replicas,
+                metrics_reliability,
+                ready,
+            )
+
+        except client.ApiException as e:
+            if (
+                e.status == self.HTTP_INTERNAL_SERVER_ERROR
+                and "etcdserver: request timed out" in str(e)
+            ):
+                logging.error(f"Kubernetes API timeout - using fallback state: {e}")
+                cpu_usage, memory_usage = 50.0, 50.0
+                replica = self.replica_state
+                ready_replicas = self.replica_state
+                unschedulable_replicas = 0
+                not_fetchable_replicas = 0
+                metrics_reliability = 0.5
+                ready = True
+
+                return (
+                    cpu_usage,
+                    memory_usage,
+                    replica,
+                    ready_replicas,
+                    unschedulable_replicas,
+                    not_fetchable_replicas,
+                    metrics_reliability,
+                    ready,
+                )
+
+            logging.error(f"API error in scaling: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"Unexpected error in scaling: {e}")
+
+            cpu_usage, memory_usage = 50.0, 50.0
+            replica = self.replica_state
+            ready_replicas = self.replica_state
+            unschedulable_replicas = 0
+            not_fetchable_replicas = 0
+            metrics_reliability = 0.5
+            ready = True
+
+            return (
+                cpu_usage,
+                memory_usage,
+                replica,
+                ready_replicas,
+                unschedulable_replicas,
+                not_fetchable_replicas,
+                metrics_reliability,
+                ready,
+            )
+
     def step(self, action):
         mapped_action = action - self.action_step
 
@@ -506,14 +618,17 @@ class K8sAutoscalerEnv(Env):
             self.last_scale_time = time.time()
             logging.info(f"Action: {mapped_action}, New replicas: {self.replica_state}")
         self.iteration -= 1
-        self._scale_deployment()
-        ready, desired_replicas, ready_replicas = self._wait_for_pods_ready()
-        cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
 
-        unschedulable_replicas = max(0, desired_replicas - ready_replicas)
-        not_fetchable_replicas = max(0, ready_replicas - replica)
-
-        metrics_reliability = replica / max(1, ready_replicas)
+        (
+            cpu_usage,
+            memory_usage,
+            replica,
+            ready_replicas,
+            unschedulable_replicas,
+            not_fetchable_replicas,
+            metrics_reliability,
+            ready,
+        ) = self._handle_scaling_with_fallback()
 
         reward = self._calculate_total_reward(
             cpu_usage,
@@ -603,8 +718,8 @@ class K8sAutoscalerEnv(Env):
         }
 
         if self._is_impossible_action(mapped_action, ready_replicas):
-            reward = -500
-            reward_breakdown["critical_override"] = -500
+            reward = -25
+            reward_breakdown["critical_override"] = -25
             logging.error(
                 f"IMPOSSIBLE ACTION: Action {mapped_action} with {ready_replicas} "
                 f"replicas = {reward}"
@@ -662,7 +777,6 @@ class K8sAutoscalerEnv(Env):
         reward += stability_bonus
         reward_breakdown["stability_bonus"] = stability_bonus
 
-        # Consolidated critical zone detection
         critical_cpu = cpu_usage > self.CPU_LIMIT_THRESHOLD
         critical_memory = memory_usage > self.MEMORY_LIMIT_THRESHOLD
 
@@ -696,9 +810,9 @@ class K8sAutoscalerEnv(Env):
         memory_penalty = self._calculate_incremental_penalty(
             memory_usage,
             [
-                (self.target_memory[1], 1.0),  # Standardized to match CPU
-                (self.MEMORY_WARNING_THRESHOLD, 5.0),  # Standardized to match CPU
-                (self.MEMORY_LIMIT_THRESHOLD, 10.0),  # Standardized to match CPU
+                (self.target_memory[1], 1.0),
+                (self.MEMORY_WARNING_THRESHOLD, 5.0),
+                (self.MEMORY_LIMIT_THRESHOLD, 10.0),
             ],
             "Memory",
         )
@@ -713,13 +827,13 @@ class K8sAutoscalerEnv(Env):
         )
         if critical_threshold_check:
             if cpu_optimal and memory_optimal:
-                score += 25
+                score += 80
             elif cpu_optimal or memory_optimal:
-                score += 12
+                score += 40
 
             if cpu_usage > 0 and memory_usage > 0:
                 resource_balance = 1 - abs(cpu_usage - memory_usage) / 100
-                balance_bonus = resource_balance * 3
+                balance_bonus = resource_balance * 15
                 score += balance_bonus
 
         return score
@@ -763,7 +877,7 @@ class K8sAutoscalerEnv(Env):
             and cpu_usage > self.MIN_EFFICIENT_CPU
             and memory_usage > self.MIN_EFFICIENT_MEMORY
         ):
-            score += 5
+            score += 15
 
         return score
 
@@ -774,15 +888,15 @@ class K8sAutoscalerEnv(Env):
         penalty = 0
 
         if mapped_action < 0 and ready_replicas <= self.min_replicas:
-            penalty += 200
+            penalty += 20
             logging.error(
                 f"CRITICAL PENALTY: Trying to scale below minimum replicas "
-                f"(current: {ready_replicas}, min: {self.min_replicas}) = -200"
+                f"(current: {ready_replicas}, min: {self.min_replicas}) = -20"
             )
 
         if mapped_action < 0 and abs(mapped_action) > ready_replicas:
             overshoot_penalty = abs(mapped_action) - ready_replicas
-            penalty += overshoot_penalty * 50
+            penalty += overshoot_penalty * 5
             logging.error(
                 f"OVERSHOOT PENALTY: Trying to scale down by {abs(mapped_action)} "
                 f"when only {ready_replicas} replicas exist = -{overshoot_penalty * 50}"
@@ -793,10 +907,10 @@ class K8sAutoscalerEnv(Env):
                 cpu_usage > self.HIGH_RESOURCE_THRESHOLD
                 or memory_usage > self.HIGH_RESOURCE_THRESHOLD
             ):
-                penalty += 300
+                penalty += 30
                 logging.error(
                     f"CRITICAL: Scaling down at minimum replicas with high usage "
-                    f"(CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%) = -300"
+                    f"(CPU={cpu_usage:.1f}%, MEM={memory_usage:.1f}%) = -30"
                 )
 
             critical_zone = (
@@ -809,19 +923,19 @@ class K8sAutoscalerEnv(Env):
             )
 
             if critical_zone:
-                penalty += abs(mapped_action) * 20
+                penalty += abs(mapped_action) * 5
                 logging.warning(
                     f"SEVERE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - CRITICAL ZONE"
                 )
             elif warning_zone:
-                penalty += abs(mapped_action) * 10
+                penalty += abs(mapped_action) * 3
                 logging.warning(
                     f"HIGH INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - WARNING ZONE"
                 )
             elif cpu_usage > self.target_cpu[1] or memory_usage > self.target_memory[1]:
-                penalty += abs(mapped_action) * 5
+                penalty += abs(mapped_action) * 2
                 logging.warning(
                     f"MODERATE INAPPROPRIATE SCALE DOWN: CPU={cpu_usage:.1f}%, "
                     f"MEM={memory_usage:.1f}% - ABOVE TARGET"
@@ -844,10 +958,10 @@ class K8sAutoscalerEnv(Env):
             )
 
         if abs(mapped_action) > self.LARGE_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 2.0
+            penalty += abs(mapped_action) * 0.5
             logging.warning(f"LARGE ACTION PENALTY: {abs(mapped_action)} replicas")
         elif abs(mapped_action) > self.MEDIUM_ACTION_THRESHOLD:
-            penalty += abs(mapped_action) * 1.0
+            penalty += abs(mapped_action) * 0.25
 
         return penalty
 
@@ -858,21 +972,21 @@ class K8sAutoscalerEnv(Env):
         self.action_history.append(mapped_action)
 
         if mapped_action == 0:
-            bonus += 5
+            bonus += 25
         elif 0 < abs(mapped_action) <= self.SMALL_ACTION_THRESHOLD:
-            bonus += 3
+            bonus += 15
         elif (
             self.SMALL_ACTION_THRESHOLD
             < abs(mapped_action)
             <= self.MEDIUM_ACTION_THRESHOLD
         ):
-            bonus += 1
+            bonus += 8
 
         oscillation_penalty = self._detect_oscillation()
         bonus -= oscillation_penalty
 
         if self._is_in_good_state() and mapped_action == 0:
-            bonus += 10
+            bonus += 30
 
         return bonus
 
@@ -916,13 +1030,17 @@ class K8sAutoscalerEnv(Env):
     def _is_impossible_action(self, mapped_action, ready_replicas):
         """Check if the action is impossible given current state"""
 
-        if mapped_action < 0 and ready_replicas <= self.min_replicas:
-            return True
+        if mapped_action < 0:
+            new_replicas = ready_replicas + mapped_action
+            if new_replicas < self.min_replicas:
+                return True
 
-        if mapped_action < 0 and abs(mapped_action) > ready_replicas:
-            return True
+        if mapped_action > 0:
+            new_replicas = ready_replicas + mapped_action
+            if new_replicas > self.max_replicas:
+                return True
 
-        return mapped_action > 0 and ready_replicas + mapped_action > self.max_replicas
+        return False
 
     def reset(
         self,
@@ -941,17 +1059,24 @@ class K8sAutoscalerEnv(Env):
         self.action_history.clear()
         self.last_scale_time = time.time()
 
-        self._scale_deployment()
-        _, _, ready_replicas = self._wait_for_pods_ready()
-        cpu_usage, memory_usage, replica = self.get_metrics(replicas=ready_replicas)
+        (
+            cpu_usage,
+            memory_usage,
+            replica,
+            _,
+            unschedulable_replicas,
+            not_fetchable_replicas,
+            metrics_reliability,
+            _,
+        ) = self._handle_scaling_with_fallback()
 
-        unschedulable_replicas = 0
         observation = self._get_observation(cpu_usage, memory_usage)
 
         info = {
             "current_replicas": self.replica_state,
             "actual_replicas": replica,
             "action": 0,
+            "raw_action": -1,
             "state": self.replica_state,
             "iteration": self.iteration,
             "cpu_usage": cpu_usage,
@@ -959,6 +1084,8 @@ class K8sAutoscalerEnv(Env):
             "target_cpu": self.target_cpu,
             "target_memory": self.target_memory,
             "unschedulable_replicas": unschedulable_replicas,
+            "not_fetchable_replicas": not_fetchable_replicas,
+            "metrics_reliability": metrics_reliability,
             "cpu_target_distance": observation[2],
             "memory_target_distance": observation[3],
             "replica_trend": observation[4],
