@@ -21,11 +21,11 @@ spec:
         - name: nginx
           image: nginx:1.16
           ports:
-            - containerPort: 8080
+            - containerPort: 80
           resources:
             requests:
               memory: "64Mi"
-              cpu: "250m"
+              cpu: "50m"
             limits:
               memory: "128Mi"
-              cpu: "500m"
+              cpu: "200m"
