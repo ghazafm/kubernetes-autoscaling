@@ -2,8 +2,9 @@ import logging
 import time
 
 import numpy as np
-from helper import parse_cpu_value, parse_memory_value
 from kubernetes.client.api import CoreV1Api, CustomObjectsApi
+
+from .helper import parse_cpu_value, parse_memory_value
 
 
 def fetch_metrics(api, namespace):
@@ -154,4 +155,4 @@ def get_metrics(
 
 
 def get_response_time():
-    pass
+    return np.random.randint(50, 300)

@@ -13,3 +13,4 @@ lab/training/*
 **/training/*
 *.log
 *.json
+*.npz
