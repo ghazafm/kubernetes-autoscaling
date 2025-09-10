@@ -36,4 +36,4 @@ def hello():
 
 if __name__ == "__main__":
     start_http_server(8000)  # expose metrics on :8000
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000)  # noqa: S104

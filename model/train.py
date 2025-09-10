@@ -1,11 +1,62 @@
-import atexit
-import signal
-
 import numpy as np
 from agent import QLearningAgent
-from environment import KubernetesEnv, setup_logger
+from environment import (
+    KubernetesEnv,
+    log_verbose_details,
+    setup_interruption_handlers,
+    setup_logger,
+)
 
 logger = setup_logger("kubernetes_agent", log_level="INFO", log_to_file=True)
+
+
+def _run_training_episode(
+    env,
+    agent,
+    episode,
+    episodes,
+    stop_requested,
+    current_episode,
+    current_iteration,
+    checkpoint_dir,
+    verbose,
+):
+    """Run a single training episode"""
+    current_episode[0] = episode + 1
+    logger.info(f"\nEpisode {current_episode[0]}/{episodes}")
+    observation = env.reset()
+    total_reward = 0
+
+    while True:
+        action = agent.get_action(observation)
+        next_observation, reward, terminated, info = env.step(action)
+        agent.update_q_table(observation, action, reward, next_observation)
+
+        total_reward += reward
+        observation = next_observation
+
+        logger.info(
+            f"Action: {action}, Reward: {reward}, Total Reward: {total_reward} "
+            f"| Iteration: {info['iteration']}"
+        )
+
+        log_verbose_details(observation, agent, verbose)
+
+        if stop_requested["flag"]:
+            path = agent.save_checkpoint(
+                checkpoint_dir,
+                episode=current_episode[0],
+                iteration=current_iteration[0],
+                prefix="interrupt",
+            )
+            logger.warning(f"💾 Checkpoint saved due to Ctrl+C: {path}")
+            return True, total_reward  # signal to stop training
+
+        if terminated:
+            agent.epsilon = max(agent.epsilon_min, agent.epsilon * agent.epsilon_decay)
+            break
+
+    return False, total_reward
 
 
 def train_agent(
@@ -49,131 +100,57 @@ def train_agent(
         epsilon_decay=0.95,
     )
 
-    current_episode = 0
-    current_iteration = 0
+    current_episode = [0]
+    current_iteration = [0]
 
-    # atexit: simpan akhir kalau program berhenti normal
-    def _final_save(checkpoint_dir: str):
-        try:
-            agent.save_checkpoint(
-                checkpoint_dir,
-                episode=current_episode,
-                iteration=current_iteration,
-                prefix="final",
-            )
-            logger.info("✅ Final checkpoint saved on exit.")
-        except Exception as e:
-            logger.exception(f"Failed to save final checkpoint: {e}")
-
-    atexit.register(_final_save, checkpoint_dir=checkpoint_dir)
-
-    # (opsional) handler SIGINT: tandai stop & biarkan loop menyelesaikan step
-    stop_requested = {"flag": False}
-
-    def _handle_sigint(signum, frame):
-        stop_requested["flag"] = True
-        logger.warning(
-            "⚠️  Ctrl+C detected. Will checkpoint and stop at next safe point..."
-        )
-
-    if save_on_interrupt:
-        signal.signal(signal.SIGINT, _handle_sigint)
+    stop_requested = setup_interruption_handlers(
+        agent, current_episode, current_iteration, checkpoint_dir, save_on_interrupt
+    )
 
     logger.info(f"Starting training for {episodes} episodes...")
 
     try:
         for episode in range(episodes):
-            current_episode = episode + 1
-            logger.info(f"\nEpisode {current_episode}/{episodes}")
-            observation = env.reset()
-            total_reward = 0
+            should_stop, total_reward = _run_training_episode(
+                env,
+                agent,
+                episode,
+                episodes,
+                stop_requested,
+                current_episode,
+                current_iteration,
+                checkpoint_dir,
+                verbose,
+            )
 
-            while True:
-                action = agent.get_action(observation)
-                next_observation, reward, terminated, info = env.step(action)
-
-                agent.update_q_table(observation, action, reward, next_observation)
-
-                total_reward += reward
-                observation = next_observation
-
-                logger.info(
-                    f"Action: {action}, Reward: {reward}, Total Reward: {total_reward} "
-                    f"| Iteration: {info['iteration']}"
-                )
-                if verbose:
-                    # Add observation details
-                    logger.info("  🔍 Observation:")
-                    logger.info(f"     CPU: {observation.get('cpu_usage', 0):.1f}%")
-                    logger.info(
-                        f"     Memory: {observation.get('memory_usage', 0):.1f}%"
-                    )
-                    logger.info(
-                        f"     Response Time: {observation.get('response_time', 0):.1f}"
-                        "ms"
-                    )
-                    logger.info(
-                        f"     Last Action: {observation.get('last_action', 'N/A')}"
-                    )
-
-                    # State key for debugging
-                    state_key = agent.get_state_key(observation)
-                    logger.info(f"  🗝️  State Key: {state_key}")
-
-                    # Q-values for current state
-                    if state_key in agent.q_table:
-                        q_values = agent.q_table[state_key]
-                        max_q = np.max(q_values)
-                        best_action = np.argmax(q_values)
-                        logger.info(
-                            f"  🧠 Q-Values: Max={max_q:.3f}, Best Action={best_action}"
-                        )
-
-                    logger.info("----------------------------------------")
-
-                if stop_requested["flag"]:
-                    path = agent.save_checkpoint(
-                        checkpoint_dir,
-                        episode=current_episode,
-                        iteration=current_iteration,
-                        prefix="interrupt",
-                    )
-                    logger.warning(f"💾 Checkpoint saved due to Ctrl+C: {path}")
-                    return agent, env  # stop training segera
-
-                if terminated:
-                    # decay epsilon di akhir episode
-                    agent.epsilon = max(
-                        agent.epsilon_min, agent.epsilon * agent.epsilon_decay
-                    )
-                    break
+            if should_stop:
+                return agent, env
 
             logger.info(
                 f"Episode {episode + 1} completed. Total reward: {total_reward}"
             )
-            if checkpoint_interval and (current_episode % checkpoint_interval == 0):
+
+            if checkpoint_interval and (current_episode[0] % checkpoint_interval == 0):
                 path = agent.save_checkpoint(
-                    checkpoint_dir, episode=current_episode, iteration=current_iteration
+                    checkpoint_dir,
+                    episode=current_episode[0],
+                    iteration=current_iteration[0],
                 )
                 logger.info(f"💾 Checkpoint saved: {path}")
 
     except KeyboardInterrupt:
-        # fallback kalau SIGINT tidak tertangkap di loop
         path = agent.save_checkpoint(
             checkpoint_dir,
-            episode=current_episode,
-            iteration=current_iteration,
+            episode=current_episode[0],
+            iteration=current_iteration[0],
             prefix="interrupt",
         )
         logger.warning(f"💾 Checkpoint saved due to KeyboardInterrupt: {path}")
-        # (opsional) re-raise jika ingin exit code 130
-        # raise
     except Exception:
-        # Simpan checkpoint kalau terjadi error lain
         path = agent.save_checkpoint(
             checkpoint_dir,
-            episode=current_episode,
-            iteration=current_iteration,
+            episode=current_episode[0],
+            iteration=current_iteration[0],
             prefix="error",
         )
         logger.exception(f"Error during training. Checkpoint saved: {path}")
@@ -181,7 +158,6 @@ def train_agent(
     finally:
         logger.info("Training completed!")
 
-    logger.info("Training completed!")
     return agent, env
 
 

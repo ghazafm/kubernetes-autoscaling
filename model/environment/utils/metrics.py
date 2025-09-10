@@ -2,6 +2,7 @@ import logging
 import time
 
 import numpy as np
+
 from kubernetes.client.api import CoreV1Api, CustomObjectsApi
 
 from .helper import parse_cpu_value, parse_memory_value

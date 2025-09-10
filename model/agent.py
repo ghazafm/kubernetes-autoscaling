@@ -166,7 +166,7 @@ class QLearningAgent:
         return f"{base}.npz"
 
 
-# Q(S,A)←Q(S,A)+α(R+γQ(S′,A′)−Q(S,A))
+# Q(S,A)←Q(S,A)+α(R+γQ(S′,A′)−Q(S,A))  # noqa: RUF003
 
 """
 # Q(S,A) [Reward sebelumnya yang sudah tercatat di Q table]
@@ -180,4 +180,4 @@ class QLearningAgent:
 # (S`,A`) [State dan action pada step berikutnya dari state(observation) yang sekarang]
 
 # -Q(S,A) [Untuk mengurangi pengaruh reward sebelumnya yang sudah tercatat di Q table] lebih stabil
-"""
+"""  # noqa: E501
