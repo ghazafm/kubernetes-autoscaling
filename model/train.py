@@ -109,7 +109,8 @@ def train_agent(
                         f"     Memory: {observation.get('memory_usage', 0):.1f}%"
                     )
                     logger.info(
-                        f"     Response Time: {observation.get('response_time', 0):.1f}ms"
+                        f"     Response Time: {observation.get('response_time', 0):.1f}"
+                        "ms"
                     )
                     logger.info(
                         f"     Last Action: {observation.get('last_action', 'N/A')}"
@@ -187,7 +188,7 @@ def train_agent(
 if __name__ == "__main__":
     trained_agent, environment = train_agent(
         min_replicas=1,
-        max_replicas=20,
+        max_replicas=15,
         episodes=10,
         iteration=100,
         namespace="default",

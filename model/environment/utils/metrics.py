@@ -97,6 +97,7 @@ def get_metrics(
     timeout: int,
     namespace: str,
     deployment_name: str,
+    wait_time: int,
     api: CustomObjectsApi,
     core: CoreV1Api,
 ) -> tuple[float, float, int]:
@@ -104,12 +105,11 @@ def get_metrics(
     Returns (cpu_usage_mean, memory_usage_mean, replica_count)
     cpu in %, memory in %, averaged over matched pods.
     """
-    counter = 0
-    cpu_usage = []
-    memory_usage = []
+    if wait_time > 0:
+        time.sleep(wait_time)
 
-    while counter < timeout:
-        counter += 1
+    start = time.time()
+    while time.time() - start < timeout:
         metric_data = fetch_metrics(api, namespace)
         if not metric_data:
             time.sleep(1)
@@ -126,7 +126,9 @@ def get_metrics(
             time.sleep(1)
             continue
 
+        cpu_vals, mem_vals = [], []
         collected = 0
+
         for item in target_metric_items:
             pod_name = item["metadata"]["name"]
             pod_obj = pod_spec_by_name.get(pod_name)
@@ -135,23 +137,20 @@ def get_metrics(
                 continue
 
             cpu_pct, mem_pct = calculate_usage(item, pod_obj)
-            cpu_usage.append(cpu_pct)
-            memory_usage.append(mem_pct)
+            cpu_vals.append(cpu_pct)
+            mem_vals.append(mem_pct)
             collected += 1
             if collected >= replicas:
                 break
 
         if collected >= replicas:
-            break
+            cpu_mean = float(np.nanmean(cpu_vals)) if cpu_vals else 0.0
+            mem_mean = float(np.nanmean(mem_vals)) if mem_vals else 0.0
+            return cpu_mean, mem_mean, collected
 
         time.sleep(1)
 
-    cpu_vals = np.array(cpu_usage, dtype=float)
-    mem_vals = np.array(memory_usage, dtype=float)
-    cpu_mean = float(np.nanmean(cpu_vals)) if np.any(~np.isnan(cpu_vals)) else 0.0
-    mem_mean = float(np.nanmean(mem_vals)) if np.any(~np.isnan(mem_vals)) else 0.0
-
-    return cpu_mean, mem_mean, len(cpu_usage)
+    return 0.0, 0.0, 0
 
 
 def get_response_time():
