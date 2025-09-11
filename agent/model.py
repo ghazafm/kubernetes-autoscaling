@@ -11,11 +11,11 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class QLearningAgent:
     def __init__(
         self,
-        learning_rate=0.1,
-        discount_factor=0.95,
-        epsilon=0.1,
-        epsilon_decay=0.0,
-        epsilon_min=0.01,
+        learning_rate: float = 0.1,
+        discount_factor: float = 0.95,
+        epsilon: float = 0.1,
+        epsilon_decay: float = 0.0,
+        epsilon_min: float = 0.01,
     ):
         self.n_actions = 101  # Action dari 0-100 persentase
         self.learning_rate = learning_rate
@@ -25,7 +25,7 @@ class QLearningAgent:
         self.epsilon_decay = epsilon_decay
         self.q_table = {}
 
-    def get_state_key(self, observation):
+    def get_state_key(self, observation: dict) -> tuple[int, int, int, int]:
         """Convert observation to a hashable state key"""
         # cpu = int(observation["cpu_usage"] // 10)
         # memory = int(observation["memory_usage"] // 10)
@@ -37,7 +37,7 @@ class QLearningAgent:
 
         return (cpu, memory, response_time, action)
 
-    def get_action(self, observation):
+    def get_action(self, observation: dict) -> int:
         """Choose action using epsilon-greedy strategy"""
         state_key = self.get_state_key(observation)
 
@@ -50,7 +50,9 @@ class QLearningAgent:
             )  # Perlu adanya random untuk mencoba action lain
         return np.argmax(self.q_table[state_key])
 
-    def update_q_table(self, observation, action, reward, next_observation):
+    def update_q_table(
+        self, observation: dict, action: int, reward: float, next_observation: dict
+    ):
         """Update Q-table using Q-learning algorithm"""
         state_key = self.get_state_key(observation)
         next_state_key = self.get_state_key(next_observation)
@@ -147,7 +149,7 @@ class QLearningAgent:
         episode: int | None = None,
         iteration: int | None = None,
         prefix: str = "qlearning",
-    ):
+    ) -> str:
         """
         Simpan checkpoint dengan nama berisi episode/iteration & timestamp.
         Menggunakan save_model() yang sudah ada.

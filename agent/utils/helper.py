@@ -1,11 +1,12 @@
 import atexit
 import logging
 import signal
+from typing import Any
 
 import numpy as np
 
 
-def parse_cpu_value(cpu_str):
+def parse_cpu_value(cpu_str: str) -> float:
     """Parse CPU value from kubernetes format to cores (float)"""
     try:
         if cpu_str.endswith("m"):
@@ -20,7 +21,7 @@ def parse_cpu_value(cpu_str):
         return 0.0
 
 
-def parse_memory_value(memory_str):
+def parse_memory_value(memory_str: str) -> float:
     """Parse memory value from kubernetes format to MB (float)"""
     try:
         if memory_str.endswith("Ki"):
@@ -38,8 +39,13 @@ def parse_memory_value(memory_str):
 
 
 def setup_interruption_handlers(
-    agent, current_episode, current_iteration, checkpoint_dir, save_on_interrupt, logger
-):
+    agent: Any,
+    current_episode: list[int],
+    current_iteration: list[int],
+    checkpoint_dir: str,
+    save_on_interrupt: bool,
+    logger: Any,
+) -> dict[str, Any]:
     """Setup signal handlers and atexit for graceful shutdown"""
 
     def _final_save(checkpoint_dir: str):

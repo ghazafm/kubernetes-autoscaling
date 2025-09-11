@@ -6,7 +6,7 @@ from kubernetes.client.api import CoreV1Api
 
 def wait_for_pods_ready(
     cluster: CoreV1Api, deployment_name: str, namespace: str, timeout: int
-):
+) -> tuple[bool, int, int]:
     """Wait for pods to be ready after scaling operation."""
     start_time = time.time()
     desired_replicas = 0

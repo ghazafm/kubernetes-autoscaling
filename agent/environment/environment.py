@@ -1,9 +1,10 @@
 from logging import Logger
 from typing import Optional
 
-from kubernetes import client, config
+from database.influxdb import InfluxDB
+from utils import get_metrics, get_response_time, wait_for_pods_ready
 
-from .utils import get_metrics, get_response_time, wait_for_pods_ready
+from kubernetes import client, config
 
 
 class KubernetesEnv:
@@ -18,9 +19,11 @@ class KubernetesEnv:
         min_memory: float = 20,
         max_cpu: float = 90,
         max_memory: float = 90,
-        timeout: int = 60,
+        timeout: int = 120,
+        wait_time: int = 30,
         verbose: bool = False,
         logger: Optional[Logger] = None,
+        influxdb: Optional[InfluxDB] = None,
     ):
         self.logger = logger
         config.load_kube_config()
@@ -40,6 +43,9 @@ class KubernetesEnv:
         self.max_memory = max_memory
         self.verbose = verbose
         self.timeout = timeout
+        self.wait_time = wait_time
+        self.last_action = 0
+        self.influxdb = influxdb
 
         self.action_space = list(range(101))
 
@@ -52,6 +58,9 @@ class KubernetesEnv:
 
     def scale(self):
         http_timeout = 30
+        self.logger.info(
+            f"Scaling to {self.replica_state} replicas | action {self.last_action}%"
+        )
         self.cluster.patch_namespaced_deployment_scale(
             name=self.deployment_name,
             body=client.V1Scale(
@@ -72,6 +81,7 @@ class KubernetesEnv:
         self.cpu_usage, self.memory_usage, self.replica = get_metrics(
             replicas=ready_replicas,
             timeout=self.timeout,
+            wait_time=self.wait_time,
             namespace=self.namespace,
             deployment_name=self.deployment_name,
             api=self.api,
@@ -85,7 +95,7 @@ class KubernetesEnv:
                 f"Pods are not ready, {ready_replicas}/{desired_replicas} ready"
             )
 
-    def get_observation(self):
+    def get_observation(self) -> dict[str, float]:
         return {
             "cpu_usage": self.cpu_usage,
             "memory_usage": self.memory_usage,
@@ -93,7 +103,7 @@ class KubernetesEnv:
             "last_action": self.last_action,
         }
 
-    def step(self, action: int):
+    def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
         self.last_action = action
         ratio = action / 100.0
         self.replica_state = round(self.min_replicas + ratio * self.range_replicas)
@@ -122,7 +132,7 @@ class KubernetesEnv:
         }
         return observation, reward, terminated, info
 
-    def calculate_reward(self):
+    def calculate_reward(self) -> float:
         SLA = 200.0  # ms
 
         # Penalti latency hanya jika melebihi SLA (0..∞), dinormalisasi ke ~0..1
@@ -146,7 +156,7 @@ class KubernetesEnv:
         # Clamp agar stabil
         return float(max(min(reward, 1.0), -1.0))
 
-    def reset(self):
+    def reset(self) -> dict[str, float]:
         self.iteration = self.initial_iteration
         self.replica_state = self.min_replicas
         self.scale_and_get_metrics()
