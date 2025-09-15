@@ -14,3 +14,5 @@ lab/training/*
 *.log
 *.json
 *.npz
+
+.env
