@@ -3,6 +3,7 @@ import time
 
 import numpy as np
 from kubernetes.client.api import CoreV1Api, CustomObjectsApi
+from prometheus_api_client import PrometheusApiClientException, PrometheusConnect
 
 from .helper import parse_cpu_value, parse_memory_value
 
@@ -153,5 +154,56 @@ def get_metrics(
     return 0.0, 0.0, 0
 
 
-def get_response_time():
-    return np.random.randint(50, 300)
+def get_response_time(
+    prometheus: PrometheusConnect,
+    app: str,
+    namespace: str = "default",
+    endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
+    interval: int = 15,
+    quantile: float = 0.90,
+) -> float:
+    result = []
+    for endpoint, method in endpoints_method:
+        q = f"""
+        1000 * histogram_quantile(
+        {quantile},
+        sum by (le) (
+            rate(app_request_latency_seconds_bucket{{
+            job="{app}", namespace="{namespace}",
+            exported_endpoint="{endpoint}", method="{method}"
+            }}[{interval}s])
+        )
+        """
+        try:
+            prometheus.check_prometheus_connection()
+        except Exception as e:
+            logging.warning(f"Prometheus connectivity issue: {e}")
+            return 0.0
+        try:
+            response = prometheus.custom_query(q)
+            if response:
+                result.append(response)
+        except PrometheusApiClientException as e:
+            if "404 page not found" in str(e):
+                logging.warning(
+                    f"Prometheus custom query returned 404 for app={app}, "
+                    f"namespace={namespace}, endpoint={endpoint}, "
+                    f"method={method}. Error: {e}"
+                )
+                result.append(0.0)
+            else:
+                logging.error(
+                    f"Prometheus custom query failed for app={app}, "
+                    f"namespace={namespace}, endpoint={endpoint}, "
+                    f"method={method}. Error: {e}"
+                )
+                result.append(0.0)
+        except Exception as e:
+            logging.error(
+                f"Prometheus custom query failed for app={app}, "
+                f"namespace={namespace}, endpoint={endpoint}, "
+                f"method={method}. Error: {e}"
+            )
+            result.append(0.0)
+
+    return float(np.mean(result)) if result else 0.0

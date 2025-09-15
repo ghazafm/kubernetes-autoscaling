@@ -1,18 +1,22 @@
+import logging
+import os
 import time
 
 import numpy as np
 from database import InfluxDB
+from dotenv import load_dotenv
 from environment import (
     KubernetesEnv,
 )
 from model import QLearningAgent
 from utils import (
     log_verbose_details,
+    normalize_endpoints,
     setup_interruption_handlers,
     setup_logger,
 )
 
-logger = setup_logger("kubernetes_agent", log_level="INFO", log_to_file=True)
+load_dotenv()
 
 
 def _run_training_episode(
@@ -25,6 +29,7 @@ def _run_training_episode(
     current_iteration: list[int],
     checkpoint_dir: str,
     verbose: bool = False,
+    logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
 ):
     """Run a single training episode"""
     current_episode[0] = episode + 1
@@ -66,7 +71,7 @@ def _run_training_episode(
     return False, total_reward
 
 
-def train_agent(
+def train_agent(  # noqa: PLR0913
     min_replicas: int = 1,
     max_replicas: int = 10,
     iteration: int = 50,
@@ -84,8 +89,19 @@ def train_agent(
     save_on_interrupt: bool = True,
     checkpoint_interval: int = 5,
     influxdb: InfluxDB = None,
+    prometheus_url: str = "http://localhost:1234/prom",
+    metrics_endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
+    metrics_interval: int = 15,
+    metrics_quantile: float = 0.90,
+    learning_rate: float = 0.1,
+    discount_factor: float = 0.9,
+    epsilon: float = 1.0,
+    epsilon_min: float = 0.1,
+    epsilon_decay: float = 0.95,
+    logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
 ):
     """Train the Q-learning agent on the Kubernetes environment"""
+    metrics_endpoints_method = normalize_endpoints(metrics_endpoints_method)
     env = KubernetesEnv(
         min_replicas=min_replicas,
         max_replicas=max_replicas,
@@ -101,14 +117,18 @@ def train_agent(
         verbose=verbose,
         logger=logger,
         influxdb=influxdb,
+        prometheus_url=prometheus_url,
+        metrics_endpoints_method=metrics_endpoints_method,
+        metrics_interval=metrics_interval,  # for response time
+        metrics_quantile=metrics_quantile,  # for response time
     )
 
     agent = QLearningAgent(
-        learning_rate=0.1,
-        discount_factor=0.9,
-        epsilon=1.0,
-        epsilon_min=0.1,
-        epsilon_decay=0.95,
+        learning_rate=learning_rate,
+        discount_factor=discount_factor,
+        epsilon=epsilon,
+        epsilon_min=epsilon_min,
+        epsilon_decay=epsilon_decay,
     )
 
     current_episode = [0]
@@ -178,6 +198,13 @@ def train_agent(
 
 
 if __name__ == "__main__":
+    logger = setup_logger("kubernetes_agent", log_level="INFO", log_to_file=True)
+    Influxdb = InfluxDB(
+        url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
+        token=os.getenv("INFLUXDB_TOKEN", "my-token"),
+        org=os.getenv("INFLUXDB_ORG", "my-org"),
+        bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
+    )
     trained_agent, environment = train_agent(
         min_replicas=1,
         max_replicas=15,
@@ -192,6 +219,22 @@ if __name__ == "__main__":
         timeout=120,
         wait_time=1,
         verbose=True,
+        checkpoint_dir="checkpoints",
+        checkpoint_interval=2,
+        save_on_interrupt=True,
+        influxdb=Influxdb,
+        prometheus_url=os.getenv("PROMETHEUS_URL", "http://localhost:1234/prom"),
+        metrics_endpoints_method=os.getenv(
+            "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
+        ),
+        metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
+        metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
+        learning_rate=float(os.getenv("LEARNING_RATE", "0.1")),
+        discount_factor=float(os.getenv("DISCOUNT_FACTOR", "0.9")),
+        epsilon=float(os.getenv("EPSILON", "1.0")),
+        epsilon_min=float(os.getenv("EPSILON_MIN", "0.1")),
+        epsilon_decay=float(os.getenv("EPSILON_DECAY", "0.95")),
+        logger=logger,
     )
 
     logger.info(f"\nQ-table size: {len(trained_agent.q_table)} states")

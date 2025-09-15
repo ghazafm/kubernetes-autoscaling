@@ -2,13 +2,14 @@ from logging import Logger
 from typing import Optional
 
 from database.influxdb import InfluxDB
+from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, get_response_time, wait_for_pods_ready
 
 from kubernetes import client, config
 
 
 class KubernetesEnv:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         min_replicas: int = 1,
         max_replicas: int = 50,
@@ -24,6 +25,13 @@ class KubernetesEnv:
         verbose: bool = False,
         logger: Optional[Logger] = None,
         influxdb: Optional[InfluxDB] = None,
+        prometheus_url: str = "http://localhost:1234/prom",
+        metrics_endpoints_method: list[tuple[str, str]] = (
+            ("/", "GET"),
+            ("/docs", "GET"),
+        ),
+        metrics_interval: int = 15,
+        metrics_quantile: float = 0.90,
     ):
         self.logger = logger
         config.load_kube_config()
@@ -46,6 +54,13 @@ class KubernetesEnv:
         self.wait_time = wait_time
         self.last_action = 0
         self.influxdb = influxdb
+        self.prometheus = PrometheusConnect(
+            url=prometheus_url,
+            disable_ssl=True,
+        )
+        self.metrics_endpoints_method = metrics_endpoints_method
+        self.metrics_interval = metrics_interval
+        self.metrics_quantile = metrics_quantile
 
         self.action_space = list(range(101))
 
@@ -88,7 +103,14 @@ class KubernetesEnv:
             core=self.core,
         )
 
-        self.response_time = get_response_time()
+        self.response_time = get_response_time(
+            prometheus=self.prometheus,
+            app=self.deployment_name,
+            namespace=self.namespace,
+            endpoints_method=self.metrics_endpoints_method,
+            interval=self.metrics_interval,
+            quantile=self.metrics_quantile,
+        )
 
         if not ready:
             self.logger.warning(

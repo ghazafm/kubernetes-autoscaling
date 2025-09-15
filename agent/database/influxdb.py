@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from typing import Optional
 
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -31,7 +32,11 @@ class InfluxDB:
             raise
 
     def write_point(
-        self, measurement, tags: dict, fields: dict, timestamp: datetime = None
+        self,
+        measurement,
+        tags: dict,
+        fields: dict,
+        timestamp: Optional[datetime] = None,
     ):
         """
         Write a single point into InfluxDB.
