@@ -32,8 +32,13 @@ class QLearningAgent:
         # response_time = int(observation["response_time"] // 100)
         cpu = int(observation["cpu_usage"])
         memory = int(observation["memory_usage"])
-        response_time = int(observation["response_time"])
         action = int(observation["last_action"])
+
+        response_time_raw = observation["response_time"]
+        if np.isnan(response_time_raw) or response_time_raw is None:
+            response_time = 0
+        else:
+            response_time = int(response_time_raw)
 
         return (cpu, memory, response_time, action)
 

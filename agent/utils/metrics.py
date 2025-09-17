@@ -163,16 +163,22 @@ def get_response_time(
     quantile: float = 0.90,
 ) -> float:
     result = []
+    time.sleep(10)
     for endpoint, method in endpoints_method:
         q = f"""
-        1000 * histogram_quantile(
-        {quantile},
-        sum by (le) (
-            rate(app_request_latency_seconds_bucket{{
-            job="{app}", namespace="{namespace}",
-            exported_endpoint="{endpoint}", method="{method}"
-            }}[{interval}s])
-        )
+            1000 *
+            histogram_quantile(
+            {quantile},
+            sum by (le) (
+                rate(app_request_latency_seconds_bucket{{
+                job="{app}",
+                namespace="{namespace}",
+                method="{method}",
+                exported_endpoint="{endpoint}"
+                }}[{interval}s])
+            )
+            )
+
         """
         try:
             prometheus.check_prometheus_connection()
@@ -182,6 +188,13 @@ def get_response_time(
         try:
             response = prometheus.custom_query(q)
             if response:
+                for res in response:
+                    if "value" in res and len(res["value"]) > 1:
+                        result.append(float(res["value"][1]))
+                    else:
+                        result.append(0.0)
+            else:
+                response = 0.0
                 result.append(response)
         except PrometheusApiClientException as e:
             if "404 page not found" in str(e):

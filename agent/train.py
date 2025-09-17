@@ -207,8 +207,8 @@ if __name__ == "__main__":
     )
     trained_agent, environment = train_agent(
         min_replicas=1,
-        max_replicas=15,
-        episodes=10,
+        max_replicas=12,
+        episodes=105,
         iteration=10,
         namespace="default",
         deployment_name="ecom-api",
