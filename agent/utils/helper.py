@@ -1,11 +1,11 @@
 import ast
-import atexit
 import json
 import logging
-import signal
-from typing import Any, Iterable, List, Tuple, Union
+from typing import Iterable, List, Tuple, Union
 
 import numpy as np
+import torch
+from rl import Q
 
 
 def parse_cpu_value(cpu_str: str) -> float:
@@ -40,45 +40,7 @@ def parse_memory_value(memory_str: str) -> float:
         return 0.0
 
 
-def setup_interruption_handlers(
-    agent: Any,
-    current_episode: list[int],
-    current_iteration: list[int],
-    checkpoint_dir: str,
-    save_on_interrupt: bool,
-    logger: Any,
-) -> dict[str, Any]:
-    """Setup signal handlers and atexit for graceful shutdown"""
-
-    def _final_save(checkpoint_dir: str):
-        try:
-            agent.save_checkpoint(
-                checkpoint_dir,
-                episode=current_episode[0],
-                iteration=current_iteration[0],
-                prefix="final",
-            )
-            logger.info("✅ Final checkpoint saved on exit.")
-        except Exception as e:
-            logger.exception(f"Failed to save final checkpoint: {e}")
-
-    atexit.register(_final_save, checkpoint_dir=checkpoint_dir)
-
-    stop_requested = {"flag": False}
-
-    def _handle_sigint(signum, frame):
-        stop_requested["flag"] = True
-        logger.warning(
-            "⚠️  Ctrl+C detected. Will checkpoint and stop at next safe point..."
-        )
-
-    if save_on_interrupt:
-        signal.signal(signal.SIGINT, _handle_sigint)
-
-    return stop_requested
-
-
-def log_verbose_details(observation, agent, verbose, logger):
+def log_verbose_details(observation, agent: Q, verbose, logger):
     """Log detailed observation and Q-value information if verbose mode is enabled"""
     if not verbose:
         return
@@ -92,11 +54,30 @@ def log_verbose_details(observation, agent, verbose, logger):
     state_key = agent.get_state_key(observation)
     logger.info(f"  🗝️  State Key: {state_key}")
 
-    if state_key in agent.q_table:
-        q_values = agent.q_table[state_key]
-        max_q = np.max(q_values)
-        best_action = np.argmax(q_values)
-        logger.info(f"  🧠 Q-Values: Max={max_q:.3f}, Best Action={best_action}")
+    if agent.__class__.__name__ == "DQN":
+        logger.info("  🧠 Mode: DQN (neural network)")
+        try:
+            with torch.no_grad():
+                state_tensor = torch.from_numpy(state_key).unsqueeze(0).to(agent.device)
+                q_values = agent.policy_net(state_tensor).squeeze(0)
+                max_q = torch.max(q_values).item()
+                best_action = (
+                    torch.argmax(q_values).item() + 1
+                )  # Convert to 1-100 range
+                logger.info(
+                    f"  🧠 Q-Values: Max={max_q:.3f}, Best Action={best_action}"
+                )
+        except Exception as e:
+            logger.info(f"  🧠 Could not compute Q-values: {e}")
+    # For Q-table mode, state_key is a tuple
+    elif state_key in agent.q_table:
+        if state_key in agent.q_table:
+            q_values = agent.q_table[state_key]
+            max_q = np.max(q_values)
+            best_action = np.argmax(q_values) + 1  # Convert to 1-100 range
+            logger.info(f"  🧠 Q-Values: Max={max_q:.3f}, Best Action={best_action}")
+        else:
+            logger.info("  🧠 State not in Q-table yet")
 
     logger.info("----------------------------------------")
 

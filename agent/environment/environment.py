@@ -62,13 +62,13 @@ class KubernetesEnv:
         self.metrics_interval = metrics_interval
         self.metrics_quantile = metrics_quantile
 
-        self.action_space = list(range(101))
+        self.action_space = list(range(100))
 
         self.observation_space = {
             "cpu_usage": (0, 100.0),
             "memory_usage": (0, 100.0),
             "response_time": (0, 1000.0),
-            "last_action": (1, 100),
+            "last_action": (1, 99),
         }
 
     def scale(self):
@@ -127,7 +127,9 @@ class KubernetesEnv:
 
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
         self.last_action = action
-        ratio = action / 100.0
+
+        percentage = action + 1  # Convert 0-99 to 1-100%
+        ratio = percentage / 100.0
         self.replica_state = round(self.min_replicas + ratio * self.range_replicas)
         self.replica_state = max(
             self.min_replicas, min(self.replica_state, self.max_replicas)
@@ -152,6 +154,14 @@ class KubernetesEnv:
             "response_time": self.response_time,
             "last_action": self.last_action,
         }
+        self.influxdb.write_point(
+            measurement="autoscaling_metrics",
+            tags={
+                "namespace": self.namespace,
+                "deployment": self.deployment_name,
+            },
+            fields={**info},
+        ) if self.influxdb else None
         return observation, reward, terminated, info
 
     def calculate_reward(self) -> float:
@@ -182,5 +192,5 @@ class KubernetesEnv:
         self.iteration = self.initial_iteration
         self.replica_state = self.min_replicas
         self.scale_and_get_metrics()
-        self.last_action = 1
+        self.last_action = 0
         return self.get_observation()

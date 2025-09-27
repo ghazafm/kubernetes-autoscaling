@@ -37,6 +37,8 @@ dependencies = [
     { name = "prometheus-api-client" },
     { name = "prometheus-client" },
     { name = "python-dotenv" },
+    { name = "torch" },
+    { name = "torchvision" },
 ]
 
 [package.metadata]
@@ -48,6 +50,8 @@ requires-dist = [
     { name = "prometheus-api-client", specifier = ">=0.6.0" },
     { name = "prometheus-client", specifier = ">=0.22.1" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "torch", specifier = ">=2.7.1" },
+    { name = "torchvision", specifier = ">=0.22.1" },
 ]
 
 [[package]]
