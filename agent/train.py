@@ -64,7 +64,7 @@ if __name__ == "__main__":
             epsilon_start=float(os.getenv("EPSILON_START", None)),
             epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
             epsilon_min=float(os.getenv("EPSILON_MIN", None)),
-            created_at=int(start_time),
+            created_at=start_time,
         )
     elif choose_algorithm == "DQN":
         algorithm = DQN(
@@ -78,7 +78,7 @@ if __name__ == "__main__":
             batch_size=int(os.getenv("BATCH_SIZE", None)),
             target_update_freq=int(os.getenv("TARGET_UPDATE_FREQ", None)),
             grad_clip_norm=float(os.getenv("GRAD_CLIP_NORM", None)),
-            created_at=int(start_time),
+            created_at=start_time,
         )
     else:
         raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
@@ -94,7 +94,7 @@ if __name__ == "__main__":
             "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
         ),
         note=note,
-        start_time=int(start_time),
+        start_time=start_time,
         logger=logger,
     )
 
@@ -110,7 +110,8 @@ if __name__ == "__main__":
     else:
         logger.info("\nDQN model trained (no Q-table to display)")
 
-    model_dir = Path(f"model/{note}_{start_time}/final")
+    model_type = "dqn" if trained_agent.agent_type.upper() == "DQN" else "qlearning"
+    model_dir = Path(f"model/{model_type}/{note}_{start_time}/final")
     model_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = int(time.time())
@@ -119,4 +120,4 @@ if __name__ == "__main__":
     else:
         model_file = model_dir / f"qlearning_{timestamp}.pkl"
 
-    trained_agent.save_model(str(model_file))
+    trained_agent.save_model(str(model_file), trained_agent.episodes_trained)

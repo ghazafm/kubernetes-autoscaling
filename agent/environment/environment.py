@@ -2,10 +2,9 @@ from logging import Logger
 from typing import Optional
 
 from database.influxdb import InfluxDB
+from kubernetes import client, config
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, get_response_time, wait_for_pods_ready
-
-from kubernetes import client, config
 
 
 class KubernetesEnv:
@@ -68,7 +67,7 @@ class KubernetesEnv:
             "cpu_usage": (0, 100.0),
             "memory_usage": (0, 100.0),
             "response_time": (0, 1000.0),
-            "last_action": (1, 99),
+            "last_action": (0, 99),  # Fixed: should be 0-99, not 1-99
         }
 
     def scale(self):

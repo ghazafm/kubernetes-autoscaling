@@ -27,6 +27,7 @@ class DQN(Q):
         batch_size: int = 64,
         target_update_freq: int = 200,
         grad_clip_norm: float = 10.0,
+        created_at: int = 0,
     ):
         super().__init__(
             learning_rate,
@@ -34,6 +35,7 @@ class DQN(Q):
             epsilon_start,
             epsilon_decay,
             epsilon_min,
+            created_at,
         )
 
         self.train_step = 0
@@ -146,7 +148,7 @@ class DQN(Q):
 
         return
 
-    def save_model(self, filepath: str):
+    def save_model(self, filepath: str, episode_count: int = 0):
         """Save DQN model and parameters to file"""
         try:
             model_data = {
@@ -166,7 +168,7 @@ class DQN(Q):
                 "target_update_freq": self.target_update_freq,
                 "grad_clip_norm": self.grad_clip_norm,
                 "created_at": self.created_at,
-                "episodes_trained": self.episodes_trained,
+                "episodes_trained": episode_count,
             }
 
             # Create directory if it doesn't exist

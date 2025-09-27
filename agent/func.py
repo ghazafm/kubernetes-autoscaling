@@ -87,11 +87,14 @@ def train_agent(
                 if hasattr(agent, "save_model"):
                     # Determine correct file extension
                     ext = ".pth" if agent.agent_type.upper() == "DQN" else ".pkl"
+                    model_type = (
+                        "dqn" if agent.agent_type.upper() == "DQN" else "qlearning"
+                    )
                     checkpoint_path = (
-                        f"model/{note}_{start_time}/checkpoints/"
+                        f"model/{model_type}/{note}_{start_time}/checkpoints/"
                         f"episode_{episode}_total_{total_reward_init}{ext}"
                     )
-                    agent.save_model(checkpoint_path)
+                    agent.save_model(checkpoint_path, episode + 1)
                     logger.info(
                         f"New best model saved with total reward: {total_reward_init}"
                     )

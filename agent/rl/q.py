@@ -18,7 +18,7 @@ class Q:
         epsilon_min: float = 0.01,
         created_at: int = 0,
     ):
-        self.n_actions = 100  # Action dari 0-100 persentase
+        self.n_actions = 100  # Action dari 0-99 (100 total actions)
         self.agent_type = "Q"
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
