@@ -16,14 +16,22 @@ class Q:
         epsilon_start: float = 0.1,
         epsilon_decay: float = 0.0,
         epsilon_min: float = 0.01,
+        created_at: int = 0,
     ):
         self.n_actions = 100  # Action dari 0-100 persentase
+        self.agent_type = "Q"
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
         self.epsilon = epsilon_start
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
+        self.created_at = created_at
+        self.episodes_trained = 0
         self.q_table = {}
+
+    def add_episode_count(self, count: int = 1):
+        """Increment the episode count"""
+        self.episodes_trained += count
 
     def get_state_key(self, observation: dict) -> tuple[int, int, int, int]:
         """Convert observation to a hashable state key"""
@@ -89,38 +97,50 @@ class Q:
     # -Q(S,A) [Untuk mengurangi pengaruh reward sebelumnya yang sudah tercatat di Q table] lebih stabil
     """  # noqa: E501
 
-    def save_model(self, filepath: str):
+    def save_model(self, filepath: str, episode_count: int = 0):
         """Save Q-table and parameters to file"""
-        model_data = {
-            "q_table": self.q_table,
-            "learning_rate": self.learning_rate,
-            "discount_factor": self.discount_factor,
-            "epsilon": self.epsilon,
-            "epsilon_min": self.epsilon_min,
-            "epsilon_decay": self.epsilon_decay,
-            "n_actions": self.n_actions,
-        }
-        # Create directory if it doesn't exist
-        Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-        with Path(filepath).open("wb") as f:
-            pickle.dump(model_data, f)
-        logging.info(f"Model saved to {filepath}")
+        try:
+            model_data = {
+                "q_table": self.q_table,
+                "learning_rate": self.learning_rate,
+                "discount_factor": self.discount_factor,
+                "epsilon": self.epsilon,
+                "epsilon_min": self.epsilon_min,
+                "epsilon_decay": self.epsilon_decay,
+                "n_actions": self.n_actions,
+                "created_at": self.created_at,
+                "episodes_trained": episode_count,
+            }
+            # Create directory if it doesn't exist
+            Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+            with Path(filepath).open("wb") as f:
+                pickle.dump(model_data, f)
+            logging.info(f"Model saved to {filepath}")
+        except Exception as e:
+            logging.error(f"Failed to save model to {filepath}: {e}")
+            raise
 
     def load_model(self, filepath: str):
         """Load Q-table and parameters from file"""
-        if not Path(filepath).exists():
-            raise FileNotFoundError(f"Model file not found: {filepath}")
+        try:
+            if not Path(filepath).exists():
+                raise FileNotFoundError(f"Model file not found: {filepath}")
 
-        with Path(filepath).open("rb") as f:
-            model_data = pickle.load(f)  # noqa: S301
+            with Path(filepath).open("rb") as f:
+                model_data = pickle.load(f)  # noqa: S301
 
-        self.q_table = model_data["q_table"]
-        self.learning_rate = model_data["learning_rate"]
-        self.discount_factor = model_data["discount_factor"]
-        self.epsilon = model_data["epsilon"]
-        self.epsilon_min = model_data["epsilon_min"]
-        self.epsilon_decay = model_data["epsilon_decay"]
-        self.n_actions = model_data["n_actions"]
+            self.q_table = model_data["q_table"]
+            self.learning_rate = model_data["learning_rate"]
+            self.discount_factor = model_data["discount_factor"]
+            self.epsilon = model_data["epsilon"]
+            self.epsilon_min = model_data["epsilon_min"]
+            self.epsilon_decay = model_data["epsilon_decay"]
+            self.n_actions = model_data["n_actions"]
+            self.created_at = model_data.get("created_at", None)
+            self.episodes_trained = model_data.get("episodes_trained", 0)
 
-        logging.info(f"Model loaded from {filepath}")
-        logging.info(f"Q-table size: {len(self.q_table)} states")
+            logging.info(f"Model loaded from {filepath}")
+            logging.info(f"Q-table size: {len(self.q_table)} states")
+        except Exception as e:
+            logging.error(f"Failed to load model from {filepath}: {e}")
+            raise

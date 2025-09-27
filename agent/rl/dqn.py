@@ -1,3 +1,6 @@
+import logging
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -35,6 +38,8 @@ class DQN(Q):
 
         self.train_step = 0
 
+        self.agent_type = "DQN"
+
         self.device = device
         self.batch_size = batch_size
         self.buffer_size = buffer_size
@@ -55,7 +60,7 @@ class DQN(Q):
         """Convert observation to a numpy array state for DQN"""
         cpu = observation["cpu_usage"] / 100.0  # Normalize to 0-1
         memory = observation["memory_usage"] / 100.0  # Normalize to 0-1
-        last_action = observation["last_action"] / 100.0  # Normalize to 0-1
+        last_action = observation["last_action"] / 99.0  # Normalize to 0-1
 
         response_time_raw = observation["response_time"]
         if np.isnan(response_time_raw) or response_time_raw is None:
@@ -140,3 +145,70 @@ class DQN(Q):
             self.target_net.load_state_dict(self.policy_net.state_dict())
 
         return
+
+    def save_model(self, filepath: str):
+        """Save DQN model and parameters to file"""
+        try:
+            model_data = {
+                "policy_net_state_dict": self.policy_net.state_dict(),
+                "target_net_state_dict": self.target_net.state_dict(),
+                "optimizer_state_dict": self.optimizer.state_dict(),
+                "learning_rate": self.learning_rate,
+                "discount_factor": self.discount_factor,
+                "epsilon": self.epsilon,
+                "epsilon_min": self.epsilon_min,
+                "epsilon_decay": self.epsilon_decay,
+                "n_actions": self.n_actions,
+                "train_step": self.train_step,
+                "device": self.device,
+                "batch_size": self.batch_size,
+                "buffer_size": self.buffer_size,
+                "target_update_freq": self.target_update_freq,
+                "grad_clip_norm": self.grad_clip_norm,
+                "created_at": self.created_at,
+                "episodes_trained": self.episodes_trained,
+            }
+
+            # Create directory if it doesn't exist
+            Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+
+            torch.save(model_data, filepath)
+            logging.info(f"DQN model saved to {filepath}")
+        except Exception as e:
+            logging.error(f"Failed to save DQN model to {filepath}: {e}")
+            raise
+
+    def load_model(self, filepath: str):
+        """Load DQN model and parameters from file"""
+        try:
+            if not Path(filepath).exists():
+                raise FileNotFoundError(f"Model file not found: {filepath}")
+
+            model_data = torch.load(filepath, map_location=self.device)
+
+            # Load network states
+            self.policy_net.load_state_dict(model_data["policy_net_state_dict"])
+            self.target_net.load_state_dict(model_data["target_net_state_dict"])
+            self.optimizer.load_state_dict(model_data["optimizer_state_dict"])
+
+            # Load hyperparameters
+            self.learning_rate = model_data["learning_rate"]
+            self.discount_factor = model_data["discount_factor"]
+            self.epsilon = model_data["epsilon"]
+            self.epsilon_min = model_data["epsilon_min"]
+            self.epsilon_decay = model_data["epsilon_decay"]
+            self.n_actions = model_data["n_actions"]
+            self.train_step = model_data["train_step"]
+            self.batch_size = model_data["batch_size"]
+            self.buffer_size = model_data["buffer_size"]
+            self.target_update_freq = model_data["target_update_freq"]
+            self.grad_clip_norm = model_data["grad_clip_norm"]
+            self.created_at = model_data["created_at"]
+            self.episodes_trained = model_data["episodes_trained"]
+
+            logging.info(f"DQN model loaded from {filepath}")
+            logging.info(f"Training step: {self.train_step}")
+            logging.info(f"Current epsilon: {self.epsilon:.4f}")
+        except Exception as e:
+            logging.error(f"Failed to load DQN model from {filepath}: {e}")
+            raise
