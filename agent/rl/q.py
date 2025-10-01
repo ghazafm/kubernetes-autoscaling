@@ -1,6 +1,7 @@
-import logging
 import pickle
+from logging import Logger
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import urllib3
@@ -17,6 +18,7 @@ class Q:
         epsilon_decay: float = 0.0,
         epsilon_min: float = 0.01,
         created_at: int = 0,
+        logger: Optional[Logger] = None,
     ):
         self.n_actions = 100  # Action dari 0-99 (100 total actions)
         self.agent_type = "Q"
@@ -28,6 +30,7 @@ class Q:
         self.created_at = created_at
         self.episodes_trained = 0
         self.q_table = {}
+        self.logger = logger or Logger(__name__)
 
     def add_episode_count(self, count: int = 1):
         """Increment the episode count"""
@@ -115,9 +118,9 @@ class Q:
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             with Path(filepath).open("wb") as f:
                 pickle.dump(model_data, f)
-            logging.info(f"Model saved to {filepath}")
+            self.logger.info(f"Model saved to {filepath}")
         except Exception as e:
-            logging.error(f"Failed to save model to {filepath}: {e}")
+            self.logger.error(f"Failed to save model to {filepath}: {e}")
             raise
 
     def load_model(self, filepath: str):
@@ -139,8 +142,8 @@ class Q:
             self.created_at = model_data.get("created_at", None)
             self.episodes_trained = model_data.get("episodes_trained", 0)
 
-            logging.info(f"Model loaded from {filepath}")
-            logging.info(f"Q-table size: {len(self.q_table)} states")
+            self.logger.info(f"Model loaded from {filepath}")
+            self.logger.info(f"Q-table size: {len(self.q_table)} states")
         except Exception as e:
-            logging.error(f"Failed to load model from {filepath}: {e}")
+            self.logger.error(f"Failed to load model from {filepath}: {e}")
             raise

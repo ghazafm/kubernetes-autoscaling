@@ -16,7 +16,7 @@ def _run_training_episode(
     episodes: int,
     verbose: bool = False,
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
-):
+) -> tuple[bool, float]:
     """Run a single training episode"""
     agent.add_episode_count()
     logger.info(f"\nEpisode {episode + 1}/{episodes}")
@@ -57,7 +57,7 @@ def train_agent(
     note: str = "default",
     start_time: int = int(time.time()),
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
-):
+) -> tuple[Q, KubernetesEnv]:
     """Train the Q-learning agent on the Kubernetes environment"""
 
     metrics_endpoints_method = normalize_endpoints(metrics_endpoints_method)

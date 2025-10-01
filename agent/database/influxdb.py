@@ -1,14 +1,13 @@
-import logging
 from datetime import datetime
+from logging import Logger
 from typing import Optional
 
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from utils import setup_logger
 
 
 class InfluxDB:
-    def __init__(self, url, token, org, bucket):
+    def __init__(self, url: str, token: str, org: str, bucket: str, logger: Logger):
         """
         Initialize connection to InfluxDB.
         Args
@@ -21,14 +20,14 @@ class InfluxDB:
         self.token = token
         self.org = org
         self.bucket = bucket
-        self.logger = setup_logger("influx", "INFO", True, "logs")
+        self.logger = logger
 
         try:
             self.client = InfluxDBClient(url=url, token=token, org=org)
             self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
-            logging.info("Connected to InfluxDB at %s", url)
+            self.logger.info("Connected to InfluxDB at %s", url)
         except Exception as e:
-            logging.error("Failed to connect to InfluxDB: %s", e)
+            self.logger.error("Failed to connect to InfluxDB: %s", e)
             raise
 
     def write_point(

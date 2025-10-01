@@ -19,8 +19,11 @@ load_dotenv()
 
 if __name__ == "__main__":
     start_time = int(time.time())
-    logger = setup_logger("kubernetes_agent", log_level="INFO", log_to_file=True)
+    logger = setup_logger(
+        "kubernetes_agent", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
+    )
     Influxdb = InfluxDB(
+        logger=logger,
         url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
         token=os.getenv("INFLUXDB_TOKEN", "my-token"),
         org=os.getenv("INFLUXDB_ORG", "my-org"),

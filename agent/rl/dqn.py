@@ -1,5 +1,6 @@
-import logging
+from logging import Logger
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -28,14 +29,16 @@ class DQN(Q):
         target_update_freq: int = 200,
         grad_clip_norm: float = 10.0,
         created_at: int = 0,
-    ):
+        logger: Optional[Logger] = None,
+    ) -> None:
         super().__init__(
-            learning_rate,
-            discount_factor,
-            epsilon_start,
-            epsilon_decay,
-            epsilon_min,
-            created_at,
+            learning_rate=learning_rate,
+            discount_factor=discount_factor,
+            epsilon_start=epsilon_start,
+            epsilon_decay=epsilon_decay,
+            epsilon_min=epsilon_min,
+            created_at=created_at,
+            logger=logger,
         )
 
         self.train_step = 0
@@ -69,7 +72,7 @@ class DQN(Q):
             response_time = 0.0
         else:
             response_time = min(
-                response_time_raw / 1000.0, 1.0
+                response_time_raw / 100.0, 1.0
             )  # Normalize and cap at 1.0
 
         return np.array([cpu, memory, response_time, last_action], dtype=np.float32)
@@ -88,7 +91,7 @@ class DQN(Q):
 
     def update_q_table(
         self, observation: dict, action: int, reward: float, next_observation: dict
-    ):
+    ) -> None:
         """Update Q-table using Q-learning algorithm and DQN if enabled"""
 
         state_key = self.get_state_key(observation)
@@ -148,7 +151,7 @@ class DQN(Q):
 
         return
 
-    def save_model(self, filepath: str, episode_count: int = 0):
+    def save_model(self, filepath: str, episode_count: int = 0) -> None:
         """Save DQN model and parameters to file"""
         try:
             model_data = {
@@ -175,12 +178,12 @@ class DQN(Q):
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 
             torch.save(model_data, filepath)
-            logging.info(f"DQN model saved to {filepath}")
+            self.logger.info(f"DQN model saved to {filepath}")
         except Exception as e:
-            logging.error(f"Failed to save DQN model to {filepath}: {e}")
+            self.logger.error(f"Failed to save DQN model to {filepath}: {e}")
             raise
 
-    def load_model(self, filepath: str):
+    def load_model(self, filepath: str) -> None:
         """Load DQN model and parameters from file"""
         try:
             if not Path(filepath).exists():
@@ -208,9 +211,9 @@ class DQN(Q):
             self.created_at = model_data["created_at"]
             self.episodes_trained = model_data["episodes_trained"]
 
-            logging.info(f"DQN model loaded from {filepath}")
-            logging.info(f"Training step: {self.train_step}")
-            logging.info(f"Current epsilon: {self.epsilon:.4f}")
+            self.logger.info(f"DQN model loaded from {filepath}")
+            self.logger.info(f"Training step: {self.train_step}")
+            self.logger.info(f"Current epsilon: {self.epsilon:.4f}")
         except Exception as e:
-            logging.error(f"Failed to load DQN model from {filepath}: {e}")
+            self.logger.error(f"Failed to load DQN model from {filepath}: {e}")
             raise

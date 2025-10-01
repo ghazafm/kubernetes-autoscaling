@@ -6,7 +6,10 @@ from pathlib import Path
 
 
 def setup_logger(
-    service_name, log_level="INFO", log_to_file=True, log_dir="logs"
+    service_name: str,
+    log_level: str = "INFO",
+    log_to_file: bool = True,
+    log_dir: str = "logs",
 ) -> Logger:
     """
     Configure a logger with console and optional file output.
@@ -28,6 +31,10 @@ def setup_logger(
     if logger.hasHandlers():
         logger.handlers.clear()
 
+    logging.getLogger("kubernetes.client.rest").setLevel(logging.WARNING)
+    logging.getLogger("kubernetes").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     console_handler = logging.StreamHandler()
@@ -35,11 +42,12 @@ def setup_logger(
     logger.addHandler(console_handler)
 
     if log_to_file:
-        if not Path(log_dir).exists():
-            Path(log_dir).mkdir()
+        now = datetime.now().strftime("%Y-%m-%d-%H-%M")
+        log_dir_time = log_dir + "/" + now
+        if not Path(log_dir_time).exists():
+            Path(log_dir_time).mkdir()
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        log_file = Path(log_dir) / f"{service_name}_{today}.log"
+        log_file = Path(log_dir_time) / f"{service_name}_{now}.log"
 
         file_handler = RotatingFileHandler(
             log_file, maxBytes=10 * 1024 * 1024, backupCount=5
