@@ -45,7 +45,7 @@ def setup_logger(
         now = datetime.now().strftime("%Y-%m-%d-%H-%M")
         log_dir_time = log_dir + "/" + now
         if not Path(log_dir_time).exists():
-            Path(log_dir_time).mkdir()
+            Path(log_dir_time).mkdir(parents=True, exist_ok=True)
 
         log_file = Path(log_dir_time) / f"{service_name}_{now}.log"
 
