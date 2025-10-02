@@ -57,11 +57,18 @@ class Q:
         if state_key not in self.q_table:
             self.q_table[state_key] = np.zeros(self.n_actions)
 
+        # Choose action based on epsilon-greedy
         if np.random.rand() < self.epsilon:
-            return np.random.randint(
-                0, self.n_actions
-            )  # Perlu adanya random untuk mencoba action lain
-        return np.argmax(self.q_table[state_key])
+            action = np.random.randint(0, self.n_actions)
+        else:
+            action = np.argmax(self.q_table[state_key])
+
+        # Decay epsilon after every action (outside the random trigger)
+        if self.epsilon > self.epsilon_min:
+            self.epsilon -= self.epsilon_decay
+            self.epsilon = max(self.epsilon, self.epsilon_min)
+
+        return action
 
     def update_q_table(
         self, observation: dict, action: int, reward: float, next_observation: dict
@@ -83,6 +90,8 @@ class Q:
             + self.discount_factor * best_next_action
             - self.q_table[state_key][action]
         )
+        if self.epsilon > self.epsilon_min:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
     # Q(S,A)←Q(S,A)+α(R+γQ(S′,A′)−Q(S,A))  # noqa: RUF003
 

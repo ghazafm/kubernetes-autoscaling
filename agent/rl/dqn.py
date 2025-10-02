@@ -149,6 +149,8 @@ class DQN(Q):
         if self.train_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
 
+        if self.epsilon > self.epsilon_min:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return
 
     def save_model(self, filepath: str, episode_count: int = 0) -> None:
