@@ -48,6 +48,7 @@ if __name__ == "__main__":
         min_memory=int(os.getenv("MIN_MEMORY", "10")),
         max_cpu=int(os.getenv("MAX_CPU", "90")),
         max_memory=int(os.getenv("MAX_MEMORY", "90")),
+        max_response_time=float(os.getenv("MAX_RESPONSE_TIME", "100.0")),
         timeout=int(os.getenv("TIMEOUT", "120")),
         wait_time=int(os.getenv("WAIT_TIME", "1")),
         verbose=True,
