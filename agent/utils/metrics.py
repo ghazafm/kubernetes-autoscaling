@@ -345,7 +345,7 @@ def get_metrics(
         logger.debug(f"Memory Limits Query: {memory_limits_query}")
 
         try:
-            fetch_timeout = 30
+            fetch_timeout = timeout / 2
 
             (
                 cpu_usage_results,
