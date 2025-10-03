@@ -97,6 +97,8 @@ if __name__ == "__main__":
         metrics_endpoints_method=os.getenv(
             "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
         ),
+        resume=ast.literal_eval(os.getenv("RESUME", "False")),
+        resume_path=os.getenv("RESUME_PATH", ""),
         note=note,
         start_time=start_time,
         logger=logger,

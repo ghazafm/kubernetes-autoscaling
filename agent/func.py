@@ -56,6 +56,8 @@ def train_agent(
     metrics_endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
     note: str = "default",
     start_time: int = int(time.time()),
+    resume: bool = False,
+    resume_path: str = "",
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
 ) -> tuple[Q, KubernetesEnv]:
     """Train the Q-learning agent on the Kubernetes environment"""
@@ -63,6 +65,13 @@ def train_agent(
     metrics_endpoints_method = normalize_endpoints(metrics_endpoints_method)
 
     logger.info(f"Starting training for {episodes} episodes...")
+    if resume and resume_path:
+        try:
+            agent.load_model(resume_path)
+            logger.info(f"Resumed training from model at: {resume_path}")
+        except Exception as e:
+            logger.error(f"Failed to load model from {resume_path}: {e}")
+            raise
 
     try:
         total_reward_init = 0
