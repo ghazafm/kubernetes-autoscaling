@@ -975,7 +975,7 @@ kubelet:
     attachMetadata:
       node: false
     cAdvisor: true
-    cAdvisorInterval: 10s
+    cAdvisorInterval: 5s
     cAdvisorMetricRelabelings:
     - action: drop
       regex: container_cpu_(cfs_throttled_seconds_total|load_average_10s|system_seconds_total|user_seconds_total)
@@ -1046,8 +1046,8 @@ kubelet:
       sourceLabels:
       - __metrics_path__
       targetLabel: metrics_path
-    resource: true
-    resourceInterval: 10s
+    resource: false
+    resourceInterval: 5s
     resourcePath: /metrics/resource/v1alpha1
     resourceRelabelings:
     - action: replace
