@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from environment import (
     KubernetesEnv,
 )
-from func import train_agent
 from rl import DQN, Q
+from trainer import Trainer
 from utils import (
     setup_logger,
 )
@@ -89,25 +89,25 @@ if __name__ == "__main__":
 
     note = os.getenv("NOTE", "default")
 
-    trained_agent, environment = train_agent(
+    trainer = Trainer(
         agent=algorithm,
-        environment=env,
-        episodes=int(os.getenv("EPISODES", None)),
-        verbose=True,
-        metrics_endpoints_method=os.getenv(
-            "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
-        ),
+        env=env,
+        logger=logger,
         resume=ast.literal_eval(os.getenv("RESUME", "False")),
         resume_path=os.getenv("RESUME_PATH", ""),
-        note=note,
-        start_time=start_time,
-        logger=logger,
+        reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
     )
 
-    if hasattr(trained_agent, "q_table"):
-        logger.info(f"\nQ-table size: {len(trained_agent.q_table)} states")
+    trainer.train(
+        episodes=int(os.getenv("EPISODES", None)),
+        note=note,
+        start_time=start_time,
+    )
+
+    if hasattr(trainer.agent, "q_table"):
+        logger.info(f"\nQ-table size: {len(trainer.agent.q_table)} states")
         logger.info("Sample Q-values:")
-        for _, (state, q_values) in enumerate(list(trained_agent.q_table.items())[:5]):
+        for _, (state, q_values) in enumerate(list(trainer.agent.q_table.items())[:5]):
             max_q = np.max(q_values)
             best_action = np.argmax(q_values)
             logger.info(
@@ -116,14 +116,14 @@ if __name__ == "__main__":
     else:
         logger.info("\nDQN model trained (no Q-table to display)")
 
-    model_type = "dqn" if trained_agent.agent_type.upper() == "DQN" else "qlearning"
+    model_type = "dqn" if trainer.agent.agent_type.upper() == "DQN" else "qlearning"
     model_dir = Path(f"model/{model_type}/{note}_{start_time}/final")
     model_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = int(time.time())
-    if trained_agent.agent_type.upper() == "DQN":
+    if trainer.agent.agent_type.upper() == "DQN":
         model_file = model_dir / f"dqn_{timestamp}.pth"
     else:
         model_file = model_dir / f"qlearning_{timestamp}.pkl"
 
-    trained_agent.save_model(str(model_file), trained_agent.episodes_trained)
+    trainer.agent.save_model(str(model_file), trainer.agent.episodes_trained)
