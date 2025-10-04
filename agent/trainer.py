@@ -104,6 +104,11 @@ class Trainer:
             for ep in range(episodes):
                 self.agent.add_episode_count()
                 self.logger.info(f"\nEpisode {ep + 1}/{episodes}")
+                self.logger.info(
+                    f"Total episodes trained: {self.agent.episodes_trained}"
+                )
+                self.logger.info(f"Epsilon: {self.agent.epsilon:.4f}")
+
                 obs = self.env.reset()
                 total = 0.0
                 while True:
