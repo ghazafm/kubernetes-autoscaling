@@ -69,6 +69,7 @@ if __name__ == "__main__":
             epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
             epsilon_min=float(os.getenv("EPSILON_MIN", None)),
             created_at=start_time,
+            logger=logger,
         )
     elif choose_algorithm == "DQN":
         algorithm = DQN(
@@ -83,6 +84,7 @@ if __name__ == "__main__":
             target_update_freq=int(os.getenv("TARGET_UPDATE_FREQ", None)),
             grad_clip_norm=float(os.getenv("GRAD_CLIP_NORM", None)),
             created_at=start_time,
+            logger=logger,
         )
     else:
         raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
