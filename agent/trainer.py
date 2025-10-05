@@ -120,7 +120,6 @@ class Trainer:
                         f"Action: {act}, Reward: {rew}, Total: {total} | "
                         f"Iteration: {info['iteration']}"
                     )
-                    self.logger.info(f"Epsilon: {self.agent.epsilon:.4f}")
 
                     self.logger.debug(f"Observation type: {type(obs)}, value: {obs}")
 

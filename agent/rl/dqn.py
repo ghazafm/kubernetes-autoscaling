@@ -26,7 +26,7 @@ class DQN(Q):
         device: str = "cpu",
         buffer_size: int = 50000,
         batch_size: int = 64,
-        target_update_freq: int = 200,
+        target_update_freq: int = 100,
         grad_clip_norm: float = 10.0,
         created_at: int = 0,
         logger: Optional[Logger] = None,
@@ -108,19 +108,24 @@ class DQN(Q):
             state_key, int(action), float(reward), next_state_key, float(done)
         )
 
-        # ALWAYS decay epsilon after each step, regardless of learning
         if self.epsilon_decay and self.epsilon > self.epsilon_min:
             self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
-        # Debug logging
-        if self.logger:
-            self.logger.debug(
-                f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
-                f"Epsilon: {self.epsilon:.4f}"
-            )
+        self.train_step += 1
 
-        # belajar kalau buffer cukup
+        self.logger.info(
+            f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
+            f"Train step: {self.train_step}, "
+            f"Epsilon: {self.epsilon:.4f}"
+        )
+
         if len(self.replay_buffer) < self.batch_size:
+            if self.train_step % self.target_update_freq == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
+                self.logger.info(
+                    f"Target network updated at step {self.train_step} (buffer not "
+                    "ready for learning)"
+                )
             return
 
         states, actions, rewards, next_states, dones = self.replay_buffer.sample(
@@ -153,11 +158,11 @@ class DQN(Q):
         )
         self.optimizer.step()
 
-        # hard update target network
-        self.train_step += 1
         if self.train_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
-            self.logger.info("Target network updated.")
+            self.logger.info(
+                f"Target network updated at step {self.train_step} (after learning)"
+            )
 
         return
 
