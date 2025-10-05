@@ -112,7 +112,7 @@ def _fmt_ms(v: float) -> str:
 def _safe_q_values(
     agent: Q, state_key: Tuple, logger: Logger
 ) -> Tuple[Optional[np.ndarray], Optional[float], Optional[int]]:
-    # Q-table path
+    # Q-table path (for traditional Q-Learning)
     if getattr(agent, "q_table", None) is not None:
         # Convert numpy.ndarray to a hashable tuple if necessary
         if isinstance(state_key, np.ndarray):
@@ -125,16 +125,22 @@ def _safe_q_values(
         # State not found in Q-table
         return None, None, None
 
-    # DQN path (avoid import error if torch not installed)
+    # DQN path (for Deep Q-Network)
     policy = getattr(agent, "policy_net", None)
     device = getattr(agent, "device", None)
     if policy is not None:
         try:
             with torch.no_grad():
-                state_np = np.array(state_key, dtype=np.float32)
+                # Handle both numpy arrays and tuples
+                if isinstance(state_key, tuple):
+                    state_np = np.array(state_key, dtype=np.float32)
+                else:
+                    state_np = np.array(state_key, dtype=np.float32)
+
                 state_t = torch.from_numpy(state_np).unsqueeze(0)
-                if device:
+                if device and device != "cpu":
                     state_t = state_t.to(device)
+
                 q_t = policy(state_t).squeeze(0)
                 q_np = q_t.detach().cpu().numpy().astype(np.float32)
                 max_q = float(q_np.max())

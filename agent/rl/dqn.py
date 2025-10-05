@@ -82,12 +82,16 @@ class DQN(Q):
         state = self.get_state_key(observation)
 
         if np.random.rand() < self.epsilon:
-            return np.random.randint(0, self.n_actions)
+            action = np.random.randint(0, self.n_actions)
+        else:
+            with torch.no_grad():
+                s = (
+                    torch.from_numpy(state).unsqueeze(0).to(self.device)
+                )  # [1, state_dim]
+                q = self.policy_net(s)  # [1, n_actions]
+            action = int(torch.argmax(q, dim=1).item())
 
-        with torch.no_grad():
-            s = torch.from_numpy(state).unsqueeze(0).to(self.device)  # [1, state_dim]
-            q = self.policy_net(s)  # [1, n_actions]
-        return int(torch.argmax(q, dim=1).item())
+        return action
 
     def update_q_table(
         self, observation: dict, action: int, reward: float, next_observation: dict
@@ -138,19 +142,14 @@ class DQN(Q):
         )
         self.optimizer.step()
 
-        # decay epsilon
         if self.epsilon_decay and self.epsilon > self.epsilon_min:
-            self.epsilon = max(
-                self.epsilon_min, self.epsilon * (1.0 - self.epsilon_decay)
-            )
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
         # hard update target network
         self.train_step += 1
         if self.train_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
 
-        if self.epsilon > self.epsilon_min:
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         return
 
     def save_model(self, filepath: str, episode_count: int = 0) -> None:

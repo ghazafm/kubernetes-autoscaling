@@ -63,11 +63,7 @@ class Q:
         else:
             action = np.argmax(self.q_table[state_key])
 
-        # Decay epsilon after every action (outside the random trigger)
-        if self.epsilon > self.epsilon_min:
-            self.epsilon -= self.epsilon_decay
-            self.epsilon = max(self.epsilon, self.epsilon_min)
-
+        # REMOVED: Epsilon decay moved to update_q_table() to avoid double decay
         return action
 
     def update_q_table(

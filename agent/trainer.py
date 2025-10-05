@@ -107,7 +107,6 @@ class Trainer:
                 self.logger.info(
                     f"Total episodes trained: {self.agent.episodes_trained}"
                 )
-                self.logger.info(f"Epsilon: {self.agent.epsilon:.4f}")
 
                 obs = self.env.reset()
                 total = 0.0
@@ -133,10 +132,8 @@ class Trainer:
                     )
 
                     if term:
-                        self.agent.epsilon = max(
-                            self.agent.epsilon_min,
-                            self.agent.epsilon * self.agent.epsilon_decay,
-                        )
+                        # Epsilon decay is already handled in DQN.update_q_table()
+                        # Removing duplicate decay here
                         break
 
                 self.logger.info(f"Episode {ep + 1} completed. Total reward: {total}")
