@@ -98,6 +98,7 @@ if __name__ == "__main__":
         resume=ast.literal_eval(os.getenv("RESUME", "False")),
         resume_path=os.getenv("RESUME_PATH", ""),
         reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
+        change_epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
     )
 
     trainer.train(

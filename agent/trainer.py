@@ -26,6 +26,7 @@ class Trainer:
         resume: bool = False,
         resume_path: str = "",
         reset_epsilon: bool = True,
+        change_epsilon_decay: Optional[float] = None,
     ) -> None:
         self.agent = agent
         self.env = env
@@ -41,6 +42,11 @@ class Trainer:
                 if reset_epsilon:
                     self.agent.epsilon = start_epsilon
                     self.logger.info(f"Epsilon reset to {self.agent.epsilon}")
+                if change_epsilon_decay is not None:
+                    self.agent.epsilon_decay = change_epsilon_decay
+                    self.logger.info(
+                        f"Epsilon decay changed to {self.agent.epsilon_decay}"
+                    )
             except Exception as e:
                 self.logger.error(f"Failed to load model from {resume_path}: {e}")
                 raise
