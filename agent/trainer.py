@@ -120,8 +120,8 @@ class Trainer:
                         f"Action: {act}, Reward: {rew}, Total: {total} | "
                         f"Iteration: {info['iteration']}"
                     )
+                    self.logger.info(f"Epsilon: {self.agent.epsilon:.4f}")
 
-                    # Debug: check observation type
                     self.logger.debug(f"Observation type: {type(obs)}, value: {obs}")
 
                     log_verbose_details(
@@ -132,8 +132,6 @@ class Trainer:
                     )
 
                     if term:
-                        # Epsilon decay is already handled in DQN.update_q_table()
-                        # Removing duplicate decay here
                         break
 
                 self.logger.info(f"Episode {ep + 1} completed. Total reward: {total}")

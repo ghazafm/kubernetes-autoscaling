@@ -108,6 +108,17 @@ class DQN(Q):
             state_key, int(action), float(reward), next_state_key, float(done)
         )
 
+        # ALWAYS decay epsilon after each step, regardless of learning
+        if self.epsilon_decay and self.epsilon > self.epsilon_min:
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+        # Debug logging
+        if self.logger:
+            self.logger.debug(
+                f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
+                f"Epsilon: {self.epsilon:.4f}"
+            )
+
         # belajar kalau buffer cukup
         if len(self.replay_buffer) < self.batch_size:
             return
@@ -142,13 +153,11 @@ class DQN(Q):
         )
         self.optimizer.step()
 
-        if self.epsilon_decay and self.epsilon > self.epsilon_min:
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
-
         # hard update target network
         self.train_step += 1
         if self.train_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
+            self.logger.info("Target network updated.")
 
         return
 
