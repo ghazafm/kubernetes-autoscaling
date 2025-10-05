@@ -1,8 +1,10 @@
+import time
 from logging import Logger
 from typing import Optional
 
 from database.influxdb import InfluxDB
 from kubernetes import client, config
+from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
 
@@ -32,6 +34,7 @@ class KubernetesEnv:
         ),
         metrics_interval: int = 15,
         metrics_quantile: float = 0.90,
+        max_scaling_retries: int = 1000,
     ) -> None:
         self.logger = logger
         config.load_kube_config()
@@ -62,6 +65,7 @@ class KubernetesEnv:
         self.metrics_endpoints_method = metrics_endpoints_method
         self.metrics_interval = metrics_interval
         self.metrics_quantile = metrics_quantile
+        self.max_scaling_retries = max_scaling_retries
 
         self.action_space = list(range(100))
 
@@ -73,21 +77,96 @@ class KubernetesEnv:
         }
 
     def _scale(self) -> None:
-        http_timeout = 30
+        """Scale deployment with persistent retry until success.
+
+        This method will keep retrying indefinitely until the scaling operation
+        succeeds, using exponential backoff with jitter to handle cluster issues.
+        """
+        HTTP_INTERNAL_SERVER_ERROR = 500
+        HTTP_CONFLICT = 409
+
+        base_timeout = 60
+        max_timeout = 300
+        base_delay = 1.0
+        max_delay = 30.0
+        attempt = 0
+
         self.logger.info(
             f"Scaling to {self.replica_state} replicas | action {self.last_action}%"
         )
-        self.cluster.patch_namespaced_deployment_scale(
-            name=self.deployment_name,
-            body=client.V1Scale(
-                spec=client.V1ScaleSpec(replicas=int(self.replica_state))
-            ),
-            namespace=self.namespace,
-            _request_timeout=http_timeout,
+
+        while attempt < self.max_scaling_retries:
+            attempt += 1
+
+            current_timeout = min(base_timeout * (1.5 ** (attempt - 1)), max_timeout)
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+
+            try:
+                self.cluster.patch_namespaced_deployment_scale(
+                    name=self.deployment_name,
+                    body=client.V1Scale(
+                        spec=client.V1ScaleSpec(replicas=int(self.replica_state))
+                    ),
+                    namespace=self.namespace,
+                    _request_timeout=current_timeout,
+                )
+
+                if attempt > 1:
+                    self.logger.info(
+                        f"✅ Scaling succeeded on attempt {attempt} "
+                        f"(timeout: {current_timeout}s)"
+                    )
+                return
+
+            except ApiException as e:
+                if e.status == HTTP_INTERNAL_SERVER_ERROR:
+                    if "etcdserver: request timed out" in str(e):
+                        self.logger.warning(
+                            f"⏰ Etcd timeout on attempt {attempt} "
+                            f"(timeout: {current_timeout}s). "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                    else:
+                        self.logger.warning(
+                            f"🔄 Server error on attempt {attempt}: {e.reason}. "
+                            f"Retrying in {delay:.1f}s..."
+                        )
+                elif e.status == HTTP_CONFLICT:
+                    self.logger.warning(
+                        f"⚠️  Conflict on attempt {attempt} "
+                        f"(likely concurrent modification). "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+                else:
+                    self.logger.warning(
+                        f"🚨 API error on attempt {attempt} "
+                        f"(status: {e.status}): {e.reason}. "
+                        f"Retrying in {delay:.1f}s..."
+                    )
+
+            except Exception as e:
+                self.logger.warning(
+                    f"💥 Unexpected error on attempt {attempt}: {type(e).__name__}: "
+                    f"{e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+
+            if attempt % 10 == 0:
+                self.logger.info(
+                    f"🔄 Still retrying scaling operation... "
+                    f"Attempt {attempt}, next timeout: {current_timeout}s"
+                )
+
+            time.sleep(delay)
+
+        self.logger.error(
+            f"❌ CRITICAL: Failed to scale after {self.max_scaling_retries} attempts. "
+            f"This indicates a serious cluster issue. "
+            f"Proceeding with current replica state to avoid blocking training."
         )
 
     def _calculate_reward(self) -> float:
-        # Membuat jadi persentase agar bisa dipakai semua response time
+        # membuat jadi percentage, agar applicable di semua skala SLA
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
 
         # Response time penalty only if exceeding 100% of SLA, normalized to ~0..1
