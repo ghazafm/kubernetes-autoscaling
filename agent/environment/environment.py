@@ -252,7 +252,7 @@ class KubernetesEnv:
         percentage = (
             (action / 99.0) if len(self.action_space) > 1 else 0.0
         )  # Map 0-99 to 0.0-1.0
-        self.replica_state_old = self.replica_state.copy()
+        self.replica_state_old = self.replica_state
         self.replica_state = round(self.min_replicas + percentage * self.range_replicas)
         self.replica_state = max(
             self.min_replicas, min(self.replica_state, self.max_replicas)
@@ -290,9 +290,7 @@ class KubernetesEnv:
     def reset(self) -> dict[str, float]:
         self.iteration = self.initial_iteration
         self.replica_state_old = (
-            self.replica_state.copy()
-            if hasattr(self, "replica_state")
-            else self.min_replicas
+            self.replica_state if hasattr(self, "replica_state") else self.min_replicas
         )
         self.replica_state = self.min_replicas
         self._scale_and_get_metrics()
