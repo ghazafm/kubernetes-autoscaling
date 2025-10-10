@@ -110,7 +110,7 @@ def _fmt_ms(v: float) -> str:
 
 
 def _safe_q_values(
-    agent: Q, state_key: Tuple, logger: Logger
+    agent: Q, state_key, logger: Logger
 ) -> Tuple[Optional[np.ndarray], Optional[float], Optional[int]]:
     # Q-table path (for traditional Q-Learning)
     if getattr(agent, "q_table", None) is not None:
@@ -127,27 +127,41 @@ def _safe_q_values(
 
     # DQN path (for Deep Q-Network)
     policy = getattr(agent, "policy_net", None)
-    device = getattr(agent, "device", None)
+    device = getattr(agent, "device", "cpu")  # Default to CPU
     if policy is not None:
         try:
             with torch.no_grad():
                 # Handle both numpy arrays and tuples
                 if isinstance(state_key, tuple):
                     state_np = np.array(state_key, dtype=np.float32)
+                elif isinstance(state_key, np.ndarray):
+                    state_np = state_key.astype(np.float32)
                 else:
                     state_np = np.array(state_key, dtype=np.float32)
 
-                state_t = torch.from_numpy(state_np).unsqueeze(0)
+                # Ensure state has correct shape
+                if state_np.ndim == 1:
+                    state_t = torch.from_numpy(state_np).unsqueeze(0)
+                else:
+                    state_t = torch.from_numpy(state_np)
+
+                # Move to device if needed
                 if device and device != "cpu":
                     state_t = state_t.to(device)
 
-                q_t = policy(state_t).squeeze(0)
+                q_t = policy(state_t)
+                if q_t.ndim > 1:
+                    q_t = q_t.squeeze(0)
+
                 q_np = q_t.detach().cpu().numpy().astype(np.float32)
                 max_q = float(q_np.max())
                 best_idx = int(q_np.argmax())
                 return q_np, max_q, best_idx
         except Exception as exc:
-            logger.debug(f"Failed to compute DQN Q-values: {exc}")
+            # Change to ERROR level so you can see what's actually failing
+            logger.error(f"Failed to compute DQN Q-values: {exc}")
+            # Also log the state_key for debugging
+            logger.error(f"State key type: {type(state_key)}, value: {state_key}")
 
     return None, None, None
 

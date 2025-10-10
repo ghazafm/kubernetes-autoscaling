@@ -317,13 +317,14 @@ def get_metrics(
     interval: int = 15,
     quantile: float = 0.90,
     endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
+    increase: bool = False,
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
 ) -> tuple[float, float, float, int]:
     """
     Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count)
     cpu in %, memory in %, averaged over matched pods.
     """
-    if wait_time > 0:
+    if increase and wait_time > 0:
         time.sleep(wait_time)
 
     start = time.time()

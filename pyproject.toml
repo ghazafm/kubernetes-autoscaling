@@ -21,6 +21,7 @@ dependencies = [
     "prometheus-api-client>=0.6.0",
     "python-dotenv>=1.1.1",
     "influxdb-client>=1.49.0",
+    "seaborn>=0.13.2",
 ]
 
 # [tool.uv.sources]
