@@ -1,4 +1,5 @@
 import logging
+import traceback
 from datetime import datetime
 from logging import Logger
 from logging.handlers import RotatingFileHandler
@@ -113,12 +114,18 @@ def _safe_q_values(
     agent: Q, state_key, logger: Logger
 ) -> Tuple[Optional[np.ndarray], Optional[float], Optional[int]]:
     # Q-table path (for traditional Q-Learning)
-    if getattr(agent, "q_table", None) is not None:
+    # Check if agent actually uses Q-table (not just inherits empty one from DQN)
+    q_table = getattr(agent, "q_table", None)
+    if (
+        q_table is not None
+        and len(q_table) > 0
+        and getattr(agent, "agent_type", "") == "Q"
+    ):
         # Convert numpy.ndarray to a hashable tuple if necessary
         if isinstance(state_key, np.ndarray):
             state_key = tuple(state_key.flatten())
-        if state_key in agent.q_table:
-            q = agent.q_table[state_key]
+        if state_key in q_table:
+            q = q_table[state_key]
             max_q = float(np.max(q))
             best_idx = int(np.argmax(q))
             return q, max_q, best_idx
@@ -162,6 +169,11 @@ def _safe_q_values(
             logger.error(f"Failed to compute DQN Q-values: {exc}")
             # Also log the state_key for debugging
             logger.error(f"State key type: {type(state_key)}, value: {state_key}")
+            # Log more debug info
+            logger.error(f"Policy net available: {policy is not None}")
+            logger.error(f"Device: {device}")
+
+            logger.error(f"Full traceback: {traceback.format_exc()}")
 
     return None, None, None
 
