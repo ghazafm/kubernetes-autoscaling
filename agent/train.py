@@ -58,6 +58,10 @@ if __name__ == "__main__":
         metrics_endpoints_method=metrics_endpoints_method,
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
+        max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES", "1000")),
+        response_time_weight=float(os.getenv("RESPONSE_TIME_WEIGHT", "1.0")),
+        cpu_memory_weight=float(os.getenv("CPU_MEMORY_WEIGHT", "0.5")),
+        cost_weight=float(os.getenv("COST_WEIGHT", "0.3")),
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()

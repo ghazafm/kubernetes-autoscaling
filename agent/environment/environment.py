@@ -35,6 +35,9 @@ class KubernetesEnv:
         metrics_interval: int = 15,
         metrics_quantile: float = 0.90,
         max_scaling_retries: int = 1000,
+        response_time_weight: float = 1.0,
+        cpu_memory_weight: float = 0.5,
+        cost_weight: float = 0.3,
     ) -> None:
         self.logger = logger
         config.load_kube_config()
@@ -68,6 +71,9 @@ class KubernetesEnv:
         self.max_scaling_retries = max_scaling_retries
 
         self.action_space = list(range(100))
+        self.response_time_weight = response_time_weight
+        self.cpu_memory_weight = cpu_memory_weight
+        self.cost_weight = cost_weight
 
         self.observation_space = {
             "cpu_usage": (0, 100.0),
@@ -169,13 +175,6 @@ class KubernetesEnv:
         # membuat jadi percentage, agar applicable di semua skala SLA
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
 
-        # Response time penalty only if exceeding 100% of SLA, normalized to ~0..1
-        # 0-100% = no penalty, >100% = increasing penalty
-        resp_pen = min(
-            1.0, max(0.0, (response_time_percentage - 100.0) / 100.0)
-        )  # Cap penalty at 1.0 for stability
-        # max() ensures no negative penalty when response_time < 100% SLA (ReLU-like)
-
         # Penalti biner: 0 jika dalam batas, 1 jika di luar
         if self.cpu_usage < self.min_cpu:
             cpu_pen = (self.min_cpu - self.cpu_usage) / self.min_cpu
@@ -191,12 +190,24 @@ class KubernetesEnv:
         else:
             mem_pen = 0.0
 
+        # Response time penalty only if exceeding 100% of SLA, normalized to ~0..1
+        # 0-100% = no penalty, >100% = increasing penalty
+        resp_pen = min(
+            self.response_time_weight,
+            max(0.0, (response_time_percentage - 100.0) / 100.0),
+        )  # Cap penalty at 1.0 for stability
+        # max() ensures no negative penalty when response_time < 100% SLA (ReLU-like)
+
+        cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
+
         cost_pen = (
-            0.1 * (self.replica_state - self.min_replicas) / self.range_replicas
-        )  # Agar menambahkan bias ke minimum pods untuk efisiensi biaya
+            self.cost_weight
+            * (self.replica_state - self.min_replicas)
+            / self.range_replicas
+        )
 
         # Reward sederhana: mulai dari 1, kurangi penalti
-        reward = 1.0 - resp_pen - 0.5 * (cpu_pen + mem_pen) - cost_pen
+        reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen
 
         # Clamp agar stabil
         return float(max(min(reward, 1.0), -1.0))
