@@ -124,7 +124,7 @@ if __name__ == "__main__":
         logger.info("\nDQN model trained (no Q-table to display)")
 
     model_type = "dqn" if trainer.agent.agent_type.upper() == "DQN" else "qlearning"
-    model_dir = Path(f"model/{model_type}/{note}_{start_time}/final")
+    model_dir = Path(f"model/{model_type}/{start_time}_{note}/final")
     model_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = int(time.time())

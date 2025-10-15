@@ -258,8 +258,10 @@ class KubernetesEnv:
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
         self.last_action = action
 
-        # percentage = action + 1  # Convert 0-99 to 1-100%
-        # ratio = percentage / 100.0
+        # Map discrete action (0-99) to continuous percentage (0.0-1.0)
+        # Action 0 → 0.0 (min_replicas)
+        # Action 99 → 1.0 (max_replicas)
+        # Example: min=1, max=12, action=50 → 50/99≈0.505 → 1+0.505*11≈6.5→7 replicas
         percentage = (
             (action / 99.0) if len(self.action_space) > 1 else 0.0
         )  # Map 0-99 to 0.0-1.0

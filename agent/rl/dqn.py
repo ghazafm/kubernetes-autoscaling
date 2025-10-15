@@ -101,7 +101,7 @@ class DQN(Q):
         state_key = self.get_state_key(observation)
         next_state_key = self.get_state_key(next_observation)
 
-        done = bool(next_observation.get("done", False))
+        done = bool(next_observation.get("terminated", False))
 
         # simpan pengalaman
         self.replay_buffer.push(

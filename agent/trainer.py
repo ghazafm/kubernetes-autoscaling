@@ -65,7 +65,7 @@ class Trainer:
             else "qlearning"
         )
         interrupted_dir = Path(
-            f"model/{model_type}/{self.savecfg.note}_{self.savecfg.start_time}/interrupted"
+            f"model/{model_type}/{self.savecfg.start_time}_{self.savecfg.note}/interrupted"
         )
         interrupted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -164,7 +164,7 @@ class Trainer:
             else "qlearning"
         )
         path = (
-            f"model/{model_type}/{note}_{start_time}/checkpoints/"
+            f"model/{model_type}/{start_time}_{note}/checkpoints/"
             f"episode_{episode}_total_{score}{ext}"
         )
         Path(path).parent.mkdir(parents=True, exist_ok=True)
