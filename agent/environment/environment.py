@@ -82,6 +82,9 @@ class KubernetesEnv:
             "last_action": (0, 99),  # Fixed: should be 0-99, not 1-99
         }
 
+        self.logger.info("Initialized KubernetesEnv environment")
+        self.logger.info(f"Environment configuration: {self.__dict__}")
+
     def _scale(self) -> None:
         """Scale deployment with persistent retry until success.
 

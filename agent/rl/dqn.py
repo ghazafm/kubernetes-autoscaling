@@ -60,6 +60,8 @@ class DQN(Q):
         # Optimizer + Replay Buffer
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
         self.replay_buffer = ReplayBuffer(self.buffer_size)
+        self.logger.info("Initialized DQN agent")
+        self.logger.info(f"Agent parameters: {self.__dict__}")
 
     def get_state_key(self, observation: dict) -> np.ndarray:
         """Convert observation to a numpy array state for DQN"""

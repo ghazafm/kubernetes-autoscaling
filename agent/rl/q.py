@@ -32,6 +32,9 @@ class Q:
         self.q_table = {}
         self.logger = logger or Logger(__name__)
 
+        self.logger.info("Initialized Q-learning agent")
+        self.logger.info(f"Agent parameters: {self.__dict__}")
+
     def add_episode_count(self, count: int = 1):
         """Increment the episode count"""
         self.episodes_trained += count
