@@ -124,6 +124,7 @@ class HPAMonitor:
         """
         Main monitoring loop that scrapes metrics and writes to InfluxDB.
         Only observes; does not perform any scaling actions.
+        Writes to InfluxDB only after new pods stabilize (after WAIT_TIME).
         """
         iteration = 0
         previous_ready_replicas = 0
@@ -149,45 +150,52 @@ class HPAMonitor:
                     )
                     time.sleep(self.wait_time)
 
-                # Scrape metrics from Prometheus
-                cpu_usage, memory_usage, response_time, _ = get_metrics(
-                    replicas=ready_replicas,
-                    timeout=self.timeout,
-                    namespace=self.namespace,
-                    deployment_name=self.deployment_name,
-                    wait_time=0,  # Don't wait inside get_metrics, we handle it above
-                    prometheus=self.prometheus,
-                    interval=self.metrics_interval,
-                    quantile=self.metrics_quantile,
-                    endpoints_method=self.metrics_endpoints_method,
-                    increase=False,
-                    logger=self.logger,
-                )
+                    # Scrape metrics from Prometheus after stabilization
+                    cpu_usage, memory_usage, response_time, _ = get_metrics(
+                        replicas=ready_replicas,
+                        timeout=self.timeout,
+                        namespace=self.namespace,
+                        deployment_name=self.deployment_name,
+                        wait_time=0,
+                        prometheus=self.prometheus,
+                        interval=self.metrics_interval,
+                        quantile=self.metrics_quantile,
+                        endpoints_method=self.metrics_endpoints_method,
+                        increase=False,
+                        logger=self.logger,
+                    )
 
-                # Log collected metrics
-                self.logger.info(
-                    f"Metrics - Ready: {ready_replicas}/{desired_replicas}, "
-                    f"CPU: {cpu_usage:.2f}%, Memory: {memory_usage:.2f}%, "
-                    f"Response Time: {response_time:.2f}ms"
-                )
+                    # Log collected metrics
+                    self.logger.info(
+                        f"Metrics after stabilization - "
+                        f"Ready: {ready_replicas}/{desired_replicas}, "
+                        f"CPU: {cpu_usage:.2f}%, Memory: {memory_usage:.2f}%, "
+                        f"Response Time: {response_time:.2f}ms"
+                    )
 
-                # Write to InfluxDB
-                self.influxdb.write_point(
-                    measurement="autoscaling_metrics",
-                    tags={
-                        "namespace": self.namespace,
-                        "deployment": self.deployment_name,
-                        "algorithm": "HPA",
-                    },
-                    fields={
-                        "iteration": iteration,
-                        "replica_state": ready_replicas,
-                        "desired_replicas": desired_replicas,
-                        "cpu_usage": cpu_usage,
-                        "memory_usage": memory_usage,
-                        "response_time": response_time,
-                    },
-                )
+                    # Write to InfluxDB only after stabilization
+                    self.influxdb.write_point(
+                        measurement="autoscaling_metrics",
+                        tags={
+                            "namespace": self.namespace,
+                            "deployment": self.deployment_name,
+                            "algorithm": "HPA",
+                        },
+                        fields={
+                            "iteration": iteration,
+                            "replica_state": ready_replicas,
+                            "desired_replicas": desired_replicas,
+                            "cpu_usage": cpu_usage,
+                            "memory_usage": memory_usage,
+                            "response_time": response_time,
+                        },
+                    )
+                else:
+                    self.logger.info(
+                        f"No scale-up detected. "
+                        f"Ready: {ready_replicas}/{desired_replicas}. "
+                        f"Skipping metrics collection."
+                    )
 
                 # Update previous replica count for next iteration
                 previous_ready_replicas = ready_replicas
