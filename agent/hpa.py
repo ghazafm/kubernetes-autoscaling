@@ -191,7 +191,7 @@ class HPAMonitor:
                         },
                     )
                 else:
-                    self.logger.info(
+                    self.logger.debug(
                         f"No scale-up detected. "
                         f"Ready: {ready_replicas}/{desired_replicas}. "
                         f"Skipping metrics collection."
