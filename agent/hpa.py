@@ -30,6 +30,7 @@ class HPAMonitor:
         metrics_quantile: float = 0.90,
         metrics_endpoints_method: list[list[str]] | None = None,
         wait_time: int = 30,
+        check_interval: int = 10,
         logger=None,
     ) -> None:
         self.namespace = namespace
@@ -42,7 +43,8 @@ class HPAMonitor:
             ["/docs", "GET"],
         ]
         self.wait_time = wait_time
-        self.logger = logger or setup_logger("HPAMonitor")
+        self.check_interval = check_interval
+        self.logger = logger or setup_logger("HPAMonitor", "DEBUG")
         self.agent_type = "HPA_MONITOR"
 
         # Initialize Prometheus connection
@@ -62,7 +64,10 @@ class HPAMonitor:
             f"Monitoring deployment: {self.deployment_name} "
             f"in namespace: {self.namespace}"
         )
-        self.logger.info(f"Wait time: {self.wait_time}s")
+        self.logger.info(
+            f"Wait time after scale-up: {self.wait_time}s, "
+            f"Check interval: {self.check_interval}s"
+        )
 
     def _get_current_replicas(self) -> int:
         """Get current number of ready replicas from Prometheus."""
@@ -121,6 +126,7 @@ class HPAMonitor:
         Only observes; does not perform any scaling actions.
         """
         iteration = 0
+        previous_ready_replicas = 0
         self.logger.info("Starting monitoring loop...")
 
         while True:
@@ -132,13 +138,24 @@ class HPAMonitor:
                 ready_replicas = self._get_current_replicas()
                 desired_replicas = self._get_desired_replicas()
 
+                # Detect if new pods were provisioned (scale up)
+                pods_increased = ready_replicas > previous_ready_replicas
+
+                if pods_increased:
+                    self.logger.info(
+                        f"New pods detected! Scaled from {previous_ready_replicas} "
+                        f"to {ready_replicas}. "
+                        f"Waiting {self.wait_time}s for stabilization..."
+                    )
+                    time.sleep(self.wait_time)
+
                 # Scrape metrics from Prometheus
                 cpu_usage, memory_usage, response_time, _ = get_metrics(
                     replicas=ready_replicas,
                     timeout=self.timeout,
                     namespace=self.namespace,
                     deployment_name=self.deployment_name,
-                    wait_time=self.wait_time,
+                    wait_time=0,  # Don't wait inside get_metrics, we handle it above
                     prometheus=self.prometheus,
                     interval=self.metrics_interval,
                     quantile=self.metrics_quantile,
@@ -172,15 +189,18 @@ class HPAMonitor:
                     },
                 )
 
-                # Wait before next scrape
-                time.sleep(self.wait_time)
+                # Update previous replica count for next iteration
+                previous_ready_replicas = ready_replicas
+
+                # Wait before next scrape (shorter interval between checks)
+                time.sleep(self.check_interval)
 
             except KeyboardInterrupt:
                 self.logger.info("Monitoring stopped by user.")
                 break
             except Exception as e:
                 self.logger.exception(f"Error in monitoring loop: {e}")
-                time.sleep(self.wait_time)
+                time.sleep(self.check_interval)
 
     def close(self):
         """Cleanup resources."""
@@ -198,6 +218,7 @@ def main():
         influxdb_org=os.getenv("INFLUXDB_ORG", "my-org"),
         influxdb_bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
         wait_time=int(os.getenv("WAIT_TIME", "30")),
+        check_interval=int(os.getenv("CHECK_INTERVAL", "10")),
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
     )
