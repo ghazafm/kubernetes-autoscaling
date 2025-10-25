@@ -126,14 +126,14 @@ class HPAMonitor:
         Only observes; does not perform any scaling actions.
         Writes to InfluxDB only after new pods stabilize (after WAIT_TIME).
         """
-        iteration = 0
+        # iteration = 0
         previous_ready_replicas = 0
         self.logger.info("Starting monitoring loop...")
 
         while True:
             try:
-                iteration += 1
-                self.logger.info(f"=== Iteration {iteration} ===")
+                # iteration += 1
+                # self.logger.info(f"=== Iteration {iteration} ===")
 
                 # Get current replica counts
                 ready_replicas = self._get_current_replicas()
@@ -182,7 +182,7 @@ class HPAMonitor:
                             "algorithm": "HPA",
                         },
                         fields={
-                            "iteration": iteration,
+                            # "iteration": iteration,
                             "replica_state": ready_replicas,
                             "desired_replicas": desired_replicas,
                             "cpu_usage": cpu_usage,
