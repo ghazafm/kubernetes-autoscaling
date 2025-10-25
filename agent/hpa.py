@@ -44,7 +44,7 @@ class HPAMonitor:
         ]
         self.wait_time = wait_time
         self.check_interval = check_interval
-        self.logger = logger or setup_logger("HPAMonitor", "DEBUG")
+        self.logger = logger or setup_logger("HPAMonitor", "INFO")
         self.agent_type = "HPA_MONITOR"
 
         # Initialize Prometheus connection
