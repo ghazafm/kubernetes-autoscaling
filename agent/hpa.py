@@ -1,3 +1,4 @@
+import ast
 import os
 import time
 
@@ -218,6 +219,10 @@ class HPAMonitor:
 
 
 def main():
+    metrics_endpoints_str = os.getenv(
+        "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
+    )
+    metrics_endpoints_method = ast.literal_eval(metrics_endpoints_str)
     monitor = HPAMonitor(
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
@@ -230,6 +235,7 @@ def main():
         check_interval=int(os.getenv("CHECK_INTERVAL", "10")),
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
+        metrics_endpoints_method=metrics_endpoints_method,
     )
 
     try:
