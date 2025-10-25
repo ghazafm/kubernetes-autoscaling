@@ -124,23 +124,22 @@ class HPAMonitor:
         """
         Main monitoring loop that scrapes metrics and writes to InfluxDB.
         Only observes; does not perform any scaling actions.
-        Writes to InfluxDB only after new pods stabilize (after WAIT_TIME).
+        Writes to InfluxDB after WAIT_TIME, whether scaling occurred or not.
         """
-        # iteration = 0
         previous_ready_replicas = 0
+        last_write_time = time.time()
         self.logger.info("Starting monitoring loop...")
 
         while True:
             try:
-                # iteration += 1
-                # self.logger.info(f"=== Iteration {iteration} ===")
-
                 # Get current replica counts
                 ready_replicas = self._get_current_replicas()
                 desired_replicas = self._get_desired_replicas()
 
                 # Detect if new pods were provisioned (scale up)
                 pods_increased = ready_replicas > previous_ready_replicas
+                current_time = time.time()
+                time_since_last_write = current_time - last_write_time
 
                 if pods_increased:
                     self.logger.info(
@@ -149,8 +148,11 @@ class HPAMonitor:
                         f"Waiting {self.wait_time}s for stabilization..."
                     )
                     time.sleep(self.wait_time)
+                    time_since_last_write = time.time() - last_write_time
 
-                    # Scrape metrics from Prometheus after stabilization
+                # Write to InfluxDB if WAIT_TIME has elapsed
+                if time_since_last_write >= self.wait_time:
+                    # Scrape metrics from Prometheus
                     cpu_usage, memory_usage, response_time, _ = get_metrics(
                         replicas=ready_replicas,
                         timeout=self.timeout,
@@ -167,13 +169,13 @@ class HPAMonitor:
 
                     # Log collected metrics
                     self.logger.info(
-                        f"Metrics after stabilization - "
+                        f"Metrics collected - "
                         f"Ready: {ready_replicas}/{desired_replicas}, "
                         f"CPU: {cpu_usage:.2f}%, Memory: {memory_usage:.2f}%, "
                         f"Response Time: {response_time:.2f}ms"
                     )
 
-                    # Write to InfluxDB only after stabilization
+                    # Write to InfluxDB
                     self.influxdb.write_point(
                         measurement="autoscaling_metrics",
                         tags={
@@ -182,7 +184,6 @@ class HPAMonitor:
                             "algorithm": "HPA",
                         },
                         fields={
-                            # "iteration": iteration,
                             "replica_state": ready_replicas,
                             "desired_replicas": desired_replicas,
                             "cpu_usage": cpu_usage,
@@ -190,17 +191,17 @@ class HPAMonitor:
                             "response_time": response_time,
                         },
                     )
+                    last_write_time = time.time()
                 else:
                     self.logger.debug(
-                        f"No scale-up detected. "
                         f"Ready: {ready_replicas}/{desired_replicas}. "
-                        f"Skipping metrics collection."
+                        f"Next write in {self.wait_time - time_since_last_write:.0f}s"
                     )
 
                 # Update previous replica count for next iteration
                 previous_ready_replicas = ready_replicas
 
-                # Wait before next scrape (shorter interval between checks)
+                # Wait before next check
                 time.sleep(self.check_interval)
 
             except KeyboardInterrupt:
