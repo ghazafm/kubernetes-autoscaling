@@ -14,7 +14,7 @@ class KubernetesEnv:
         self,
         min_replicas: int = 1,
         max_replicas: int = 50,
-        iteration: int = 100,
+        iteration: int | float = 100,  # int for training, float("inf") for production
         namespace: str = "default",
         deployment_name: str = "default",
         min_cpu: float = 20,
