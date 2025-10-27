@@ -10,10 +10,11 @@ from utils import get_metrics, setup_logger
 load_dotenv("hpa.env")
 
 
-class HPAMonitor:
+class AutoscalingMonitor:
     """
-    Monitoring agent that only observes Kubernetes default HPA behavior.
+    Monitoring agent that observes Kubernetes autoscaling behavior.
     Scrapes metrics from Prometheus and writes to InfluxDB for comparison.
+    Supports multiple autoscaling algorithms: HPA, Q-Learning, DQN, etc.
     Does NOT perform any scaling actions.
     """
 
@@ -26,6 +27,7 @@ class HPAMonitor:
         influxdb_token: str,
         influxdb_org: str,
         influxdb_bucket: str,
+        algorithm: str = "HPA",
         timeout: int = 30,
         metrics_interval: int = 15,
         metrics_quantile: float = 0.90,
@@ -36,6 +38,7 @@ class HPAMonitor:
     ) -> None:
         self.namespace = namespace
         self.deployment_name = deployment_name
+        self.algorithm = algorithm.upper()
         self.timeout = timeout
         self.metrics_interval = metrics_interval
         self.metrics_quantile = metrics_quantile
@@ -45,8 +48,8 @@ class HPAMonitor:
         ]
         self.wait_time = wait_time
         self.check_interval = check_interval
-        self.logger = logger or setup_logger("HPAMonitor", "INFO")
-        self.agent_type = "HPA_MONITOR"
+        self.logger = logger or setup_logger(f"{self.algorithm}Monitor", "INFO")
+        self.agent_type = f"{self.algorithm}_MONITOR"
 
         # Initialize Prometheus connection
         self.prometheus = PrometheusConnect(url=prometheus_url, disable_ssl=True)
@@ -60,12 +63,13 @@ class HPAMonitor:
             logger=self.logger,
         )
 
-        self.logger.info("Initialized HPA Monitor (Read-only)")
+        self.logger.info(f"Initialized {self.algorithm} Monitor (Read-only)")
         self.logger.info(
             f"Monitoring deployment: {self.deployment_name} "
             f"in namespace: {self.namespace}"
         )
         self.logger.info(
+            f"Algorithm: {self.algorithm}, "
             f"Wait time after scale-up: {self.wait_time}s, "
             f"Check interval: {self.check_interval}s"
         )
@@ -182,7 +186,7 @@ class HPAMonitor:
                         tags={
                             "namespace": self.namespace,
                             "deployment": self.deployment_name,
-                            "algorithm": "HPA",
+                            "algorithm": self.algorithm,
                         },
                         fields={
                             "replica_state": ready_replicas,
@@ -223,7 +227,11 @@ def main():
         "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
     )
     metrics_endpoints_method = ast.literal_eval(metrics_endpoints_str)
-    monitor = HPAMonitor(
+    
+    # Get algorithm from environment variable (default: HPA)
+    algorithm = os.getenv("ALGORITHM", "HPA")
+    
+    monitor = AutoscalingMonitor(
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
         prometheus_url=os.getenv("PROMETHEUS_URL", "http://localhost:9090"),
@@ -231,6 +239,7 @@ def main():
         influxdb_token=os.getenv("INFLUXDB_TOKEN"),
         influxdb_org=os.getenv("INFLUXDB_ORG", "my-org"),
         influxdb_bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
+        algorithm=algorithm,
         wait_time=int(os.getenv("WAIT_TIME", "30")),
         check_interval=int(os.getenv("CHECK_INTERVAL", "10")),
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
