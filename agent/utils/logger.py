@@ -31,7 +31,7 @@ def setup_logger(
     """
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
-    logger = logging.getLogger()
+    logger = logging.getLogger(service_name)
     logger.setLevel(numeric_level)
 
     if logger.hasHandlers():
