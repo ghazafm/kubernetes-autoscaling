@@ -220,7 +220,16 @@ def _get_response_time(
             )
             result.append(0.0)
 
-    response_time = float(np.mean(result)) if result else 0.0
+    response_time = float(np.nanmean(result)) if result else 0.0
+
+    if np.isnan(response_time):
+        logger.warning(
+            f"Response time calculation resulted in NaN for endpoints "
+            f"{endpoints_method}. This typically means no request data "
+            f"is available in the {interval}s time window. Defaulting to 0.0 ms."
+        )
+        response_time = 0.0
+
     logger.debug(
         f"Response time (quantile {quantile}) for endpoints "
         f"{endpoints_method}: {response_time} ms"
