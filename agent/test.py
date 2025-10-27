@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, setup_logger
 
-load_dotenv("hpa.env")
+load_dotenv("test.env")
 
 
 class AutoscalingMonitor:
@@ -227,10 +227,10 @@ def main():
         "METRICS_ENDPOINTS_METHOD", "[['/', 'GET'], ['/docs', 'GET']]"
     )
     metrics_endpoints_method = ast.literal_eval(metrics_endpoints_str)
-    
+
     # Get algorithm from environment variable (default: HPA)
     algorithm = os.getenv("ALGORITHM", "HPA")
-    
+
     monitor = AutoscalingMonitor(
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
