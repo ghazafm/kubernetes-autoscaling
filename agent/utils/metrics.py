@@ -333,7 +333,7 @@ def get_metrics(
     Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count)
     cpu in %, memory in %, averaged over matched pods.
     """
-    if increase and wait_time > 0:
+    if increase or wait_time > 0:
         time.sleep(wait_time)
 
     start = time.time()

@@ -9,10 +9,9 @@ from environment import (
 )
 from rl import DQN, Q
 from utils import (
+    log_verbose_details,
     setup_logger,
 )
-
-from agent.utils.logger import log_verbose_details
 
 load_dotenv()
 
@@ -95,8 +94,9 @@ if __name__ == "__main__":
     model_path = os.getenv("MODEL_PATH", "model/dqn/1697041234_default/best_model.pth")
     logger.info(f"Loading trained model from: {model_path}")
     agent.load_model(model_path)
-
     agent.epsilon = 0.0
+    agent.epsilon_decay = 0.0
+    agent.epsilon_min = 0.0
     logger.info("Model loaded successfully. Running in inference mode (epsilon=0).")
 
     obs = env.reset()
