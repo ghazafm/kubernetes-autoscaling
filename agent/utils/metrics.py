@@ -220,9 +220,14 @@ def _get_response_time(
             )
             result.append(0.0)
 
-    response_time = float(np.nanmean(result)) if result else 0.0
+    # Convert to numpy array and filter out non-finite values to avoid
+    # RuntimeWarning from np.nanmean when the array is all-NaN.
+    arr = np.array(result, dtype=float) if result else np.array([], dtype=float)
+    finite = arr[np.isfinite(arr)]
 
-    if np.isnan(response_time):
+    if finite.size > 0:
+        response_time = float(np.mean(finite))
+    else:
         logger.warning(
             f"Response time calculation resulted in NaN for endpoints "
             f"{endpoints_method}. This typically means no request data "

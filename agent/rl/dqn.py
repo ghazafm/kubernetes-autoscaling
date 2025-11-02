@@ -115,7 +115,7 @@ class DQN(Q):
 
         self.train_step += 1
 
-        self.logger.info(
+        self.logger.debug(
             f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
             f"Train step: {self.train_step}, "
             f"Epsilon: {self.epsilon:.4f}"
@@ -124,7 +124,7 @@ class DQN(Q):
         if len(self.replay_buffer) < self.batch_size:
             if self.train_step % self.target_update_freq == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
-                self.logger.info(
+                self.logger.debug(
                     f"Target network updated at step {self.train_step} (buffer not "
                     "ready for learning)"
                 )
@@ -162,7 +162,7 @@ class DQN(Q):
 
         if self.train_step % self.target_update_freq == 0:
             self.target_net.load_state_dict(self.policy_net.state_dict())
-            self.logger.info(
+            self.logger.debug(
                 f"Target network updated at step {self.train_step} (after learning)"
             )
 
@@ -206,7 +206,9 @@ class DQN(Q):
             if not Path(filepath).exists():
                 raise FileNotFoundError(f"Model file not found: {filepath}")
 
-            model_data = torch.load(filepath, map_location=self.device)
+            model_data = torch.load(
+                filepath, map_location=self.device, weights_only=False
+            )
 
             # Load network states
             self.policy_net.load_state_dict(model_data["policy_net_state_dict"])

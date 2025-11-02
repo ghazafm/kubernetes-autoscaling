@@ -652,7 +652,7 @@ kube-state-metrics:
         scheme: ""
         scrapeTimeout: ""
         tlsConfig: {}
-      interval: "15s"
+      interval: "5s"
       jobLabel: ""
       labelLimit: 0
       labelNameLengthLimit: 0
@@ -676,7 +676,7 @@ kube-state-metrics:
       proxyUrl: ""
       relabelings: []
       sampleLimit: 0
-      scrapeTimeout: "10s"
+      scrapeTimeout: "3s"
       selectorOverride: {}
       targetLabels: []
       targetLimit: 0
@@ -975,7 +975,7 @@ kubelet:
     attachMetadata:
       node: false
     cAdvisor: true
-    cAdvisorInterval: 5s
+    cAdvisorInterval: 3s
     cAdvisorMetricRelabelings:
     - action: drop
       regex: container_cpu_(cfs_throttled_seconds_total|load_average_10s|system_seconds_total|user_seconds_total)
@@ -1022,7 +1022,7 @@ kubelet:
     honorTimestamps: true
     https: true
     insecureSkipVerify: true
-    interval: "5s"
+    interval: "3s"
     kubelet: true
     labelLimit: 0
     labelNameLengthLimit: 0
@@ -1145,7 +1145,7 @@ prometheus:
     enforcedNamespaceLabel: ""
     enforcedSampleLimit: false
     enforcedTargetLimit: false
-    evaluationInterval: "5s"
+    evaluationInterval: "3s"
     excludedFromEnforcement: []
     exemplars: {}
     externalLabels: {}
@@ -1209,9 +1209,9 @@ prometheus:
     scrapeConfigSelector: {}
     scrapeConfigSelectorNilUsesHelmValues: true
     scrapeFailureLogFile: ""
-    scrapeInterval: "5s"
+    scrapeInterval: "3s"
     scrapeProtocols: []
-    scrapeTimeout: "4s"
+    scrapeTimeout: "3s"
     secrets: []
     securityContext:
       fsGroup: 2000
@@ -1468,7 +1468,7 @@ prometheus-node-exporter:
       basicAuth: {}
       bearerTokenFile: null
       enabled: true
-      interval: ""
+      interval: "3s"
       jobLabel: jobLabel
       labelLimit: 0
       labelNameLengthLimit: 0
@@ -1480,7 +1480,7 @@ prometheus-node-exporter:
       relabelings: []
       sampleLimit: 0
       scheme: http
-      scrapeTimeout: ""
+      scrapeTimeout: "2s"
       selectorOverride: {}
       targetLabels: []
       targetLimit: 0
