@@ -322,10 +322,14 @@ def get_metrics(
     endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
     increase: bool = False,
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
+    last_known_metrics: tuple[float, float, float, int] | None = None,
 ) -> tuple[float, float, float, int]:
     """
     Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count)
     cpu in %, memory in %, averaged over matched pods.
+
+    Args:
+        last_known_metrics: Previous valid metrics to use as fallback on timeout
     """
     if increase or wait_time > 0:
         time.sleep(wait_time)
@@ -439,5 +443,39 @@ def get_metrics(
 
         time.sleep(1)
 
-    logger.error("Timeout reached while fetching metrics.")
-    return 0.0, 0.0, 0.0, 0
+    # Timeout reached - use fallback strategy with intelligent adjustment
+    if last_known_metrics is not None:
+        last_cpu, last_mem, last_rt, last_replicas = last_known_metrics
+
+        # If pods crashed (replica count decreased), scale up utilization proportionally
+        # This prevents cascading failures where crash → timeout → agent doesn't scale up
+        if last_replicas > replicas:
+            # Calculate scale factor: if 7 pods → 4 pods, factor = 7/4 = 1.75x load per pod
+            scale_factor = last_replicas / replicas
+            adjusted_cpu = min(last_cpu * scale_factor, 100.0)
+            adjusted_mem = min(last_mem * scale_factor, 100.0)
+
+            logger.warning(
+                f"Timeout during replica decrease detected! "
+                f"Pods: {last_replicas}→{replicas}. "
+                f"Scaling metrics by {scale_factor:.2f}x: "
+                f"CPU {last_cpu:.1f}%→{adjusted_cpu:.1f}%, "
+                f"MEM {last_mem:.1f}%→{adjusted_mem:.1f}%"
+            )
+            return adjusted_cpu, adjusted_mem, last_rt, replicas
+
+        # If replicas increased or stayed same, use last known values as-is
+        logger.warning(
+            f"Timeout reached while fetching metrics. "
+            f"Using last known good values: "
+            f"CPU={last_cpu:.2f}%, MEM={last_mem:.2f}%, "
+            f"RT={last_rt:.2f}ms, Replicas={replicas}"
+        )
+        return last_cpu, last_mem, last_rt, replicas
+
+    # No historical data - return conservative high values
+    logger.error(
+        "Timeout reached while fetching metrics and no historical data available. "
+        "Returning conservative high values to prevent under-scaling."
+    )
+    return 100.0, 100.0, 100.0, replicas

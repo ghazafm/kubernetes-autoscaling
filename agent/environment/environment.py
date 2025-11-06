@@ -82,6 +82,9 @@ class KubernetesEnv:
             "last_action": (0, 99),  # Fixed: should be 0-99, not 1-99
         }
 
+        # Track last known good metrics for fallback during timeout
+        self.last_known_metrics: tuple[float, float, float, int] | None = None
+
         self.logger.info("Initialized KubernetesEnv environment")
         self.logger.info(f"Environment configuration: {self.__dict__}")
 
@@ -239,8 +242,17 @@ class KubernetesEnv:
                 endpoints_method=self.metrics_endpoints_method,
                 increase=increase,
                 logger=self.logger,
+                last_known_metrics=self.last_known_metrics,
             )
         )
+
+        if self.replica > 0:
+            self.last_known_metrics = (
+                self.cpu_usage,
+                self.memory_usage,
+                self.response_time,
+                self.replica,
+            )
 
         if not ready:
             self.logger.warning(
@@ -309,6 +321,7 @@ class KubernetesEnv:
             self.replica_state if hasattr(self, "replica_state") else self.min_replicas
         )
         self.replica_state = self.min_replicas
+        self.last_known_metrics = None
         self._scale_and_get_metrics()
         self.last_action = 0
         return self._get_observation()

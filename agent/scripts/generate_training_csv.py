@@ -1,12 +1,14 @@
 """Generate a synthetic CSV compatible with agent/offline_train.py
 
 Usage:
-    python scripts/generate_training_csv.py --out data/generated_training.csv --rows 1000
+    python scripts/generate_training_csv.py --out data/generated_training.csv
+    --rows 1000
 
 The generated CSV columns:
   cpu_usage,memory_usage,response_time,replica,action,reward,next_state,done
 
-next_state is a Python-dict-like string (single quotes) so the training script can ast.literal_eval it.
+next_state is a Python-dict-like string (single quotes) so the training script
+can ast.literal_eval it.
 """
 
 from __future__ import annotations
@@ -14,8 +16,14 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import random
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def _env_reward(
@@ -90,7 +98,7 @@ def build_row(
     # compute action (0-99) that would map to next_replica in KubernetesEnv.step()
     range_replicas = max(1, max_replicas - min_replicas)
     desired_pct = (next_replica - min_replicas) / range_replicas
-    action = int(round(desired_pct * 99.0))
+    action = round(desired_pct * 99.0)
     action = max(0, min(99, action))
 
     # state values as percentages (cpu/mem already in 0-100 range here)
@@ -110,7 +118,7 @@ def build_row(
 
     # compute discrete action (0-99) that would map to next_replica
     next_desired_pct = (next_replica - min_replicas) / range_replicas
-    next_action = int(round(next_desired_pct * 99.0))
+    next_action = round(next_desired_pct * 99.0)
     next_action = max(0, min(99, next_action))
 
     next_state = {
@@ -124,7 +132,7 @@ def build_row(
     # Map current replica count to discrete last_action (0-99) so offline
     # training that expects `replica` to be last_action remains consistent.
     current_pct = (replica - min_replicas) / range_replicas
-    last_action_for_current = int(round(current_pct * 99.0))
+    last_action_for_current = round(current_pct * 99.0)
     last_action_for_current = max(0, min(99, last_action_for_current))
 
     # compute reward using passed-in hyperparameters to ensure alignment
@@ -258,21 +266,48 @@ def generate(
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
+    # Load defaults from .env file
+    default_min_replicas = int(os.getenv("MIN_REPLICAS", "1"))
+    default_max_replicas = int(os.getenv("MAX_REPLICAS", "50"))
+    default_min_cpu = float(os.getenv("MIN_CPU", "20.0"))
+    default_max_cpu = float(os.getenv("MAX_CPU", "90.0"))
+    default_min_memory = float(os.getenv("MIN_MEMORY", "20.0"))
+    default_max_memory = float(os.getenv("MAX_MEMORY", "90.0"))
+    default_max_response_time = float(os.getenv("MAX_RESPONSE_TIME", "100.0"))
+    default_response_time_weight = float(os.getenv("RESPONSE_TIME_WEIGHT", "1.0"))
+    default_cpu_memory_weight = float(os.getenv("CPU_MEMORY_WEIGHT", "0.5"))
+    default_cost_weight = float(os.getenv("COST_WEIGHT", "0.15"))
+
+    p = argparse.ArgumentParser(
+        description="Generate synthetic training data aligned with .env configuration"
+    )
     p.add_argument("--out", type=str, default="data/generated_training.csv")
     p.add_argument("--rows", type=int, default=1000)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--min-replicas", type=int, default=1)
-    p.add_argument("--max-replicas", type=int, default=50)
-    p.add_argument("--min-cpu", type=float, default=20.0)
-    p.add_argument("--max-cpu", type=float, default=90.0)
-    p.add_argument("--min-memory", type=float, default=20.0)
-    p.add_argument("--max-memory", type=float, default=90.0)
-    p.add_argument("--max-response-time", type=float, default=100.0)
-    p.add_argument("--response-time-weight", type=float, default=1.0)
-    p.add_argument("--cpu-memory-weight", type=float, default=0.5)
-    p.add_argument("--cost-weight", type=float, default=0.3)
+    p.add_argument("--min-replicas", type=int, default=default_min_replicas)
+    p.add_argument("--max-replicas", type=int, default=default_max_replicas)
+    p.add_argument("--min-cpu", type=float, default=default_min_cpu)
+    p.add_argument("--max-cpu", type=float, default=default_max_cpu)
+    p.add_argument("--min-memory", type=float, default=default_min_memory)
+    p.add_argument("--max-memory", type=float, default=default_max_memory)
+    p.add_argument("--max-response-time", type=float, default=default_max_response_time)
+    p.add_argument(
+        "--response-time-weight", type=float, default=default_response_time_weight
+    )
+    p.add_argument("--cpu-memory-weight", type=float, default=default_cpu_memory_weight)
+    p.add_argument("--cost-weight", type=float, default=default_cost_weight)
     args = p.parse_args()
+
+    print("Generating training data with configuration from .env:")
+    print(f"  MIN_REPLICAS={args.min_replicas}, MAX_REPLICAS={args.max_replicas}")
+    print(f"  MIN_CPU={args.min_cpu}%, MAX_CPU={args.max_cpu}%")
+    print(f"  MIN_MEMORY={args.min_memory}%, MAX_MEMORY={args.max_memory}%")
+    print(f"  MAX_RESPONSE_TIME={args.max_response_time}ms")
+    print(
+        f"  Weights: RT={args.response_time_weight}, CPU/MEM={args.cpu_memory_weight}, COST={args.cost_weight}"
+    )
+    print(f"  Generating {args.rows} rows → {args.out}")
+
     generate(
         Path(args.out),
         rows=args.rows,
@@ -288,3 +323,4 @@ if __name__ == "__main__":
         cpu_memory_weight=args.cpu_memory_weight,
         cost_weight=args.cost_weight,
     )
+    print("✅ Training data generated successfully!")

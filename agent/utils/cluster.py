@@ -48,7 +48,23 @@ def wait_for_pods_ready(
 
     while time.time() - start_time < timeout:
         try:
-            desired_replicas_prom = int(prometheus.custom_query(query=q_desired)[1])
+            desired_result = prometheus.custom_query(query=q_desired)
+            if not desired_result or len(desired_result) < 2:
+                logger.debug(
+                    "wait_for_pods_ready: No desired replicas data from Prometheus"
+                )
+                time.sleep(1)
+                continue
+
+            desired_value = str(desired_result[1])
+            if desired_value == "NaN" or desired_value == "":
+                logger.debug(
+                    "wait_for_pods_ready: Prometheus returned NaN for desired replicas"
+                )
+                time.sleep(1)
+                continue
+
+            desired_replicas_prom = int(float(desired_value))
             if desired_replicas_prom != desired_replicas:
                 logger.debug(
                     f"wait_for_pods_ready: desired_replicas mismatch, "
@@ -62,7 +78,22 @@ def wait_for_pods_ready(
                 f"matched: {desired_replicas_prom}"
             )
 
-            ready_replicas = int(prometheus.custom_query(query=q_ready)[1])
+            ready_result = prometheus.custom_query(query=q_ready)
+            if not ready_result or len(ready_result) < 2:
+                logger.debug(
+                    "wait_for_pods_ready: No ready replicas data from Prometheus"
+                )
+                ready_replicas = 0
+            else:
+                ready_value = str(ready_result[1])
+                if ready_value == "NaN" or ready_value == "":
+                    logger.debug(
+                        "wait_for_pods_ready: Prometheus returned NaN for ready replicas"
+                    )
+                    ready_replicas = 0
+                else:
+                    ready_replicas = int(float(ready_value))
+
             logger.debug(f"wait_for_pods_ready: ready_replicas={ready_replicas}")
             if ready_replicas == desired_replicas > 0:
                 logger.debug("wait_for_pods_ready: pods are ready")

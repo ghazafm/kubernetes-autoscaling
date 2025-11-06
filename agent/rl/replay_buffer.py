@@ -1,6 +1,7 @@
 import random
 from collections import deque
 
+import numpy as np
 import torch
 
 
@@ -17,12 +18,18 @@ class ReplayBuffer:
         batch = random.sample(self.buffer, batch_size)
         # Pisahkan masing-masing komponen pengalaman menjadi batch tensor
         states, actions, rewards, next_states, dones = zip(*batch)
+        # Konversi ke numpy arrays terlebih dahulu untuk efisiensi
+        states = np.array(states, dtype=np.float32)
+        actions = np.array(actions, dtype=np.int64)
+        rewards = np.array(rewards, dtype=np.float32)
+        next_states = np.array(next_states, dtype=np.float32)
+        dones = np.array(dones, dtype=np.float32)
         # Konversi ke tensor PyTorch
-        states = torch.FloatTensor(states)
-        actions = torch.LongTensor(actions)
-        rewards = torch.FloatTensor(rewards)
-        next_states = torch.FloatTensor(next_states)
-        dones = torch.FloatTensor(dones)
+        states = torch.from_numpy(states)
+        actions = torch.from_numpy(actions)
+        rewards = torch.from_numpy(rewards)
+        next_states = torch.from_numpy(next_states)
+        dones = torch.from_numpy(dones)
         return states, actions, rewards, next_states, dones
 
     def __len__(self):
