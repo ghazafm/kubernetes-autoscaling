@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-app
+  labels:
+    app: flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flask-app
+  template:
+    metadata:
+      labels:
+        app: flask-app
+    spec:
+      containers:
+      - name: flask-app
+        image: fauzanghaza/flask-app:latest
+        ports:
+        - containerPort: 5000
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-app
+  labels:
+    app: flask-app
+spec:
+  type: LoadBalancer
+  selector:
+    app: flask-app
+  ports:
+  - name: http-app
+    port: 80
+    targetPort: 5000
+  - name: http-metrics
+    port: 8000
+    targetPort: 8000

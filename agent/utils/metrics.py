@@ -10,58 +10,48 @@ def _metrics_query(
     deployment_name: str,
     interval: int = 15,
 ) -> tuple[str, str, str, str]:
-    scope_ready = f"""
-    (
-        (kube_pod_status_ready{{namespace="{namespace}", condition="true"}} == 1)
-        and on(pod)
-        (
-            label_replace(
-                kube_pod_owner{{namespace="{namespace}", owner_kind="ReplicaSet"}},
-                "replicaset", "$1", "owner_name", "(.*)"
-            )
-            * on(namespace, replicaset) group_left(owner_name)
-            kube_replicaset_owner{{
-                namespace="{namespace}", owner_kind="Deployment",
-                owner_name="{deployment_name}"
-            }}
-        )
-    )
-    """
-
     cpu_query = f"""
-        sum by (pod) (
-        rate(container_cpu_usage_seconds_total{{
-            namespace="{namespace}",
-            container!="", container!="POD"
-        }}[{interval}s])
+        (
+            sum by (pod) (
+                rate(container_cpu_usage_seconds_total{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    container!="",
+                    container!="POD"
+                }}[{interval}s])
+            )
+        ) OR (
+            count by (pod) (
+                container_cpu_usage_seconds_total{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    container!="",
+                    container!="POD"
+                }}
+            ) * 0
         )
-        AND on(pod)
-        {scope_ready}
         """
 
     memory_query = f"""
         sum by (pod) (
             container_memory_working_set_bytes{{
                 namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
                 container!="",
                 container!="POD"
             }}
         )
-        AND on(pod)
-        {scope_ready}
         """
 
     cpu_limits_query = f"""
         sum by (pod) (
             kube_pod_container_resource_limits{{
                 namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
                 resource="cpu",
                 unit="core"
             }}
         )
-        AND on(pod)
-        {scope_ready}
-
         """
 
     # Query for memory limits
@@ -69,12 +59,11 @@ def _metrics_query(
         sum by (pod) (
             kube_pod_container_resource_limits{{
                 namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
                 resource="memory",
                 unit="byte"
             }}
         )
-        AND on(pod)
-        {scope_ready}
         """
 
     return (
@@ -176,11 +165,11 @@ def _get_response_time(
             histogram_quantile(
             {quantile},
             sum by (le) (
-                rate(app_request_latency_seconds_bucket{{
-                job="{deployment_name}",
+                rate(http_request_duration_seconds_bucket{{
                 namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
                 method="{method}",
-                exported_endpoint="{endpoint}"
+                path="{endpoint}"
                 }}[{interval}s])
             )
             )
@@ -414,17 +403,22 @@ def get_metrics(
                 continue
 
             if collected == replicas:
-                cpu_mean = (
-                    float(np.nanmean(cpu_percentages)) if cpu_percentages else 0.0
-                )
+                cpu_mean = float(np.mean(cpu_percentages)) if cpu_percentages else 0.0
                 mem_mean = (
-                    float(np.nanmean(memory_percentages)) if memory_percentages else 0.0
+                    float(np.mean(memory_percentages)) if memory_percentages else 0.0
                 )
 
                 if not cpu_percentages:
                     logger.warning("No valid CPU percentages calculated.")
                 if not memory_percentages:
                     logger.warning("No valid Memory percentages calculated.")
+
+                # Verify data consistency
+                if len(cpu_percentages) != len(memory_percentages):
+                    logger.error(
+                        f"Mismatch: {len(cpu_percentages)} CPU entries vs "
+                        f"{len(memory_percentages)} Memory entries"
+                    )
 
                 logger.debug(
                     f"Metrics collected from {collected} pods: \n"
