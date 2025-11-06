@@ -106,12 +106,18 @@ def train(
     log_every_step: int = 100,
     save_every: int = 10,
     max_steps: Optional[int] = None,
+    shuffle: bool = True,
+    episode_length: Optional[int] = None,
 ) -> None:
     start_time = time.time()
     logger = logger or make_logger()
 
     # data is state, action, reward, next_state [tuples]
     df = load_or_make_df(data_path, logger)
+
+    # If episode_length not specified, use full dataset per episode
+    if episode_length is None:
+        episode_length = len(df)
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()
     logger.info(f"Using algorithm: {choose_algorithm}")
     if choose_algorithm == "Q":
@@ -157,28 +163,39 @@ def train(
         done = False
         step = 0
 
+        # Shuffle data each episode for better learning
+        if shuffle:
+            df_shuffled = df.sample(frac=1.0, random_state=ep).reset_index(drop=True)
+        else:
+            df_shuffled = df
+
+        # Limit steps per episode if specified
+        steps_this_episode = min(episode_length, len(df_shuffled))
+        if max_steps is not None:
+            steps_this_episode = min(steps_this_episode, max_steps)
+
         # iterate rows but optionally limit per-episode steps
-        for i, data in enumerate(df.itertuples()):
-            if max_steps is not None and i >= max_steps:
-                break
+        for i in range(steps_this_episode):
+            data = df_shuffled.iloc[i]
+
             # Normalize observation fields (CSV may store them as strings)
             try:
-                cpu_val = float(data.cpu_usage)
+                cpu_val = float(data["cpu_usage"])
             except Exception:
                 cpu_val = 0.0
             try:
-                mem_val = float(data.memory_usage)
+                mem_val = float(data["memory_usage"])
             except Exception:
                 mem_val = 0.0
             try:
-                resp_val = float(data.response_time)
+                resp_val = float(data["response_time"])
             except Exception:
                 resp_val = 0.0
             try:
-                last_act_val = int(data.replica)
+                last_act_val = int(data["replica"])
             except Exception:
                 try:
-                    last_act_val = int(float(data.replica))
+                    last_act_val = int(float(data["replica"]))
                 except Exception:
                     last_act_val = 0
 
@@ -188,11 +205,11 @@ def train(
                 "response_time": resp_val,
                 "last_action": last_act_val,
             }
-            action = getattr(data, "action", 0)
+            action = data.get("action", 0)
             # Extract next state / reward / done with fallbacks for CSV shapes
-            next_obs = getattr(data, "next_state", None)
-            reward = getattr(data, "reward", 0.0)
-            done = getattr(data, "done", False)
+            next_obs = data.get("next_state", None)
+            reward = data.get("reward", 0.0)
+            done = data.get("done", False)
 
             # Normalize types coming from CSV (strings) so agents receive proper types
             try:
@@ -301,6 +318,17 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="How often (in episodes) to save checkpoints",
     )
+    p.add_argument(
+        "--episode-length",
+        type=int,
+        default=None,
+        help="Number of steps per episode (default: use full dataset)",
+    )
+    p.add_argument(
+        "--no-shuffle",
+        action="store_true",
+        help="Disable data shuffling between episodes",
+    )
     p.add_argument("--debug", action="store_true", help="Enable debug logging")
     return p.parse_args()
 
@@ -315,4 +343,6 @@ if __name__ == "__main__":
         logger=log,
         log_every=args.log_every,
         save_every=args.save_every,
+        episode_length=args.episode_length,
+        shuffle=not args.no_shuffle,
     )

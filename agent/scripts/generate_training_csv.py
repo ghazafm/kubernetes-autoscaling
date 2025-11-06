@@ -104,16 +104,25 @@ def build_row(
     # state values as percentages (cpu/mem already in 0-100 range here)
     cpu_pct = round(float(cpu), 2)
     mem_pct = round(float(mem), 2)
-    resp_pct = round((float(resp) / 100.0) * 100.0, 2)  # max_response_time default 100
+    # Convert response time (in ms) to percentage of max_response_time for observation
+    resp_pct = round((float(resp) / max_response_time) * 100.0, 2)
 
-    # compute reward using environment logic
+    # compute reward using environment logic (pass raw milliseconds for resp)
     reward = _env_reward(
         cpu_pct,
         mem_pct,
-        resp_pct,
+        resp,  # Pass raw milliseconds, _env_reward will convert to percentage
         replica,
         min_replicas=min_replicas,
         max_replicas=max_replicas,
+        min_cpu=min_cpu,
+        max_cpu=max_cpu,
+        min_memory=min_memory,
+        max_memory=max_memory,
+        max_response_time=max_response_time,
+        response_time_weight=response_time_weight,
+        cpu_memory_weight=cpu_memory_weight,
+        cost_weight=cost_weight,
     )
 
     # compute discrete action (0-99) that would map to next_replica
@@ -134,24 +143,6 @@ def build_row(
     current_pct = (replica - min_replicas) / range_replicas
     last_action_for_current = round(current_pct * 99.0)
     last_action_for_current = max(0, min(99, last_action_for_current))
-
-    # compute reward using passed-in hyperparameters to ensure alignment
-    reward = _env_reward(
-        cpu_pct,
-        mem_pct,
-        resp_pct,
-        replica,
-        min_replicas=min_replicas,
-        max_replicas=max_replicas,
-        min_cpu=min_cpu,
-        min_memory=min_memory,
-        max_cpu=max_cpu,
-        max_memory=max_memory,
-        max_response_time=max_response_time,
-        response_time_weight=response_time_weight,
-        cpu_memory_weight=cpu_memory_weight,
-        cost_weight=cost_weight,
-    )
 
     return {
         "cpu_usage": f"{cpu_pct:.2f}",
@@ -210,27 +201,54 @@ def generate(
     # replica_count is the current replica count (used to simulate next_resp etc.);
     # we initialize it to 1 (min_replicas) — the column written to CSV named
     # `replica` will contain the agent's last_action (0-99), not the replica count.
-    replica = 1
-    resp = 50.0 + random.random() * 20.0
+    replica = min_replicas
+    resp = 30.0 + random.random() * 40.0  # Start with reasonable response time
 
     with out.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
         for i in range(rows):
-            # simulate small fluctuations
+            # simulate small fluctuations with proper clamping
             next_cpu = cpu + random.uniform(-5.0, 5.0) + math.sin(i * 0.03) * 2.0
-            next_mem = mem + random.uniform(-3.0, 3.0) + math.cos(i * 0.02) * 1.5
-            # response_time tends to go up with cpu and down with more replicas
-            next_resp = (
-                resp + (next_cpu - cpu) * 0.5 - (replica - 1) * random.uniform(0.2, 0.8)
-            )
+            next_cpu = max(
+                min_cpu - 10, min(max_cpu + 10, next_cpu)
+            )  # Allow some overshoot
 
-            # Occasionally change replica count (scale up/down)
+            next_mem = mem + random.uniform(-3.0, 3.0) + math.cos(i * 0.02) * 1.5
+            next_mem = max(
+                min_memory - 10, min(max_memory + 10, next_mem)
+            )  # Allow some overshoot
+
+            # response_time calculation with proper bounds
+            # Higher CPU/memory and lower replicas = higher response time
+            cpu_pressure = max(0, (next_cpu - max_cpu) / 100.0)
+            mem_pressure = max(0, (next_mem - max_memory) / 100.0)
+            replica_factor = max(
+                1.0, replica / 10.0
+            )  # More replicas = lower response time
+
+            base_resp = 20.0 + cpu_pressure * 30.0 + mem_pressure * 20.0
+            next_resp = (base_resp / replica_factor) + random.uniform(-5.0, 5.0)
+            next_resp = max(
+                5.0, min(max_response_time * 1.5, next_resp)
+            )  # Keep response time reasonable
+
+            # Occasionally change replica count (scale up/down) with bounds checking
             if random.random() < 0.07:
-                next_replica = max(1, replica + random.choice([-1, 1]))
+                next_replica = max(
+                    min_replicas, min(max_replicas, replica + random.choice([-1, 1]))
+                )
             else:
                 next_replica = replica
+
+            # Clamp values to realistic ranges before building row
+            cpu = max(0.0, min(100.0, cpu))
+            mem = max(0.0, min(100.0, mem))
+            resp = max(0.0, resp)
+            next_cpu = max(0.0, min(100.0, next_cpu))
+            next_mem = max(0.0, min(100.0, next_mem))
+            next_resp = max(0.0, next_resp)
 
             row = build_row(
                 i,
