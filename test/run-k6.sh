@@ -1,32 +1,320 @@
 #!/bin/bash
 
+# RL Autoscaler K6 Test Runner
+# Usage: ./run-k6.sh [test-name|all]
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Load environment variables
 if [ -f .env ]; then
     export $(cat .env | grep -v '^#' | xargs)
+else
+    echo -e "${YELLOW}Warning: .env file not found. Using defaults.${NC}"
 fi
+
+# Set default BASE_URL if not set
+BASE_URL=${BASE_URL:-http://localhost:5000}
+DURATION_MULTIPLIER=${DURATION_MULTIPLIER:-}
+CYCLE_COUNT=${CYCLE_COUNT:-}
 
 TEST_FILE=${1:-k6.js}
 
+# Function to run a test
+run_test() {
+    local test_file=$1
+    local test_name=$2
+
+    echo -e "\n${BLUE}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}Running: ${test_name}${NC}"
+    echo -e "${BLUE}File: ${test_file}${NC}"
+    echo -e "${BLUE}BASE_URL: ${BASE_URL}${NC}"
+
+    # Show duration config if set
+    if [ -n "$DURATION_MULTIPLIER" ]; then
+        echo -e "${BLUE}DURATION_MULTIPLIER: ${DURATION_MULTIPLIER}x${NC}"
+    fi
+    if [ -n "$CYCLE_COUNT" ]; then
+        echo -e "${BLUE}CYCLE_COUNT: ${CYCLE_COUNT}${NC}"
+    fi
+
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}\n"
+
+    if [ ! -f "$test_file" ]; then
+        echo -e "${RED}Error: Test file '$test_file' not found!${NC}"
+        return 1
+    fi
+
+    # Build k6 command with optional env vars
+    local k6_cmd="k6 run --env BASE_URL=\"$BASE_URL\""
+
+    if [ -n "$DURATION_MULTIPLIER" ]; then
+        k6_cmd="$k6_cmd --env DURATION_MULTIPLIER=\"$DURATION_MULTIPLIER\""
+    fi
+
+    if [ -n "$CYCLE_COUNT" ]; then
+        k6_cmd="$k6_cmd --env CYCLE_COUNT=\"$CYCLE_COUNT\""
+    fi
+
+    k6_cmd="$k6_cmd \"$test_file\""
+
+    # Execute command
+    eval $k6_cmd
+
+    local exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo -e "\n${GREEN}✓ Test completed successfully: ${test_name}${NC}\n"
+    else
+        echo -e "\n${RED}✗ Test failed: ${test_name} (exit code: $exit_code)${NC}\n"
+    fi
+
+    return $exit_code
+}
+
+# Function to show help
+show_help() {
+    echo -e "${BLUE}RL Autoscaler K6 Test Runner${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}\n"
+    echo "Usage: ./run-k6.sh [test-name]"
+    echo ""
+    echo "Available test names:"
+    echo "  ${GREEN}training${NC}       - Comprehensive daily traffic patterns (60 min)"
+    echo "  ${GREEN}edge${NC}           - Edge cases and stress scenarios (40 min)"
+    echo "  ${GREEN}weekly${NC}         - Weekly simulation patterns (50 min)"
+    echo "  ${GREEN}rl${NC}             - Original RL autoscaler test"
+    echo "  ${GREEN}cpu${NC}            - CPU stress test (8 min)"
+    echo "  ${GREEN}memory${NC}         - Memory stress test (8 min)"
+    echo "  ${GREEN}spike${NC}          - Quick spike test (3 min)"
+    echo "  ${GREEN}general${NC}        - General test (default)"
+    echo ""
+    echo "Special commands:"
+    echo "  ${YELLOW}all${NC}            - Run all autoscaler training tests sequentially"
+    echo "  ${YELLOW}full${NC}           - Run complete test suite (all tests)"
+    echo "  ${YELLOW}quick${NC}          - Run quick validation (spike + cpu + memory)"
+    echo "  ${YELLOW}help${NC}           - Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  ${YELLOW}BASE_URL${NC}              - Target URL (default: http://localhost:5000)"
+    echo "  ${YELLOW}DURATION_MULTIPLIER${NC}   - Time scale multiplier (1=default, 24=1day, 168=1week)"
+    echo "  ${YELLOW}CYCLE_COUNT${NC}           - Number of pattern repetitions (1=once, 7=weekly)"
+    echo ""
+    echo "Examples:"
+    echo "  ${GRAY}# Run default 60-minute training${NC}"
+    echo "  ./run-k6.sh training"
+    echo ""
+    echo "  ${GRAY}# Run all tests${NC}"
+    echo "  ./run-k6.sh all"
+    echo ""
+    echo "  ${GRAY}# Quick validation test${NC}"
+    echo "  ./run-k6.sh quick"
+    echo ""
+    echo "  ${GRAY}# Change target URL${NC}"
+    echo "  BASE_URL=http://my-app:5000 ./run-k6.sh training"
+    echo ""
+    echo "  ${GRAY}# Run 1-day training (24x duration)${NC}"
+    echo "  DURATION_MULTIPLIER=24 ./run-k6.sh training"
+    echo ""
+    echo "  ${GRAY}# Run 1-week training (24x duration, 7 cycles)${NC}"
+    echo "  DURATION_MULTIPLIER=24 CYCLE_COUNT=7 ./run-k6.sh training"
+    echo ""
+    echo "  ${GRAY}# Run 1-week edge cases in background${NC}"
+    echo "  nohup env DURATION_MULTIPLIER=24 CYCLE_COUNT=7 ./run-k6.sh edge > training.log 2>&1 &"
+    echo ""
+    echo "For more details on extended durations, see: ${YELLOW}EXTENDED_DURATION_GUIDE.md${NC}"
+    echo ""
+}
+
 # Map friendly names to test files
 case "$TEST_FILE" in
+    "help"|"-h"|"--help")
+        show_help
+        exit 0
+        ;;
+    "training"|"train")
+        run_test "k6-autoscaler-training.js" "Autoscaler Training (Comprehensive)"
+        ;;
+    "edge"|"edge-cases")
+        run_test "k6-autoscaler-edge-cases.js" "Edge Cases & Stress Testing"
+        ;;
+    "weekly"|"week")
+        run_test "k6-autoscaler-weekly.js" "Weekly Simulation"
+        ;;
     "general")
-        TEST_FILE="k6.js"
+        run_test "k6.js" "General Test"
         ;;
     "cpu")
-        TEST_FILE="k6-cpu-stress.js"
+        run_test "k6-cpu-stress.js" "CPU Stress Test"
         ;;
-    "memory")
-        TEST_FILE="k6-memory-stress.js"
+    "memory"|"mem")
+        run_test "k6-memory-stress.js" "Memory Stress Test"
         ;;
     "spike")
-        TEST_FILE="k6-spike.js"
+        run_test "k6-spike.js" "Spike Test"
         ;;
     "rl"|"autoscaler")
-        TEST_FILE="k6-rl-autoscaler.js"
+        run_test "k6-rl-autoscaler.js" "RL Autoscaler Test"
+        ;;
+    "all")
+        echo -e "${YELLOW}Running ALL autoscaler training tests...${NC}"
+
+        # Calculate estimated duration
+        local base_duration=150  # ~2.5 hours in minutes (spike + training + edge + weekly)
+        local multiplier=${DURATION_MULTIPLIER:-1}
+        local cycles=${CYCLE_COUNT:-1}
+        local total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
+        local total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
+
+        if (( $(echo "$total_hours < 1" | bc -l) )); then
+            echo -e "${YELLOW}This will take approximately ${total_minutes} minutes${NC}\n"
+        elif (( $(echo "$total_hours < 24" | bc -l) )); then
+            echo -e "${YELLOW}This will take approximately ${total_hours} hours${NC}\n"
+        else
+            local total_days=$(echo "scale=1; $total_hours / 24" | bc)
+            echo -e "${YELLOW}This will take approximately ${total_days} days${NC}\n"
+        fi
+
+        failed_tests=()
+
+        # Run all training tests
+        run_test "k6-spike.js" "Quick Validation" || failed_tests+=("spike")
+        sleep 10
+
+        run_test "k6-autoscaler-training.js" "Comprehensive Training" || failed_tests+=("training")
+        sleep 10
+
+        run_test "k6-autoscaler-edge-cases.js" "Edge Cases" || failed_tests+=("edge-cases")
+        sleep 10
+
+        run_test "k6-autoscaler-weekly.js" "Weekly Patterns" || failed_tests+=("weekly")
+        sleep 10
+
+        run_test "k6-cpu-stress.js" "CPU Stress" || failed_tests+=("cpu")
+        sleep 10
+
+        run_test "k6-memory-stress.js" "Memory Stress" || failed_tests+=("memory")
+
+        # Summary
+        echo -e "\n${BLUE}═══════════════════════════════════════════════════════${NC}"
+        echo -e "${BLUE}Test Suite Summary${NC}"
+        echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+
+        if [ ${#failed_tests[@]} -eq 0 ]; then
+            echo -e "${GREEN}✓ All tests passed successfully!${NC}"
+            exit 0
+        else
+            echo -e "${RED}✗ Some tests failed:${NC}"
+            for test in "${failed_tests[@]}"; do
+                echo -e "${RED}  - $test${NC}"
+            done
+            exit 1
+        fi
+        ;;
+    "full")
+        echo -e "${YELLOW}Running FULL test suite...${NC}"
+
+        # Calculate estimated duration
+        local base_duration=180  # ~3 hours in minutes (all tests including general)
+        local multiplier=${DURATION_MULTIPLIER:-1}
+        local cycles=${CYCLE_COUNT:-1}
+        local total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
+        local total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
+
+        if (( $(echo "$total_hours < 1" | bc -l) )); then
+            echo -e "${YELLOW}This will take approximately ${total_minutes} minutes${NC}\n"
+        elif (( $(echo "$total_hours < 24" | bc -l) )); then
+            echo -e "${YELLOW}This will take approximately ${total_hours} hours${NC}\n"
+        else
+            local total_days=$(echo "scale=1; $total_hours / 24" | bc)
+            echo -e "${YELLOW}This will take approximately ${total_days} days${NC}\n"
+        fi
+
+        failed_tests=()
+
+        # Run all tests including general ones
+        run_test "k6.js" "General Test" || failed_tests+=("general")
+        sleep 10
+
+        run_test "k6-spike.js" "Spike Test" || failed_tests+=("spike")
+        sleep 10
+
+        run_test "k6-rl-autoscaler.js" "RL Autoscaler" || failed_tests+=("rl")
+        sleep 10
+
+        run_test "k6-autoscaler-training.js" "Training" || failed_tests+=("training")
+        sleep 10
+
+        run_test "k6-autoscaler-edge-cases.js" "Edge Cases" || failed_tests+=("edge-cases")
+        sleep 10
+
+        run_test "k6-autoscaler-weekly.js" "Weekly" || failed_tests+=("weekly")
+        sleep 10
+
+        run_test "k6-cpu-stress.js" "CPU Stress" || failed_tests+=("cpu")
+        sleep 10
+
+        run_test "k6-memory-stress.js" "Memory Stress" || failed_tests+=("memory")
+
+        # Summary
+        echo -e "\n${BLUE}═══════════════════════════════════════════════════════${NC}"
+        echo -e "${BLUE}Full Test Suite Summary${NC}"
+        echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+
+        if [ ${#failed_tests[@]} -eq 0 ]; then
+            echo -e "${GREEN}✓ All tests passed successfully!${NC}"
+            exit 0
+        else
+            echo -e "${RED}✗ Some tests failed:${NC}"
+            for test in "${failed_tests[@]}"; do
+                echo -e "${RED}  - $test${NC}"
+            done
+            exit 1
+        fi
+        ;;
+    "quick")
+        echo -e "${YELLOW}Running quick validation tests...${NC}"
+        echo -e "${YELLOW}This will take approximately 15 minutes${NC}\n"
+
+        failed_tests=()
+
+        run_test "k6-spike.js" "Spike Test" || failed_tests+=("spike")
+        sleep 5
+
+        run_test "k6-cpu-stress.js" "CPU Stress" || failed_tests+=("cpu")
+        sleep 5
+
+        run_test "k6-memory-stress.js" "Memory Stress" || failed_tests+=("memory")
+
+        # Summary
+        echo -e "\n${BLUE}═══════════════════════════════════════════════════════${NC}"
+        echo -e "${BLUE}Quick Validation Summary${NC}"
+        echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+
+        if [ ${#failed_tests[@]} -eq 0 ]; then
+            echo -e "${GREEN}✓ All quick tests passed!${NC}"
+            exit 0
+        else
+            echo -e "${RED}✗ Some tests failed:${NC}"
+            for test in "${failed_tests[@]}"; do
+                echo -e "${RED}  - $test${NC}"
+            done
+            exit 1
+        fi
+        ;;
+    *)
+        # Treat as direct filename
+        if [ -f "$TEST_FILE" ]; then
+            run_test "$TEST_FILE" "Custom Test"
+        else
+            echo -e "${RED}Error: Unknown test name or file not found: $TEST_FILE${NC}"
+            echo ""
+            show_help
+            exit 1
+        fi
         ;;
 esac
-
-echo "Running k6 test: $TEST_FILE"
-echo "BASE_URL: $BASE_URL"
-echo ""
-
-k6 run -e BASE_URL="$BASE_URL" "$TEST_FILE"

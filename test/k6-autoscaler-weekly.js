@@ -1,0 +1,492 @@
+import { check, sleep } from 'k6';
+import http from 'k6/http';
+import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
+
+// Custom metrics
+const errorRate = new Rate('errors');
+const cpuDuration = new Trend('cpu_request_duration');
+const memoryDuration = new Trend('memory_request_duration');
+const basicDuration = new Trend('basic_request_duration');
+const requestsPerDay = new Counter('requests_per_day');
+const dayOfWeekGauge = new Gauge('day_of_week');
+
+// RL Autoscaler Weekly Simulation Test
+// Simulates realistic weekly traffic patterns (compressed into ~50 minutes)
+// Each "day" is ~7 minutes to make training practical
+//
+// CUSTOMIZABLE DURATION:
+// Set DURATION_MULTIPLIER environment variable to extend test duration
+// Set CYCLE_COUNT to repeat weeks multiple times
+//
+// Usage:
+//   k6 run --env DURATION_MULTIPLIER=24 --env CYCLE_COUNT=4 k6-autoscaler-weekly.js
+//   This runs 4 weeks, each week taking 24x longer = 4 weeks total
+
+const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
+const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
+
+// Helper function to scale duration
+function scaleDuration(minutes) {
+  const totalMinutes = minutes * DURATION_MULTIPLIER;
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = Math.floor(totalMinutes % 60);
+  const secs = Math.floor((totalMinutes % 1) * 60);
+
+  if (hours > 0) {
+    return mins > 0 ? `${hours}h${mins}m` : `${hours}h`;
+  } else if (mins > 0) {
+    return secs > 0 ? `${mins}m${secs}s` : `${mins}m`;
+  } else {
+    return `${secs}s`;
+  }
+}
+
+// Base pattern (50 minutes = 1 week cycle)
+const basePattern = [
+  // ===== MONDAY - Week Start (Gradual Increase) =====
+  // Early morning (low)
+  { duration: scaleDuration(1), target: 5 },
+  // Morning rush (9 AM - users logging in)
+  { duration: scaleDuration(1), target: 20 },
+  { duration: scaleDuration(1.5), target: 20 },
+  // Lunch dip
+  { duration: scaleDuration(0.5), target: 12 },
+  { duration: scaleDuration(1), target: 12 },
+  // Afternoon work
+  { duration: scaleDuration(0.5), target: 18 },
+  { duration: scaleDuration(1), target: 18 },
+  // Evening decline
+  { duration: scaleDuration(0.5), target: 8 },
+
+  // ===== TUESDAY - Regular Business Day (Consistent) =====
+  // Morning
+  { duration: scaleDuration(0.5), target: 6 },
+  { duration: scaleDuration(1), target: 22 },
+  { duration: scaleDuration(1.5), target: 22 },
+  // Lunch
+  { duration: scaleDuration(0.5), target: 14 },
+  { duration: scaleDuration(1), target: 14 },
+  // Afternoon (higher than Monday)
+  { duration: scaleDuration(0.5), target: 24 },
+  { duration: scaleDuration(1.5), target: 24 },
+  // Evening
+  { duration: scaleDuration(0.5), target: 10 },
+
+  // ===== WEDNESDAY - Peak Day (Highest Load) =====
+  // Morning
+  { duration: scaleDuration(0.5), target: 8 },
+  { duration: scaleDuration(1), target: 28 },
+  { duration: scaleDuration(1.5), target: 28 },
+  // Lunch (still high)
+  { duration: scaleDuration(0.5), target: 18 },
+  { duration: scaleDuration(1), target: 18 },
+  // Afternoon peak + marketing campaign spike
+  { duration: scaleDuration(1), target: 35 },
+  { duration: scaleDuration(1), target: 35 },
+  // Late spike (end-of-quarter deadline)
+  { duration: scaleDuration(0.5), target: 40 },
+  { duration: scaleDuration(0.5), target: 40 },
+  // Evening (still elevated)
+  { duration: scaleDuration(0.5), target: 15 },
+
+  // ===== THURSDAY - Post-Peak (Declining) =====
+  // Morning (lower than Wednesday)
+  { duration: scaleDuration(0.5), target: 7 },
+  { duration: scaleDuration(1), target: 20 },
+  { duration: scaleDuration(1.5), target: 20 },
+  // Lunch
+  { duration: scaleDuration(0.5), target: 13 },
+  { duration: scaleDuration(1), target: 13 },
+  // Afternoon (moderate)
+  { duration: scaleDuration(1), target: 19 },
+  { duration: scaleDuration(1), target: 19 },
+  // Evening
+  { duration: scaleDuration(0.5), target: 9 },
+
+  // ===== FRIDAY - Week End (Early Decline) =====
+  // Morning (slow start)
+  { duration: scaleDuration(0.5), target: 5 },
+  { duration: scaleDuration(1), target: 16 },
+  { duration: scaleDuration(1), target: 16 },
+  // Lunch (longer dip - people leaving early)
+  { duration: scaleDuration(1), target: 10 },
+  { duration: scaleDuration(1), target: 10 },
+  // Afternoon (minimal - early finish)
+  { duration: scaleDuration(1), target: 12 },
+  { duration: scaleDuration(0.5), target: 7 },
+  // Early evening drop
+  { duration: scaleDuration(0.5), target: 4 },
+
+  // ===== SATURDAY - Weekend (Low Activity) =====
+  // Late start
+  { duration: scaleDuration(1), target: 3 },
+  { duration: scaleDuration(1.5), target: 3 },
+  // Midday (some activity)
+  { duration: scaleDuration(1), target: 8 },
+  { duration: scaleDuration(1.5), target: 8 },
+  // Evening (minimal)
+  { duration: scaleDuration(1), target: 4 },
+  { duration: scaleDuration(1), target: 4 },
+
+  // ===== SUNDAY - Weekend (Minimal) =====
+  // Very low all day
+  { duration: scaleDuration(1), target: 2 },
+  { duration: scaleDuration(2), target: 2 },
+  // Slight increase (planning for Monday)
+  { duration: scaleDuration(1), target: 5 },
+  { duration: scaleDuration(1.5), target: 5 },
+  // Late evening prep
+  { duration: scaleDuration(0.5), target: 3 },
+  { duration: scaleDuration(1), target: 3 },
+
+  // ===== Graceful Shutdown =====
+  { duration: scaleDuration(0.5), target: 0 },
+];
+
+// Generate stages by repeating weeks
+function generateStages() {
+  let stages = [];
+  for (let i = 0; i < CYCLE_COUNT; i++) {
+    stages = stages.concat(basePattern);
+  }
+  return stages;
+}
+
+export const options = {
+  stages: generateStages(),
+  thresholds: {
+    http_req_duration: ['p(95)<7000'],
+    'http_req_duration{expected_response:true}': ['p(99)<12000'],
+    errors: ['rate<0.10'],
+  },
+};
+
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+
+// Simulate time of day and day of week
+let iterationCounter = 0;
+
+function getDayOfWeek() {
+  const totalIterations = iterationCounter++;
+
+  // Approximate iterations per day (rough estimation)
+  // Each "day" is about 7 minutes worth of iterations
+  const iterationsPerDay = 200; // Adjust based on actual test
+
+  const day = Math.floor(totalIterations / iterationsPerDay) % 7;
+
+  const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  return days[day];
+}
+
+function getTimeOfDay(vu) {
+  // Estimate time of day based on VU count
+  if (vu <= 3) return 'night';
+  if (vu <= 10) return 'early_morning';
+  if (vu <= 15) return 'morning';
+  if (vu <= 25) return 'midday';
+  if (vu <= 35) return 'afternoon';
+  if (vu <= 40) return 'evening_peak';
+  return 'late';
+}
+
+function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
+  // Weekend pattern
+  if (dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday') {
+    return {
+      cpu: 0.15,
+      memory: 0.10,
+      basic: 0.75,
+      intensity: 'light',
+    };
+  }
+
+  // Weekday patterns
+  if (dayOfWeek === 'Wednesday') {
+    // Peak day - more intensive operations
+    return {
+      cpu: 0.50,
+      memory: 0.30,
+      basic: 0.20,
+      intensity: timeOfDay === 'afternoon' || timeOfDay === 'evening_peak' ? 'maximum' : 'high',
+    };
+  }
+
+  if (dayOfWeek === 'Monday') {
+    // Week start - gradual ramp
+    return {
+      cpu: 0.35,
+      memory: 0.25,
+      basic: 0.40,
+      intensity: timeOfDay === 'afternoon' ? 'high' : 'moderate',
+    };
+  }
+
+  if (dayOfWeek === 'Friday') {
+    // Week end - lighter workload
+    return {
+      cpu: 0.25,
+      memory: 0.20,
+      basic: 0.55,
+      intensity: timeOfDay === 'midday' ? 'moderate' : 'light',
+    };
+  }
+
+  // Tuesday, Thursday - regular business
+  return {
+    cpu: 0.40,
+    memory: 0.25,
+    basic: 0.35,
+    intensity: timeOfDay === 'afternoon' ? 'high' : 'moderate',
+  };
+}
+
+function getRequestParams(type, intensity) {
+  if (type === 'cpu') {
+    const intensityMap = {
+      light: { base: 600000, variance: 300000 },
+      moderate: { base: 1400000, variance: 600000 },
+      high: { base: 2200000, variance: 800000 },
+      maximum: { base: 3000000, variance: 1200000 },
+    };
+    const params = intensityMap[intensity] || intensityMap.moderate;
+    return Math.floor(params.base + Math.random() * params.variance);
+  } else if (type === 'memory') {
+    const intensityMap = {
+      light: { base: 20, variance: 15 },
+      moderate: { base: 40, variance: 20 },
+      high: { base: 60, variance: 25 },
+      maximum: { base: 75, variance: 25 },
+    };
+    const params = intensityMap[intensity] || intensityMap.moderate;
+    return Math.floor(params.base + Math.random() * params.variance);
+  }
+  return null;
+}
+
+function getSleepTime(dayOfWeek, timeOfDay, intensity) {
+  let baseSleep;
+
+  // Weekend - longer sleep
+  if (dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday') {
+    baseSleep = 3.0 + Math.random() * 2.0; // 3-5 seconds
+    return baseSleep;
+  }
+
+  // Weekday - based on time and intensity
+  const timeMap = {
+    night: 4.0,
+    early_morning: 2.5,
+    morning: 1.5,
+    midday: 1.0,
+    afternoon: 0.8,
+    evening_peak: 0.5,
+    late: 2.0,
+  };
+
+  baseSleep = timeMap[timeOfDay] || 1.0;
+
+  // Adjust for intensity
+  const intensityMultiplier = {
+    light: 1.2,
+    moderate: 1.0,
+    high: 0.8,
+    maximum: 0.6,
+  };
+
+  baseSleep *= intensityMultiplier[intensity] || 1.0;
+
+  // Add realistic jitter
+  baseSleep += Math.random() * 0.5 - 0.25;
+
+  return Math.max(0.2, baseSleep); // Minimum 200ms
+}
+
+export default function () {
+  const dayOfWeek = getDayOfWeek();
+  const timeOfDay = getTimeOfDay(__VU);
+  const pattern = getTrafficPattern(dayOfWeek, timeOfDay, __VU);
+
+  // Update gauge
+  dayOfWeekGauge.add(__VU);
+
+  // Determine request type
+  const rand = Math.random();
+  let requestType;
+
+  if (rand < pattern.cpu) {
+    requestType = 'cpu';
+  } else if (rand < pattern.cpu + pattern.memory) {
+    requestType = 'memory';
+  } else {
+    requestType = 'basic';
+  }
+
+  // Execute request
+  let res;
+  const tags = {
+    day_of_week: dayOfWeek,
+    time_of_day: timeOfDay,
+    request_type: requestType,
+    intensity: pattern.intensity,
+  };
+
+  if (requestType === 'cpu') {
+    const iterations = getRequestParams('cpu', pattern.intensity);
+    res = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
+      tags: tags,
+      timeout: '35s',
+    });
+
+    cpuDuration.add(res.timings.duration);
+
+    check(res, {
+      'cpu weekly status is 200': (r) => r.status === 200,
+      'cpu weekly completed': (r) => {
+        try {
+          const body = JSON.parse(r.body);
+          return body.status === 'success';
+        } catch (e) {
+          return false;
+        }
+      },
+    }) || errorRate.add(1);
+
+  } else if (requestType === 'memory') {
+    const sizeMb = getRequestParams('memory', pattern.intensity);
+    res = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+      tags: tags,
+      timeout: '25s',
+    });
+
+    memoryDuration.add(res.timings.duration);
+
+    check(res, {
+      'memory weekly status is 200': (r) => r.status === 200,
+      'memory weekly completed': (r) => {
+        try {
+          const body = JSON.parse(r.body);
+          return body.status === 'success';
+        } catch (e) {
+          return false;
+        }
+      },
+    }) || errorRate.add(1);
+
+  } else {
+    res = http.get(`${BASE_URL}/api`, {
+      tags: tags,
+      timeout: '8s',
+    });
+
+    basicDuration.add(res.timings.duration);
+
+    check(res, {
+      'basic weekly status is 200': (r) => r.status === 200,
+    }) || errorRate.add(1);
+  }
+
+  // Track requests per day
+  requestsPerDay.add(1, { day: dayOfWeek });
+
+  // Realistic sleep
+  const sleepTime = getSleepTime(dayOfWeek, timeOfDay, pattern.intensity);
+  sleep(sleepTime);
+}
+
+export function handleSummary(data) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
+  const timeHour = new Date().toISOString().replace(/[:.]/g, '-').split('T')[1].substring(0, 5);
+
+  return {
+    [`weekly-simulation-summary-${timestamp}-${timeHour}.json`]: JSON.stringify(data, null, 2),
+    stdout: textSummary(data, { indent: ' ', enableColors: true }),
+  };
+}
+
+function textSummary(data, options = {}) {
+  const indent = options.indent || '';
+
+  let summary = '\n' + indent + '📅 RL AUTOSCALER WEEKLY SIMULATION TEST - RESULTS\n';
+  summary += indent + '═══════════════════════════════════════════════════════\n\n';
+
+  // Test Configuration
+  summary += indent + '⚙️  TEST CONFIGURATION\n';
+  summary += indent + `   Duration Multiplier: ${DURATION_MULTIPLIER}x\n`;
+  summary += indent + `   Week Count: ${CYCLE_COUNT}\n`;
+  summary += indent + `   Base Pattern: 50 minutes → Actual: ${(50 * DURATION_MULTIPLIER).toFixed(1)} min per week\n`;
+  summary += indent + `   Total Planned Duration: ${(50 * DURATION_MULTIPLIER * CYCLE_COUNT / 60).toFixed(1)} hours (${(50 * DURATION_MULTIPLIER * CYCLE_COUNT / 60 / 24).toFixed(1)} days)\n\n`;
+
+  const duration = (data.state?.testRunDurationMs / 1000 / 60) || 0;
+  const totalRequests = data.metrics.http_reqs?.values.count || 0;
+  const failedRate = data.metrics.http_req_failed?.values.rate || 0;
+  const successRate = (1 - failedRate) * 100;
+
+  summary += indent + '⏱️  TEST OVERVIEW\n';
+  summary += indent + `   Duration: ${duration.toFixed(1)} minutes (${(duration/60).toFixed(1)} hours / ${(duration/60/24).toFixed(2)} days)\n`;
+  summary += indent + `   Approx per "day": ${(duration/7/CYCLE_COUNT).toFixed(1)} minutes\n`;
+  summary += indent + `   Total Requests: ${totalRequests.toLocaleString()}\n`;
+  summary += indent + `   Avg Req/sec: ${(totalRequests / (duration * 60)).toFixed(2)}\n`;
+  summary += indent + `   Success Rate: ${successRate.toFixed(2)}%\n\n`;
+
+  summary += indent + '📊 RESPONSE TIME METRICS\n';
+  summary += indent + `   Average: ${(data.metrics.http_req_duration?.values.avg || 0).toFixed(0)}ms\n`;
+  summary += indent + `   Median: ${(data.metrics.http_req_duration?.values.med || 0).toFixed(0)}ms\n`;
+  summary += indent + `   p90: ${(data.metrics.http_req_duration?.values['p(90)'] || 0).toFixed(0)}ms\n`;
+  summary += indent + `   p95: ${(data.metrics.http_req_duration?.values['p(95)'] || 0).toFixed(0)}ms\n`;
+  summary += indent + `   p99: ${(data.metrics.http_req_duration?.values['p(99)'] || 0).toFixed(0)}ms\n\n`;
+
+  summary += indent + '📈 ENDPOINT BREAKDOWN\n';
+
+  if (data.metrics.cpu_request_duration) {
+    summary += indent + `   CPU Endpoint:\n`;
+    summary += indent + `     Avg: ${(data.metrics.cpu_request_duration.values.avg || 0).toFixed(0)}ms\n`;
+    summary += indent + `     p95: ${(data.metrics.cpu_request_duration.values['p(95)'] || 0).toFixed(0)}ms\n`;
+  }
+
+  if (data.metrics.memory_request_duration) {
+    summary += indent + `   Memory Endpoint:\n`;
+    summary += indent + `     Avg: ${(data.metrics.memory_request_duration.values.avg || 0).toFixed(0)}ms\n`;
+    summary += indent + `     p95: ${(data.metrics.memory_request_duration.values['p(95)'] || 0).toFixed(0)}ms\n`;
+  }
+
+  if (data.metrics.basic_request_duration) {
+    summary += indent + `   Basic Endpoint:\n`;
+    summary += indent + `     Avg: ${(data.metrics.basic_request_duration.values.avg || 0).toFixed(0)}ms\n`;
+    summary += indent + `     p95: ${(data.metrics.basic_request_duration.values['p(95)'] || 0).toFixed(0)}ms\n`;
+  }
+  summary += '\n';
+
+  summary += indent + '📆 WEEKLY PATTERN COVERAGE\n';
+  summary += indent + '   Monday: Week start - gradual increase ✓\n';
+  summary += indent + '   Tuesday: Regular business day ✓\n';
+  summary += indent + '   Wednesday: Peak load day + spike events ✓\n';
+  summary += indent + '   Thursday: Post-peak decline ✓\n';
+  summary += indent + '   Friday: Week end - early decline ✓\n';
+  summary += indent + '   Saturday: Weekend - low activity ✓\n';
+  summary += indent + '   Sunday: Weekend - minimal activity ✓\n\n';
+
+  summary += indent + '🎯 DAILY TIME PATTERNS TESTED\n';
+  summary += indent + '   ✓ Night-time (minimal load)\n';
+  summary += indent + '   ✓ Early morning (gradual increase)\n';
+  summary += indent + '   ✓ Morning rush (login spike)\n';
+  summary += indent + '   ✓ Midday steady state\n';
+  summary += indent + '   ✓ Lunch dip\n';
+  summary += indent + '   ✓ Afternoon peak\n';
+  summary += indent + '   ✓ Evening decline\n';
+  summary += indent + '   ✓ Late evening wind-down\n\n';
+
+  summary += indent + '🧠 RL AGENT WEEKLY LEARNINGS\n';
+  summary += indent + '   • Different load patterns per day of week\n';
+  summary += indent + '   • Peak Wednesday - mid-week optimization\n';
+  summary += indent + '   • Weekend vs weekday resource allocation\n';
+  summary += indent + '   • Time-of-day prediction and preemptive scaling\n';
+  summary += indent + '   • Cost optimization during off-peak hours\n';
+  summary += indent + '   • Handling weekly recurring patterns\n\n';
+
+  summary += indent + '═══════════════════════════════════════════════════════\n';
+  summary += indent + '📚 Weekly pattern training data collected for RL agent\n';
+  summary += indent + '═══════════════════════════════════════════════════════\n\n';
+
+  return summary;
+}
