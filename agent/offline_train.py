@@ -225,7 +225,6 @@ def train(
             except Exception:
                 reward = 0.0
 
-            # Normalize done/terminated to a boolean. CSV may contain 'True'/'False' strings.
             if isinstance(done, str):
                 done_bool = done.strip().lower() in ("true", "1", "t", "yes")
             else:
