@@ -98,7 +98,7 @@ class KubernetesEnv:
 
         # Track time in current replica state for stability
         self.steps_at_current_replica = 0
-        self.max_steps_tracking = 20  # Normalize time_in_state to 0-1
+        self.max_steps_tracking = 20
 
         self.logger.info("Initialized KubernetesEnv environment")
         self.logger.info(f"Environment configuration: {self.__dict__}")

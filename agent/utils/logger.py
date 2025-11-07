@@ -178,12 +178,13 @@ def _safe_q_values(
     return None, None, None
 
 
-def log_verbose_details(
+def log_verbose_details(  # noqa: PLR0915
     observation: Dict[str, Any], agent: Any, verbose: bool, logger: Logger
 ) -> None:
     """
-    Compact, high-signal CLI log:
-    ─ Summary line (one-liner): CPU│Mem│RT│Act│Qmax│Best + tiny bars and colors
+    Compact, high-signal CLI log with 10D state representation:
+    ─ Line 1: CPU│Mem│RT│Replica%│Act│Qmax│Best + bars and colors
+    ─ Line 2: Deltas (CPU/Mem/RT trends) + Time-in-State + Scaling Direction
     ─ Optional details on unknown state / missing Q if helpful
     """
     if not verbose:
@@ -192,55 +193,122 @@ def log_verbose_details(
     # Pull metrics with sane defaults
     cpu = float(observation.get("cpu_usage", 0.0))  # %
     mem = float(observation.get("memory_usage", 0.0))  # %
-    # response_time in observation is normalized percentage (0-100)
-    # Get actual RT from env if available, otherwise denormalize
-    rt_percentage = float(observation.get("response_time", 0.0))  # percentage
-    # Try to get actual response time from environment's max_response_time
-    # If not available, show as percentage
-    act = observation.get("last_action", 0)  # 0-100 (your convention)
+    rt_percentage = float(observation.get("response_time", 0.0))  # percentage (0-100)
+    replica_pct = float(observation.get("current_replica_pct", 0.0))  # % of range
+    act = observation.get("last_action", 0)  # 0-99
     iter_no = observation.get("iteration")  # optional
+
+    # NEW: Delta metrics (trends)
+    cpu_delta = float(observation.get("cpu_delta", 0.0))
+    mem_delta = float(observation.get("memory_delta", 0.0))
+    rt_delta = float(observation.get("rt_delta", 0.0))
+
+    # NEW: Stability and direction
+    time_in_state = float(observation.get("time_in_state", 0.0))  # 0-1
+    scaling_direction = float(observation.get("scaling_direction", 0.5))  # 0/0.5/1
 
     # Bars and colors
     cpu_col = _color(cpu, warn=70, crit=90)  # higher is worse
     mem_col = _color(mem, warn=75, crit=90)  # higher is worse
-    # Color based on percentage (0-100), where >100 is critical
-    rt_col = _color(
-        rt_percentage, warn=80, crit=100, reverse=False
-    )  # higher percentage is worse
+    rt_col = _color(rt_percentage, warn=80, crit=100, reverse=False)
 
     cpu_bar = _bar(cpu)
     mem_bar = _bar(mem)
+    replica_bar = _bar(replica_pct)
 
     # Q-values (works for both Q and DQN if available)
     state_key = agent.get_state_key(observation)
     q_vals, qmax, best_idx = _safe_q_values(agent, state_key, logger)
 
     RESET = "\033[0m"
+    CYAN = "\033[36m"
+    BLUE = "\033[34m"
+
+    # === LINE 1: Core Metrics ===
     hdr = f"▶ Iter {iter_no:02d} " if isinstance(iter_no, int) else "▶ "
     cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
     mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-    # Show response time as percentage of SLA
     rt_str = f"{rt_col}RT {rt_percentage:6.1f}%{RESET}"
+    replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
     act_str = f"ACT {int(act):3d}"
 
     if qmax is not None and best_idx is not None:
         q_str = f"Qmax {qmax:+.3f}"
-        best_s = f"Best {best_idx + 1:3d}"
+        best_s = f"Best {best_idx:3d}"
     else:
-        q_str, best_s = "Qmax  n/a", "Best  n/a"
+        q_str, best_s = "Qmax  n/a", "Best n/a"
 
     logger.info(
-        f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | {act_str} | {q_str} | {best_s}"
+        f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
+        f"{replica_str} | {act_str} | {q_str} | {best_s}"
     )
 
+    # === LINE 1: Core Metrics ===
+    hdr = f"▶ Iter {iter_no:02d} " if isinstance(iter_no, int) else "▶ "
+    cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
+    mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
+    rt_str = f"{rt_col}RT {rt_percentage:6.1f}%{RESET}"
+    replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
+    act_str = f"ACT {int(act):3d}"
+
+    if qmax is not None and best_idx is not None:
+        q_str = f"Qmax {qmax:+.3f}"
+        best_s = f"Best {best_idx:3d}"
+    else:
+        q_str, best_s = "Qmax  n/a", "Best n/a"
+
+    logger.info(
+        f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
+        f"{replica_str} | {act_str} | {q_str} | {best_s}"
+    )
+
+    # === LINE 2: Deltas, Stability, Direction ===
+    # Color deltas: green if decreasing (good for CPU/Mem/RT), red if increasing
+    def _delta_color(delta: float) -> str:
+        """Green for negative (decreasing), red for positive (increasing)"""
+        if abs(delta) < 1.0:
+            return "\033[90m"  # Gray for near-zero
+        return "\033[32m" if delta < 0 else "\033[31m"  # Green/Red
+
+    cpu_d_col = _delta_color(cpu_delta)
+    mem_d_col = _delta_color(mem_delta)
+    rt_d_col = _delta_color(rt_delta)
+
+    cpu_d_str = f"{cpu_d_col}ΔCPU {cpu_delta:+6.1f}{RESET}"
+    mem_d_str = f"{mem_d_col}ΔMEM {mem_delta:+6.1f}{RESET}"
+    rt_d_str = f"{rt_d_col}ΔRT {rt_delta:+6.1f}{RESET}"
+
+    # Time in state: show as percentage with simple indicator
+    time_pct = time_in_state * 100.0
+    time_str = f"{BLUE}Time {time_pct:5.1f}%{RESET}"
+
+    # Scaling direction: visual indicator
+    SCALE_UP_THRESHOLD = 0.6
+    SCALE_DOWN_THRESHOLD = 0.4
+
+    if scaling_direction > SCALE_UP_THRESHOLD:
+        dir_symbol = "↑"
+        dir_color = "\033[32m"  # Green
+        dir_text = "UP"
+    elif scaling_direction < SCALE_DOWN_THRESHOLD:
+        dir_symbol = "↓"
+        dir_color = "\033[33m"  # Yellow
+        dir_text = "DN"
+    else:
+        dir_symbol = "="
+        dir_color = "\033[90m"  # Gray
+        dir_text = "=="
+
+    dir_str = f"{dir_color}{dir_symbol}{dir_text}{RESET}"
+
+    logger.info(
+        f"     | {cpu_d_str} | {mem_d_str} | {rt_d_str} | "
+        f"{time_str} | Dir {dir_str}"
+    )
+
+    # === DEBUG: Q-values ===
     if q_vals is None:
         logger.debug("  (state unseen or DQN/Torch unavailable; skipping Q table dump)")
     else:
-        # Show only when debugging at very high verbosity:
-
-        # logger.debug(
-        # f"  Q-values (first 8): {
-        # np.array2string(q_vals[:8], precision=3, separator=', ')
-        # }"
-        # )
+        # Show only when debugging at very high verbosity
         pass

@@ -130,12 +130,39 @@ def build_row(
     next_action = round(next_desired_pct * 99.0)
     next_action = max(0, min(99, next_action))
 
+    # Calculate current replica percentage
+    current_replica_pct = (replica - min_replicas) / range_replicas * 100.0
+    next_replica_pct = (next_replica - min_replicas) / range_replicas * 100.0
+
+    # Calculate deltas (change from current to next)
+    cpu_delta = next_cpu - cpu
+    mem_delta = next_mem - mem
+    resp_pct_current = (resp / max_response_time) * 100.0
+    resp_pct_next = (next_resp / max_response_time) * 100.0
+    rt_delta = resp_pct_next - resp_pct_current
+
+    # Calculate scaling direction (0=down, 0.5=same, 1=up)
+    if next_replica > replica:
+        scaling_direction = 1.0
+    elif next_replica < replica:
+        scaling_direction = 0.0
+    else:
+        scaling_direction = 0.5
+
+    # Time in state (normalized, simulate staying at replica for a few steps)
+    time_in_state = random.uniform(0.0, 1.0)
+
     next_state = {
         "cpu_usage": round(float(next_cpu), 2),
         "memory_usage": round(float(next_mem), 2),
         "response_time": round((float(next_resp) / max_response_time) * 100.0, 2),
-        # last_action inside next_state should be the discrete action (0-99)
+        "current_replica_pct": round(next_replica_pct, 2),
         "last_action": int(next_action),
+        "cpu_delta": round(cpu_delta, 2),
+        "memory_delta": round(mem_delta, 2),
+        "rt_delta": round(rt_delta, 2),
+        "time_in_state": round(time_in_state, 4),
+        "scaling_direction": scaling_direction,
     }
 
     # Map current replica count to discrete last_action (0-99) so offline
@@ -148,10 +175,16 @@ def build_row(
         "cpu_usage": f"{cpu_pct:.2f}",
         "memory_usage": f"{mem_pct:.2f}",
         "response_time": f"{resp_pct:.2f}",
+        "current_replica_pct": f"{current_replica_pct:.2f}",
         # `replica` column intentionally stores the agent-facing last_action (0-99)
         "replica": str(int(last_action_for_current)),
         # keep actual replica count available for clarity
         "replica_count": str(int(replica)),
+        "cpu_delta": f"{cpu_delta:.2f}",
+        "memory_delta": f"{mem_delta:.2f}",
+        "rt_delta": f"{rt_delta:.2f}",
+        "time_in_state": f"{time_in_state:.4f}",
+        "scaling_direction": f"{scaling_direction:.1f}",
         "action_pct": f"{desired_pct:.4f}",
         "action": str(int(action)),
         "reward": f"{reward:.4f}",
@@ -183,10 +216,16 @@ def generate(
         "cpu_usage",
         "memory_usage",
         "response_time",
+        "current_replica_pct",
         # `replica` column stores the last_action (discrete 0-99) used by the agent
         "replica",
         # actual replica count for clarity
         "replica_count",
+        "cpu_delta",
+        "memory_delta",
+        "rt_delta",
+        "time_in_state",
+        "scaling_direction",
         # action as discrete 0-99 is already in `action`; action_pct is 0.0-1.0
         "action_pct",
         "action",
