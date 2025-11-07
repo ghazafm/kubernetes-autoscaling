@@ -105,9 +105,30 @@ else
     echo -e "${YELLOW}   Prometheus Operator not installed, skipping ServiceMonitor deployment${NC}"
 fi
 
-# Deploy application
+# Deploy ConfigMap first
+print_section "Deploying ConfigMap..."
+if [ -f configmap.yaml ]; then
+    if kubectl apply -f configmap.yaml; then
+        print_success "ConfigMap deployed"
+    else
+        print_error "Failed to deploy ConfigMap"
+        exit 1
+    fi
+else
+    echo -e "${YELLOW}   configmap.yaml not found, using inline environment variables${NC}"
+fi
+
+# Deploy application (use deployment.yaml if exists, fallback to app.yaml)
 print_section "Deploying application to Kubernetes..."
-if kubectl apply -f app.yaml; then
+if [ -f deployment.yaml ]; then
+    DEPLOY_FILE="deployment.yaml"
+    echo "   Using $DEPLOY_FILE (with ConfigMap support)"
+else
+    DEPLOY_FILE="app.yaml"
+    echo "   Using $DEPLOY_FILE (with inline environment variables)"
+fi
+
+if kubectl apply -f $DEPLOY_FILE; then
     print_success "Application deployed"
 else
     print_error "Failed to deploy application"
@@ -208,12 +229,21 @@ echo -e "${GREEN}Next Steps:${NC}"
 echo "1. Test the application:"
 echo "   kubectl port-forward svc/$APP_NAME 5000:5000"
 echo "   curl http://localhost:5000/api"
+echo "   curl http://localhost:5000/health"
 echo ""
-echo "2. Deploy HPA (after metrics are available):"
+echo "2. Check metrics:"
+echo "   kubectl port-forward svc/$APP_NAME 8000:8000"
+echo "   curl http://localhost:8000/metrics"
+echo ""
+echo "3. Update configuration:"
+echo "   kubectl edit configmap flask-app-config"
+echo "   kubectl rollout restart deployment/$APP_NAME"
+echo ""
+echo "4. Deploy HPA (after metrics are available):"
 echo "   kubectl apply -f hpa.yaml"
 echo "   kubectl get hpa -w"
 echo ""
-echo "3. Run load tests:"
+echo "5. Run load tests:"
 echo "   cd ../test"
 echo "   ./run-k6.sh"
 echo ""
@@ -221,5 +251,6 @@ echo -e "${YELLOW}Useful Commands:${NC}"
 echo "   kubectl get pods -l app=$APP_NAME -w    # Watch pods"
 echo "   kubectl logs -l app=$APP_NAME -f        # Follow logs"
 echo "   kubectl top pods -l app=$APP_NAME       # Resource usage"
-echo "   kubectl delete -f app.yaml              # Delete deployment"
+echo "   kubectl get configmap flask-app-config  # View config"
+echo "   kubectl delete -f deployment.yaml       # Delete deployment"
 echo ""

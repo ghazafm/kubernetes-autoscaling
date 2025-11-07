@@ -1,38 +1,29 @@
 import hashlib
 import math
+import os
 import time
 
 from flask import Flask, jsonify, request
-from prometheus_client import Counter, Histogram, start_http_server
+from rl_autoscale import enable_metrics
 
 app = Flask(__name__)
 
-REQUEST_LATENCY = Histogram(
-    "http_request_duration_seconds",
-    "Request latency in seconds",
-    ["method", "path"],
-)
-REQUEST_COUNT = Counter(
-    "http_requests_total", "Total requests", ["method", "path", "http_status"]
-)
+# Configuration from environment variables
+METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
+APP_HOST = os.environ.get("APP_HOST", "0.0.0.0")
+APP_PORT = int(os.environ.get("APP_PORT", "5000"))
+DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
+DEFAULT_SLEEP_TIME = float(os.environ.get("DEFAULT_SLEEP_TIME", "0.3"))
+MAX_MEMORY_MB = int(os.environ.get("MAX_MEMORY_MB", "100"))
 
-
-@app.before_request
-def before_request():
-    request.start_time = time.time()
-
-
-@app.after_request
-def after_request(response):
-    latency = time.time() - request.start_time
-    REQUEST_LATENCY.labels(request.method, request.path).observe(latency)
-    REQUEST_COUNT.labels(request.method, request.path, response.status_code).inc()
-    return response
+# Enable RL autoscaling metrics
+enable_metrics(app, port=METRICS_PORT)
 
 
 @app.route("/api")
 def hello():
-    time.sleep(0.3)
+    """Basic API endpoint."""
+    time.sleep(DEFAULT_SLEEP_TIME)
     return "Hello!"
 
 
@@ -44,13 +35,10 @@ def cpu_intensive():
     """
     iterations = request.args.get("iterations", default=1000000, type=int)
 
-    # Perform CPU-intensive operations
     result = 0
     for i in range(iterations):
-        # Complex mathematical operations
         result += math.sqrt(i) * math.sin(i) * math.cos(i)
         if i % 10000 == 0:
-            # Add some hash computation
             hashlib.sha256(str(i).encode()).hexdigest()
 
     return jsonify(
@@ -71,23 +59,17 @@ def memory_intensive():
     """
     size_mb = request.args.get("size_mb", default=50, type=int)
 
-    # Cap maximum allocation to prevent OOMKill
-    size_mb = min(size_mb, 100)  # Maximum 100MB per request
+    # Cap maximum allocation based on environment config
+    size_mb = min(size_mb, MAX_MEMORY_MB)
 
-    # Allocate memory - create a large list
-    # Each element is approximately 8 bytes (integer), so we calculate elements needed
     elements = (size_mb * 1024 * 1024) // 8
 
-    # Create large data structures
     large_list = list(range(elements))
 
-    # Create some additional data structures to increase memory usage
     large_dict = {i: f"value_{i}" * 10 for i in range(min(elements // 100, 10000))}
 
-    # Calculate some statistics to ensure the data is used
-    total = sum(large_list[::1000])  # Sample every 1000th element to avoid timeout
+    total = sum(large_list[::1000])
 
-    # Force garbage collection to release memory faster
     del large_list
     del large_dict
 
@@ -101,6 +83,20 @@ def memory_intensive():
     )
 
 
+@app.route("/health")
+def health():
+    """Health check endpoint for Kubernetes probes."""
+    return jsonify({"status": "healthy", "service": "flask-app"}), 200
+
+
+@app.route("/ready")
+def ready():
+    """Readiness probe endpoint for Kubernetes."""
+    return jsonify({"status": "ready"}), 200
+
+
 if __name__ == "__main__":
-    start_http_server(8000)  # expose metrics on :8000
-    app.run(host="0.0.0.0", port=5000)  # noqa: S104
+    print(f"🚀 Starting Flask app on {APP_HOST}:{APP_PORT}")
+    print(f"📊 Metrics available on port {METRICS_PORT}")
+    print(f"🐛 Debug mode: {DEBUG_MODE}")
+    app.run(host=APP_HOST, port=APP_PORT, debug=DEBUG_MODE)

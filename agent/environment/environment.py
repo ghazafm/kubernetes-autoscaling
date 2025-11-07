@@ -254,10 +254,10 @@ class KubernetesEnv:
         )
 
     def _calculate_reward(self) -> float:
-        # membuat jadi percentage, agar applicable di semua skala SLA
+        # Convert response time to percentage for scale-independent SLA
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
 
-        # Penalti biner: 0 jika dalam batas, 1 jika di luar
+        # CPU penalty: binary (0 if within bounds, scaled penalty if outside)
         if self.cpu_usage < self.min_cpu:
             cpu_pen = (self.min_cpu - self.cpu_usage) / self.min_cpu
         elif self.cpu_usage > self.max_cpu:
@@ -265,6 +265,7 @@ class KubernetesEnv:
         else:
             cpu_pen = 0.0
 
+        # Memory penalty: binary (0 if within bounds, scaled penalty if outside)
         if self.memory_usage < self.min_memory:
             mem_pen = (self.min_memory - self.memory_usage) / self.min_memory
         elif self.memory_usage > self.max_memory:
@@ -272,26 +273,33 @@ class KubernetesEnv:
         else:
             mem_pen = 0.0
 
-        # Response time penalty only if exceeding 100% of SLA, normalized to ~0..1
-        # 0-100% = no penalty, >100% = increasing penalty
-        resp_pen = min(
-            self.response_time_weight,
-            max(0.0, (response_time_percentage - 100.0) / 100.0),
-        )  # Cap penalty at 1.0 for stability
-        # max() ensures no negative penalty when response_time < 100% SLA (ReLU-like)
+        RESPONSE_TIME_HIGH_THRESHOLD = 80.0
+        RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
 
+        if response_time_percentage < RESPONSE_TIME_HIGH_THRESHOLD:
+            resp_pen = 0.0
+        elif response_time_percentage < RESPONSE_TIME_VIOLATION_THRESHOLD:
+            resp_pen = 0.2 * ((response_time_percentage - 80.0) / 20.0)
+        else:
+            overage = (response_time_percentage - 100.0) / 100.0
+            resp_pen = min(
+                self.response_time_weight,
+                self.response_time_weight * (1.0 - (1.0 / (1.0 + overage))),
+            )
+
+        # Combined resource penalties
         cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
 
+        # Cost penalty: linear based on replica count
         cost_pen = (
             self.cost_weight
             * (self.replica_state - self.min_replicas)
             / self.range_replicas
         )
 
-        # Reward sederhana: mulai dari 1, kurangi penalti
         reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen
 
-        # Clamp agar stabil
+        # Clamp for stability
         return float(max(min(reward, 1.0), -1.0))
 
     def _scale_and_get_metrics(self) -> None:
