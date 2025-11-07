@@ -100,73 +100,80 @@ class DQN(Q):
     ) -> None:
         """Update Q-table using Q-learning algorithm and DQN if enabled"""
 
-        state_key = self.get_state_key(observation)
-        next_state_key = self.get_state_key(next_observation)
+        try:
+            state_key = self.get_state_key(observation)
+            next_state_key = self.get_state_key(next_observation)
 
-        done = bool(next_observation.get("terminated", False))
+            done = bool(next_observation.get("terminated", False))
 
-        # simpan pengalaman
-        self.replay_buffer.push(
-            state_key, int(action), float(reward), next_state_key, float(done)
-        )
+            # simpan pengalaman
+            self.replay_buffer.push(
+                state_key, int(action), float(reward), next_state_key, float(done)
+            )
 
-        if self.epsilon_decay and self.epsilon > self.epsilon_min:
-            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+            if self.epsilon_decay and self.epsilon > self.epsilon_min:
+                self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
-        self.train_step += 1
+            self.train_step += 1
 
-        self.logger.debug(
-            f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
-            f"Train step: {self.train_step}, "
-            f"Epsilon: {self.epsilon:.4f}"
-        )
+            self.logger.debug(
+                f"Buffer: {len(self.replay_buffer)}/{self.batch_size}, "
+                f"Train step: {self.train_step}, "
+                f"Epsilon: {self.epsilon:.4f}"
+            )
 
-        if len(self.replay_buffer) < self.batch_size:
+            if len(self.replay_buffer) < self.batch_size:
+                if self.train_step % self.target_update_freq == 0:
+                    self.target_net.load_state_dict(self.policy_net.state_dict())
+                    self.logger.debug(
+                        f"Target network updated at step {self.train_step} (buffer not "
+                        "ready for learning)"
+                    )
+                return
+
+            states, actions, rewards, next_states, dones = self.replay_buffer.sample(
+                self.batch_size
+            )
+            states = states.to(self.device)
+            actions = actions.to(self.device)
+            rewards = rewards.to(self.device)
+            next_states = next_states.to(self.device)
+            dones = dones.to(self.device)
+
+            # Q(s,a)
+            q_values = self.policy_net(states)  # [B, A]
+            q_sa = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # [B]
+
+            # target: r + gamma * max_a' Q_target(s',a') * (1 - done)
+            with torch.no_grad():
+                q_next = self.target_net(next_states)  # [B, A]
+                max_q_next, _ = torch.max(q_next, dim=1)  # [B]
+                target = rewards + (1.0 - dones) * self.discount_factor * max_q_next
+
+            # Huber loss lebih stabil
+            loss = F.smooth_l1_loss(q_sa, target)
+
+            # step
+            self.optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                self.policy_net.parameters(), self.grad_clip_norm
+            )
+            self.optimizer.step()
+
             if self.train_step % self.target_update_freq == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
                 self.logger.debug(
-                    f"Target network updated at step {self.train_step} (buffer not "
-                    "ready for learning)"
+                    f"Target network updated at step {self.train_step} (after learning)"
                 )
-            return
 
-        states, actions, rewards, next_states, dones = self.replay_buffer.sample(
-            self.batch_size
-        )
-        states = states.to(self.device)
-        actions = actions.to(self.device)
-        rewards = rewards.to(self.device)
-        next_states = next_states.to(self.device)
-        dones = dones.to(self.device)
-
-        # Q(s,a)
-        q_values = self.policy_net(states)  # [B, A]
-        q_sa = q_values.gather(1, actions.unsqueeze(1)).squeeze(1)  # [B]
-
-        # target: r + gamma * max_a' Q_target(s',a') * (1 - done)
-        with torch.no_grad():
-            q_next = self.target_net(next_states)  # [B, A]
-            max_q_next, _ = torch.max(q_next, dim=1)  # [B]
-            target = rewards + (1.0 - dones) * self.discount_factor * max_q_next
-
-        # Huber loss lebih stabil
-        loss = F.smooth_l1_loss(q_sa, target)
-
-        # step
-        self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(
-            self.policy_net.parameters(), self.grad_clip_norm
-        )
-        self.optimizer.step()
-
-        if self.train_step % self.target_update_freq == 0:
-            self.target_net.load_state_dict(self.policy_net.state_dict())
-            self.logger.debug(
-                f"Target network updated at step {self.train_step} (after learning)"
+        except Exception as e:
+            self.logger.error(
+                f"Error during DQN update (step {self.train_step}): {e}. "
+                "Skipping this update to prevent training crash."
             )
-
-        return
+            # Continue training even if one update fails
+            return
 
     def save_model(self, filepath: str, episode_count: int = 0) -> None:
         """Save DQN model and parameters to file"""

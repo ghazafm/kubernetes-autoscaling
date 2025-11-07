@@ -310,7 +310,7 @@ def _scrape_metrics(
     )
 
 
-def get_metrics(
+def get_metrics(  # noqa: PLR0912, PLR0915
     replicas: int,
     timeout: int,
     namespace: str,
@@ -406,6 +406,16 @@ def get_metrics(
                 time.sleep(1)
                 continue
 
+            # Verify data consistency BEFORE checking collection count
+            if len(cpu_percentages) != len(memory_percentages):
+                logger.error(
+                    f"Mismatch: {len(cpu_percentages)} CPU entries vs "
+                    f"{len(memory_percentages)} Memory entries. "
+                    f"This indicates inconsistent pod states. Retrying..."
+                )
+                time.sleep(2)
+                continue
+
             if collected == replicas:
                 cpu_mean = float(np.mean(cpu_percentages)) if cpu_percentages else 0.0
                 mem_mean = (
@@ -417,13 +427,6 @@ def get_metrics(
                 if not memory_percentages:
                     logger.warning("No valid Memory percentages calculated.")
 
-                # Verify data consistency
-                if len(cpu_percentages) != len(memory_percentages):
-                    logger.error(
-                        f"Mismatch: {len(cpu_percentages)} CPU entries vs "
-                        f"{len(memory_percentages)} Memory entries"
-                    )
-
                 logger.debug(
                     f"Metrics collected from {collected} pods: \n"
                     f"CPU usage mean {cpu_mean:.3f}%, \n"
@@ -431,6 +434,25 @@ def get_metrics(
                     f"Response time {response_time:.3f} ms"
                 )
                 return cpu_mean, mem_mean, response_time, collected
+
+            # If we collected most pods (e.g., 90%+), use partial data with warning
+            METRICS_COMPLETENESS_THRESHOLD = 0.9
+            completeness_ratio = collected / replicas if replicas > 0 else 0
+            if completeness_ratio >= METRICS_COMPLETENESS_THRESHOLD and len(
+                cpu_percentages
+            ) == len(memory_percentages):
+                cpu_mean = float(np.mean(cpu_percentages)) if cpu_percentages else 0.0
+                mem_mean = (
+                    float(np.mean(memory_percentages)) if memory_percentages else 0.0
+                )
+
+                logger.warning(
+                    f"Using partial metrics from {collected}/{replicas} pods "
+                    f"({completeness_ratio * 100:.1f}% complete). "
+                    f"CPU={cpu_mean:.2f}%, MEM={mem_mean:.2f}%"
+                )
+                return cpu_mean, mem_mean, response_time, collected
+
             logger.warning(
                 f"Only collected metrics from {collected} pods, expected {replicas}"
             )
@@ -448,9 +470,10 @@ def get_metrics(
         last_cpu, last_mem, last_rt, last_replicas = last_known_metrics
 
         # If pods crashed (replica count decreased), scale up utilization proportionally
-        # This prevents cascading failures where crash → timeout → agent doesn't scale up
+        # This prevents cascading failures where crash → timeout → agent doesn't scaleup
         if last_replicas > replicas:
-            # Calculate scale factor: if 7 pods → 4 pods, factor = 7/4 = 1.75x load per pod
+            # Calculate scale factor: if 7 pods → 4 pods, factor = 7/4 = 1.75x load
+            # per pod
             scale_factor = last_replicas / replicas
             adjusted_cpu = min(last_cpu * scale_factor, 100.0)
             adjusted_mem = min(last_mem * scale_factor, 100.0)

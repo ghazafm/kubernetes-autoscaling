@@ -102,47 +102,107 @@ class Trainer:
         if self._old_sigterm is not None:
             signal.signal(signal.SIGTERM, self._old_sigterm)
 
-    def train(self, episodes: int, note: str, start_time: int) -> None:
+    def train(self, episodes: int, note: str, start_time: int) -> None:  # noqa: PLR0915
         self.savecfg = SaveConfig(note=note, start_time=start_time)
         self._install_signal_handlers()
         try:
             total_best = float("-inf")
+            consecutive_errors = 0
+            max_consecutive_errors = 5
+
             for ep in range(episodes):
-                self.agent.add_episode_count()
-                self.logger.info(f"\nEpisode {ep + 1}/{episodes}")
-                self.logger.info(
-                    f"Total episodes trained: {self.agent.episodes_trained}"
-                )
-
-                obs = self.env.reset()
-                total = 0.0
-                while True:
-                    act = self.agent.get_action(obs)
-                    nxt, rew, term, info = self.env.step(act)
-                    self.agent.update_q_table(obs, act, rew, nxt)
-                    total += rew
-                    obs = nxt
+                try:
+                    self.agent.add_episode_count()
+                    self.logger.info(f"\nEpisode {ep + 1}/{episodes}")
                     self.logger.info(
-                        f"Action: {act}, Reward: {rew}, Total: {total} | "
-                        f"Iteration: {info['iteration']}"
+                        f"Total episodes trained: {self.agent.episodes_trained}"
                     )
 
-                    self.logger.debug(f"Observation type: {type(obs)}, value: {obs}")
+                    obs = self.env.reset()
+                    total = 0.0
+                    iteration_errors = 0
+                    max_iteration_errors = 10
 
-                    log_verbose_details(
-                        observation=obs,
-                        agent=self.agent,
-                        verbose=True,
-                        logger=self.logger,
+                    while True:
+                        try:
+                            act = self.agent.get_action(obs)
+                            nxt, rew, term, info = self.env.step(act)
+                            self.agent.update_q_table(obs, act, rew, nxt)
+                            total += rew
+                            obs = nxt
+
+                            # Reset error counter on successful iteration
+                            iteration_errors = 0
+                            consecutive_errors = 0
+
+                            self.logger.info(
+                                f"Action: {act}, Reward: {rew}, Total: {total} | "
+                                f"Iteration: {info['iteration']}"
+                            )
+
+                            self.logger.debug(
+                                f"Observation type: {type(obs)}, value: {obs}"
+                            )
+
+                            log_verbose_details(
+                                observation=obs,
+                                agent=self.agent,
+                                verbose=True,
+                                logger=self.logger,
+                            )
+
+                            if term:
+                                break
+
+                        except Exception as e:
+                            iteration_errors += 1
+                            self.logger.error(
+                                f"Error in iteration (episode {ep + 1}): {e}. "
+                                f"Attempt {iteration_errors}/{max_iteration_errors}"
+                            )
+
+                            if iteration_errors >= max_iteration_errors:
+                                self.logger.error(
+                                    f"Too many iteration errors ({iteration_errors}). "
+                                    "Ending episode early."
+                                )
+                                break
+
+                            # Wait before retry
+                            time.sleep(5)
+                            continue
+
+                    self.logger.info(
+                        f"Episode {ep + 1} completed. Total reward: {total}"
                     )
 
-                    if term:
+                    if total > total_best:
+                        total_best = total
+                        self._save_checkpoint(ep, total_best, note, start_time)
+
+                except Exception as e:
+                    consecutive_errors += 1
+                    self.logger.error(
+                        f"Error in episode {ep + 1}: {e}. "
+                        f"Consecutive errors: {consecutive_errors}/"
+                        f"{max_consecutive_errors}"
+                    )
+
+                    # Save emergency checkpoint
+                    self._interrupted_save()
+
+                    if consecutive_errors >= max_consecutive_errors:
+                        self.logger.error(
+                            f"Too many consecutive episode errors "
+                            f"({consecutive_errors}). "
+                            "Stopping training to prevent further issues."
+                        )
                         break
 
-                self.logger.info(f"Episode {ep + 1} completed. Total reward: {total}")
-                if total > total_best:
-                    total_best = total
-                    self._save_checkpoint(ep, total_best, note, start_time)
+                    # Wait before next episode
+                    self.logger.info("Waiting 30s before retrying next episode...")
+                    time.sleep(30)
+                    continue
 
         except KeyboardInterrupt:
             self.logger.warning("Interrupted by user. Attempting to save...")

@@ -17,11 +17,38 @@ from utils import (
 
 load_dotenv()
 
+
+def find_latest_checkpoint(model_dir: Path) -> Path | None:
+    """Find the most recent checkpoint in the model directory."""
+    if not model_dir.exists():
+        return None
+
+    checkpoints = list(model_dir.glob("**/*.pth")) + list(model_dir.glob("**/*.pkl"))
+    if not checkpoints:
+        return None
+
+    # Sort by modification time
+    checkpoints.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return checkpoints[0]
+
+
 if __name__ == "__main__":
+    # Configuration
+    max_training_retries = int(os.getenv("MAX_TRAINING_RETRIES", "3"))
+    auto_resume = ast.literal_eval(os.getenv("AUTO_RESUME", "True"))
+
     start_time = int(time.time())
     logger = setup_logger(
         "kubernetes_agent", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
     )
+
+    logger.info("=" * 80)
+    logger.info("KUBERNETES AUTOSCALING RL TRAINING")
+    logger.info(f"Training Start Time: {start_time}")
+    logger.info(f"Auto-resume enabled: {auto_resume}")
+    logger.info(f"Max retries on failure: {max_training_retries}")
+    logger.info("=" * 80)
+
     Influxdb = InfluxDB(
         logger=logger,
         url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
@@ -65,72 +92,140 @@ if __name__ == "__main__":
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()
-    if choose_algorithm == "Q":
-        algorithm = Q(
-            learning_rate=float(os.getenv("LEARNING_RATE", None)),
-            discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
-            epsilon_start=float(os.getenv("EPSILON_START", None)),
-            epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
-            epsilon_min=float(os.getenv("EPSILON_MIN", None)),
-            created_at=start_time,
-            logger=logger,
-        )
-    elif choose_algorithm == "DQN":
-        algorithm = DQN(
-            learning_rate=float(os.getenv("LEARNING_RATE", None)),
-            discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
-            epsilon_start=float(os.getenv("EPSILON_START", None)),
-            epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
-            epsilon_min=float(os.getenv("EPSILON_MIN", None)),
-            device=os.getenv("DEVICE", None),
-            buffer_size=int(os.getenv("BUFFER_SIZE", None)),
-            batch_size=int(os.getenv("BATCH_SIZE", None)),
-            target_update_freq=int(os.getenv("TARGET_UPDATE_FREQ", None)),
-            grad_clip_norm=float(os.getenv("GRAD_CLIP_NORM", None)),
-            created_at=start_time,
-            logger=logger,
-        )
-    else:
-        raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
-
     note = os.getenv("NOTE", "default")
 
-    trainer = Trainer(
-        agent=algorithm,
-        env=env,
-        logger=logger,
-        resume=ast.literal_eval(os.getenv("RESUME", "False")),
-        resume_path=os.getenv("RESUME_PATH", ""),
-        reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
-        change_epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
-    )
+    # Check for existing checkpoints if auto-resume is enabled
+    resume_from_checkpoint = ast.literal_eval(os.getenv("RESUME", "False"))
+    resume_path = os.getenv("RESUME_PATH", "")
 
-    trainer.train(
-        episodes=int(os.getenv("EPISODES", None)),
-        note=note,
-        start_time=start_time,
-    )
+    if auto_resume and not resume_from_checkpoint:
+        model_dir = Path(f"model/{choose_algorithm.lower()}")
+        latest_checkpoint = find_latest_checkpoint(model_dir)
+        if latest_checkpoint:
+            resume_from_checkpoint = True
+            resume_path = str(latest_checkpoint)
+            logger.info(f"🔄 Auto-resume: Found checkpoint at {resume_path}")
 
-    if hasattr(trainer.agent, "q_table"):
-        logger.info(f"\nQ-table size: {len(trainer.agent.q_table)} states")
-        logger.info("Sample Q-values:")
-        for _, (state, q_values) in enumerate(list(trainer.agent.q_table.items())[:5]):
-            max_q = np.max(q_values)
-            best_action = np.argmax(q_values)
-            logger.info(
-                f"State {state}: Best action = {best_action}, Max Q-value = {max_q:.3f}"
+    # Training loop with retry mechanism
+    training_attempt = 0
+    training_successful = False
+
+    while training_attempt < max_training_retries and not training_successful:
+        training_attempt += 1
+
+        if training_attempt > 1:
+            logger.info(f"\n{'=' * 80}")
+            logger.info(f"RETRY ATTEMPT {training_attempt}/{max_training_retries}")
+            logger.info(f"{'=' * 80}\n")
+
+            # Re-check for checkpoints after failed attempt
+            if auto_resume:
+                model_dir = Path(f"model/{choose_algorithm.lower()}")
+                latest_checkpoint = find_latest_checkpoint(model_dir)
+                if latest_checkpoint:
+                    resume_from_checkpoint = True
+                    resume_path = str(latest_checkpoint)
+                    logger.info(f"🔄 Resuming from: {resume_path}")
+
+        try:
+            # Initialize agent
+            if choose_algorithm == "Q":
+                algorithm = Q(
+                    learning_rate=float(os.getenv("LEARNING_RATE", None)),
+                    discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
+                    epsilon_start=float(os.getenv("EPSILON_START", None)),
+                    epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
+                    epsilon_min=float(os.getenv("EPSILON_MIN", None)),
+                    created_at=start_time,
+                    logger=logger,
+                )
+            elif choose_algorithm == "DQN":
+                algorithm = DQN(
+                    learning_rate=float(os.getenv("LEARNING_RATE", None)),
+                    discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
+                    epsilon_start=float(os.getenv("EPSILON_START", None)),
+                    epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
+                    epsilon_min=float(os.getenv("EPSILON_MIN", None)),
+                    device=os.getenv("DEVICE", None),
+                    buffer_size=int(os.getenv("BUFFER_SIZE", None)),
+                    batch_size=int(os.getenv("BATCH_SIZE", None)),
+                    target_update_freq=int(os.getenv("TARGET_UPDATE_FREQ", None)),
+                    grad_clip_norm=float(os.getenv("GRAD_CLIP_NORM", None)),
+                    created_at=start_time,
+                    logger=logger,
+                )
+            else:
+                raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
+
+            trainer = Trainer(
+                agent=algorithm,
+                env=env,
+                logger=logger,
+                resume=resume_from_checkpoint,
+                resume_path=resume_path,
+                reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
+                change_epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
             )
-    else:
-        logger.info("\nDQN model trained (no Q-table to display)")
 
-    model_type = "dqn" if trainer.agent.agent_type.upper() == "DQN" else "qlearning"
-    model_dir = Path(f"model/{model_type}/{start_time}_{note}/final")
-    model_dir.mkdir(parents=True, exist_ok=True)
+            # Start training
+            logger.info("🚀 Starting training...")
+            trainer.train(
+                episodes=int(os.getenv("EPISODES", None)),
+                note=note,
+                start_time=start_time,
+            )
 
-    timestamp = int(time.time())
-    if trainer.agent.agent_type.upper() == "DQN":
-        model_file = model_dir / f"dqn_{timestamp}.pth"
-    else:
-        model_file = model_dir / f"qlearning_{timestamp}.pkl"
+            training_successful = True
+            logger.info("✅ Training completed successfully!")
 
-    trainer.agent.save_model(str(model_file), trainer.agent.episodes_trained)
+        except KeyboardInterrupt:
+            logger.warning("⚠️  Training interrupted by user.")
+            raise
+
+        except Exception as e:
+            logger.error(
+                f"❌ Training failed on attempt {training_attempt}/"
+                f"{max_training_retries}"
+            )
+            logger.error(f"Error: {type(e).__name__}: {e}")
+
+            if training_attempt < max_training_retries:
+                wait_time = min(60 * training_attempt, 300)  # Max 5 minutes
+                logger.info(f"⏳ Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+            else:
+                logger.error(f"❌ All {max_training_retries} attempts failed.")
+                raise
+
+    # Training completed - save final model and display stats
+    if training_successful and hasattr(trainer, "agent"):
+        if hasattr(trainer.agent, "q_table"):
+            logger.info(f"\nQ-table size: {len(trainer.agent.q_table)} states")
+            logger.info("Sample Q-values:")
+            for _, (state, q_values) in enumerate(
+                list(trainer.agent.q_table.items())[:5]
+            ):
+                max_q = np.max(q_values)
+                best_action = np.argmax(q_values)
+                logger.info(
+                    f"State {state}: Best action = {best_action}, "
+                    f"Max Q-value = {max_q:.3f}"
+                )
+        else:
+            logger.info("\nDQN model trained (no Q-table to display)")
+
+        model_type = "dqn" if trainer.agent.agent_type.upper() == "DQN" else "qlearning"
+        model_dir = Path(f"model/{model_type}/{start_time}_{note}/final")
+        model_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = int(time.time())
+        if trainer.agent.agent_type.upper() == "DQN":
+            model_file = model_dir / f"dqn_{timestamp}.pth"
+        else:
+            model_file = model_dir / f"qlearning_{timestamp}.pkl"
+
+        trainer.agent.save_model(str(model_file), trainer.agent.episodes_trained)
+        logger.info(f"✅ Final model saved to: {model_file}")
+        logger.info("=" * 80)
+        logger.info("TRAINING SESSION COMPLETE")
+        logger.info("=" * 80)
