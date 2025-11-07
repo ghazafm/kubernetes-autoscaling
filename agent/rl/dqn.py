@@ -116,12 +116,16 @@ class DQN(Q):
         if np.random.rand() < self.epsilon:
             action = np.random.randint(0, self.n_actions)
         else:
+            # Set to eval mode for inference (BatchNorm compatibility)
+            self.policy_net.eval()
             with torch.no_grad():
                 s = (
                     torch.from_numpy(state).unsqueeze(0).to(self.device)
                 )  # [1, state_dim]
                 q = self.policy_net(s)  # [1, n_actions]
-            action = int(torch.argmax(q, dim=1).item())
+                action = int(torch.argmax(q, dim=1).item())
+            # Return to training mode for learning
+            self.policy_net.train()
 
         return action
 

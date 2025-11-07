@@ -1,5 +1,4 @@
 import logging
-import traceback
 from datetime import datetime
 from logging import Logger
 from logging.handlers import RotatingFileHandler
@@ -148,6 +147,11 @@ def _safe_q_values(
     device = getattr(agent, "device", "cpu")  # Default to CPU
     if policy is not None:
         try:
+            # CRITICAL: Set network to eval mode to handle batch size = 1
+            # BatchNorm requires batch size > 1 in training mode
+            was_training = policy.training
+            policy.eval()
+
             with torch.no_grad():
                 # Handle both numpy arrays and tuples
                 if isinstance(state_key, tuple):
@@ -174,17 +178,21 @@ def _safe_q_values(
                 q_np = q_t.detach().cpu().numpy().astype(np.float32)
                 max_q = float(q_np.max())
                 best_idx = int(q_np.argmax())
+
+                # Restore original training mode
+                if was_training:
+                    policy.train()
+
                 return q_np, max_q, best_idx
         except Exception as exc:
-            # Change to ERROR level so you can see what's actually failing
-            logger.error(f"Failed to compute DQN Q-values: {exc}")
-            # Also log the state_key for debugging
-            logger.error(f"State key type: {type(state_key)}, value: {state_key}")
-            # Log more debug info
-            logger.error(f"Policy net available: {policy is not None}")
-            logger.error(f"Device: {device}")
+            # Restore training mode on error
+            if policy is not None and was_training:
+                policy.train()
 
-            logger.error(f"Full traceback: {traceback.format_exc()}")
+            # Log error details
+            logger.debug(f"Failed to compute DQN Q-values: {exc}")
+            shape_info = state_key.shape if isinstance(state_key, np.ndarray) else "N/A"
+            logger.debug(f"State key type: {type(state_key)}, shape: {shape_info}")
 
     return None, None, None
 
