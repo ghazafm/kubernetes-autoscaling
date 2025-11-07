@@ -51,8 +51,9 @@ class DQN(Q):
         self.target_update_freq = target_update_freq
         self.grad_clip_norm = grad_clip_norm
         # State: [cpu%, mem%, rt%, replica%, action%,
-        #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_dir]
-        self._state_dim = 10
+        #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_dir,
+        #         rps_per_pod, rps_Δ, error_rate]
+        self._state_dim = 13
 
         self.policy_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
         self.target_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
@@ -93,6 +94,17 @@ class DQN(Q):
         # NEW: Scaling direction (already 0, 0.5, or 1)
         scaling_direction = observation.get("scaling_direction", 0.5)
 
+        # NEW: RPS per pod (scale-independent, normalize by expected max ~10 RPS/pod)
+        rps_per_pod = observation.get("rps_per_pod", 0.0) / 10.0
+        rps_per_pod = np.clip(rps_per_pod, 0.0, 1.0)  # Cap at 1.0
+
+        # NEW: RPS delta (already -100 to +100, normalize to -1 to +1)
+        rps_delta = np.clip(observation.get("rps_delta", 0.0) / 10.0, -1.0, 1.0)
+
+        # NEW: Error rate (0-10%, normalize to 0-1)
+        error_rate = observation.get("error_rate", 0.0) / 10.0
+        error_rate = np.clip(error_rate, 0.0, 1.0)  # Cap at 1.0
+
         return np.array(
             [
                 cpu,
@@ -105,6 +117,9 @@ class DQN(Q):
                 rt_delta,
                 time_in_state,
                 scaling_direction,
+                rps_per_pod,
+                rps_delta,
+                error_rate,
             ],
             dtype=np.float32,
         )

@@ -122,36 +122,6 @@ histogram_quantile(
 )
 ```
 
-```promql
-1000 *
-histogram_quantile(
-  0.90,
-  sum by (le) (
-    rate(http_request_duration_seconds_bucket{
-      namespace="default",
-      pod=~"flask-app-.*",
-      method="GET",
-      path="/api/memory"
-    }[35s])
-  )
-)
-```
-
-```promql
-1000 *
-histogram_quantile(
-  0.90,
-  sum by (le) (
-    rate(http_request_duration_seconds_bucket{
-      namespace="default",
-      pod=~"flask-app-.*",
-      method="GET",
-      path="/api"
-    }[35s])
-  )
-)
-```
-
 **What it returns**: 90th percentile response time in milliseconds
 
 **Note**: The label is `path` (not `endpoint` or `exported_endpoint`) to avoid Prometheus renaming conflicts.

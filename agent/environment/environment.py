@@ -36,8 +36,9 @@ class KubernetesEnv:
         metrics_quantile: float = 0.90,
         max_scaling_retries: int = 1000,
         response_time_weight: float = 1.0,
-        cpu_memory_weight: float = 0.5,
-        cost_weight: float = 0.3,
+        error_rate_weight: float = 0.8,
+        cpu_memory_weight: float = 0.4,
+        cost_weight: float = 0.2,
     ) -> None:
         self.logger = logger
         config.load_kube_config()
@@ -72,6 +73,7 @@ class KubernetesEnv:
 
         self.action_space = list(range(100))
         self.response_time_weight = response_time_weight
+        self.error_rate_weight = error_rate_weight
         self.cpu_memory_weight = cpu_memory_weight
         self.cost_weight = cost_weight
 
@@ -86,15 +88,22 @@ class KubernetesEnv:
             "rt_delta": (-100.0, 100.0),
             "time_in_state": (0, 1.0),
             "scaling_direction": (0, 1.0),  # 0=down, 0.5=same, 1=up
+            # NEW: Load indicators (scale-independent)
+            "rps_per_pod": (0, 100.0),  # Requests per second per pod
+            "rps_delta": (-100.0, 100.0),  # Change in RPS per pod
+            "error_rate": (0, 10.0),  # Error percentage (0-10%)
         }
 
         # Track last known good metrics for fallback during timeout
-        self.last_known_metrics: tuple[float, float, float, int] | None = None
+        self.last_known_metrics: (
+            tuple[float, float, float, int, float, float] | None
+        ) = None
 
         # Track previous metrics for delta calculation
         self.prev_cpu_usage = 0.0
         self.prev_memory_usage = 0.0
         self.prev_response_time = 0.0
+        self.prev_rps_per_pod = 0.0  # NEW: Track previous RPS per pod
 
         # Track time in current replica state for stability
         self.steps_at_current_replica = 0
@@ -287,17 +296,24 @@ class KubernetesEnv:
                 self.response_time_weight * (1.0 - (1.0 / (1.0 + overage))),
             )
 
-        # Combined resource penalties
+        ERROR_RATE_THRESHOLD = 1.0
+        if self.error_rate > ERROR_RATE_THRESHOLD:
+            error_pen = min(
+                (self.error_rate / 10.0) * self.error_rate_weight,
+                self.error_rate_weight,
+            )
+        else:
+            error_pen = 0.0
+
         cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
 
-        # Cost penalty: linear based on replica count
         cost_pen = (
             self.cost_weight
             * (self.replica_state - self.min_replicas)
             / self.range_replicas
         )
 
-        reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen
+        reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen - error_pen
 
         # Clamp for stability
         return float(max(min(reward, 1.0), -1.0))
@@ -313,22 +329,27 @@ class KubernetesEnv:
             timeout=self.timeout,
             logger=self.logger,
         )
-        self.cpu_usage, self.memory_usage, self.response_time, self.replica = (
-            get_metrics(
-                replicas=ready_replicas,
-                timeout=self.timeout,
-                namespace=self.namespace,
-                deployment_name=self.deployment_name,
-                wait_time=self.wait_time,
-                prometheus=self.prometheus,
-                interval=self.metrics_interval,
-                quantile=self.metrics_quantile,
-                endpoints_method=self.metrics_endpoints_method,
-                increase=increase,
-                logger=self.logger,
-                last_known_metrics=self.last_known_metrics,
-                desired_replicas=desired_replicas,
-            )
+        (
+            self.cpu_usage,
+            self.memory_usage,
+            self.response_time,
+            self.replica,
+            self.request_rate,
+            self.error_rate,
+        ) = get_metrics(
+            replicas=ready_replicas,
+            timeout=self.timeout,
+            namespace=self.namespace,
+            deployment_name=self.deployment_name,
+            wait_time=self.wait_time,
+            prometheus=self.prometheus,
+            interval=self.metrics_interval,
+            quantile=self.metrics_quantile,
+            endpoints_method=self.metrics_endpoints_method,
+            increase=increase,
+            logger=self.logger,
+            last_known_metrics=self.last_known_metrics,
+            desired_replicas=desired_replicas,
         )
 
         if self.replica > 0:
@@ -337,6 +358,8 @@ class KubernetesEnv:
                 self.memory_usage,
                 self.response_time,
                 self.replica,
+                self.request_rate,
+                self.error_rate,
             )
 
         if not ready:
@@ -379,6 +402,13 @@ class KubernetesEnv:
             self.steps_at_current_replica / self.max_steps_tracking, 1.0
         )
 
+        # Calculate per-pod RPS (scale-independent normalization)
+        # This makes the metric flexible across any replica range
+        rps_per_pod = (self.request_rate / self.replica) if self.replica > 0 else 0.0
+
+        # Calculate RPS delta (change in per-pod load)
+        rps_delta = rps_per_pod - self.prev_rps_per_pod
+
         return {
             "cpu_usage": self.cpu_usage,
             "memory_usage": self.memory_usage,
@@ -390,6 +420,10 @@ class KubernetesEnv:
             "rt_delta": rt_delta,
             "time_in_state": time_in_state,
             "scaling_direction": scaling_direction,
+            # NEW: Load indicators
+            "rps_per_pod": rps_per_pod,
+            "rps_delta": rps_delta,
+            "error_rate": self.error_rate,
         }
 
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
@@ -432,9 +466,11 @@ class KubernetesEnv:
         response_time_percentage = min(
             (self.response_time / self.max_response_time) * 100.0, 100.0
         )
+        rps_per_pod = (self.request_rate / self.replica) if self.replica > 0 else 0.0
         self.prev_cpu_usage = self.cpu_usage
         self.prev_memory_usage = self.memory_usage
         self.prev_response_time = response_time_percentage
+        self.prev_rps_per_pod = rps_per_pod
         info = {
             "iteration": self.iteration,
             "action": action,
@@ -468,6 +504,7 @@ class KubernetesEnv:
         self.prev_cpu_usage = 0.0
         self.prev_memory_usage = 0.0
         self.prev_response_time = 0.0
+        self.prev_rps_per_pod = 0.0  # NEW: Reset RPS tracking
 
         # Reset time-in-state tracking
         self.steps_at_current_replica = 0
@@ -488,9 +525,11 @@ class KubernetesEnv:
         response_time_percentage = min(
             (self.response_time / self.max_response_time) * 100.0, 100.0
         )
+        rps_per_pod = (self.request_rate / self.replica) if self.replica > 0 else 0.0
         self.prev_cpu_usage = self.cpu_usage
         self.prev_memory_usage = self.memory_usage
         self.prev_response_time = response_time_percentage
+        self.prev_rps_per_pod = rps_per_pod
         self.prev_replica = self.replica
 
         self.last_action = 0

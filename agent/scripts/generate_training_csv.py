@@ -26,6 +26,85 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
+def _calculate_rps_per_pod(
+    cpu: float, mem: float, replica: int, *, max_replicas: int = 50
+) -> float:
+    """Calculate realistic RPS per pod based on system load and replica count.
+
+    Logic:
+    - Higher CPU/Memory → More requests being processed → Higher RPS
+    - More replicas → Load distributed → Lower RPS per pod
+    - Adds realistic noise and spike patterns
+    """
+    # Base RPS depends on resource utilization (0-1 normalized)
+    load_factor = (min(cpu, 100.0) / 100.0 + min(mem, 100.0) / 100.0) / 2.0
+    base_rps = 0.5 + load_factor * 9.0  # 0.5-9.5 RPS range
+
+    # Adjust by replica count (more pods = distributed load)
+    replica_factor = max(1.0, replica / 10.0)
+    rps_per_pod = base_rps / replica_factor
+
+    # Add realistic noise and occasional spikes
+    noise = random.uniform(-0.3, 0.3)
+    spike = random.uniform(0, 2.0) if random.random() < 0.05 else 0  # 5% spike chance
+    rps_per_pod += noise + spike
+
+    # Clamp to realistic range (0.1-15 RPS per pod)
+    return max(0.1, min(15.0, rps_per_pod))
+
+
+def _calculate_error_rate(
+    cpu: float,
+    mem: float,
+    resp: float,
+    replica: int,
+    rps_per_pod: float,
+    *,
+    max_cpu: float = 90.0,
+    max_memory: float = 90.0,
+    max_response_time: float = 100.0,
+) -> float:
+    """Calculate realistic error rate based on system stress.
+
+    Logic:
+    - Errors spike when resources are exhausted (CPU/MEM > 90%)
+    - High response time → timeouts → errors
+    - High RPS per pod + few replicas → overload → errors
+    - Exponential growth (cascading failures)
+    """
+    # Resource pressure (0-1 when exceeding thresholds)
+    cpu_stress = max(0, (cpu - max_cpu) / 10.0)
+    mem_stress = max(0, (mem - max_memory) / 10.0)
+
+    # Response time stress (SLA violations)
+    rt_stress = max(0, (resp - max_response_time) / max_response_time)
+
+    # Overload stress (high RPS per pod indicates insufficient capacity)
+    overload_stress = max(0, (rps_per_pod - 8.0) / 8.0)  # Stress when > 8 RPS/pod
+
+    # Combine stress factors (weighted by severity)
+    total_stress = (
+        cpu_stress * 1.5  # CPU exhaustion is critical
+        + mem_stress * 1.2  # Memory exhaustion causes OOM
+        + rt_stress * 1.0  # RT violations indicate problems
+        + overload_stress * 0.8  # Overload leads to errors
+    )
+
+    # Error rate increases exponentially (cascading failures)
+    error_rate = (total_stress**2) * 3.0  # 0-10% range
+
+    # Baseline error rate (even healthy systems have occasional errors)
+    baseline = random.uniform(0, 0.05)  # 0-0.05% noise
+    error_rate += baseline
+
+    # Occasional error spikes (network issues, deployment, etc.)
+    if random.random() < 0.03:  # 3% chance of error spike
+        error_rate += random.uniform(0.5, 2.0)
+
+    # Clamp to 0-10% range
+    return max(0.0, min(10.0, error_rate))
+
+
 def _env_reward(
     cpu: float,
     mem: float,
@@ -152,6 +231,39 @@ def build_row(
     # Time in state (normalized, simulate staying at replica for a few steps)
     time_in_state = random.uniform(0.0, 1.0)
 
+    # NEW: Calculate RPS per pod for current and next state
+    current_rps_per_pod = _calculate_rps_per_pod(
+        cpu, mem, replica, max_replicas=max_replicas
+    )
+    next_rps_per_pod = _calculate_rps_per_pod(
+        next_cpu, next_mem, next_replica, max_replicas=max_replicas
+    )
+
+    # NEW: Calculate RPS delta
+    rps_delta = next_rps_per_pod - current_rps_per_pod
+
+    # NEW: Calculate error rate for current and next state
+    current_error_rate = _calculate_error_rate(
+        cpu,
+        mem,
+        resp,
+        replica,
+        current_rps_per_pod,
+        max_cpu=max_cpu,
+        max_memory=max_memory,
+        max_response_time=max_response_time,
+    )
+    next_error_rate = _calculate_error_rate(
+        next_cpu,
+        next_mem,
+        next_resp,
+        next_replica,
+        next_rps_per_pod,
+        max_cpu=max_cpu,
+        max_memory=max_memory,
+        max_response_time=max_response_time,
+    )
+
     next_state = {
         "cpu_usage": round(float(next_cpu), 2),
         "memory_usage": round(float(next_mem), 2),
@@ -163,6 +275,9 @@ def build_row(
         "rt_delta": round(rt_delta, 2),
         "time_in_state": round(time_in_state, 4),
         "scaling_direction": scaling_direction,
+        "rps_per_pod": round(next_rps_per_pod, 2),  # NEW
+        "rps_delta": round(rps_delta, 2),  # NEW
+        "error_rate": round(next_error_rate, 2),  # NEW
     }
 
     # Map current replica count to discrete last_action (0-99) so offline
@@ -185,6 +300,10 @@ def build_row(
         "rt_delta": f"{rt_delta:.2f}",
         "time_in_state": f"{time_in_state:.4f}",
         "scaling_direction": f"{scaling_direction:.1f}",
+        # NEW: Load indicators (scale-independent)
+        "rps_per_pod": f"{current_rps_per_pod:.2f}",
+        "rps_delta": f"{rps_delta:.2f}",
+        "error_rate": f"{current_error_rate:.2f}",
         "action_pct": f"{desired_pct:.4f}",
         "action": str(int(action)),
         "reward": f"{reward:.4f}",
@@ -226,6 +345,10 @@ def generate(
         "rt_delta",
         "time_in_state",
         "scaling_direction",
+        # NEW: Load indicators (scale-independent)
+        "rps_per_pod",
+        "rps_delta",
+        "error_rate",
         # action as discrete 0-99 is already in `action`; action_pct is 0.0-1.0
         "action_pct",
         "action",

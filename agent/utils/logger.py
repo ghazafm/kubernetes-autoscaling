@@ -120,7 +120,7 @@ def _fmt_ms(v: float) -> str:
         return f"{v}"
 
 
-def _safe_q_values(
+def _safe_q_values(  # noqa: PLR0912
     agent: Q, state_key, logger: Logger
 ) -> Tuple[Optional[np.ndarray], Optional[float], Optional[int]]:
     # Q-table path (for traditional Q-Learning)
@@ -201,9 +201,10 @@ def log_verbose_details(  # noqa: PLR0915
     observation: Dict[str, Any], agent: Any, verbose: bool, logger: Logger
 ) -> None:
     """
-    Compact, high-signal CLI log with 10D state representation:
+    Compact, high-signal CLI log with 13D state representation:
     ─ Line 1: CPU│Mem│RT│Replica%│Act│Qmax│Best + bars and colors
     ─ Line 2: Deltas (CPU/Mem/RT trends) + Time-in-State + Scaling Direction
+    ─ Line 3: Load Indicators (RPS/pod, RPS delta, Error Rate) ← NEW!
     ─ Optional details on unknown state / missing Q if helpful
     """
     if not verbose:
@@ -217,14 +218,19 @@ def log_verbose_details(  # noqa: PLR0915
     act = observation.get("last_action", 0)  # 0-99
     iter_no = observation.get("iteration")  # optional
 
-    # NEW: Delta metrics (trends)
+    # Delta metrics (trends)
     cpu_delta = float(observation.get("cpu_delta", 0.0))
     mem_delta = float(observation.get("memory_delta", 0.0))
     rt_delta = float(observation.get("rt_delta", 0.0))
 
-    # NEW: Stability and direction
+    # Stability and direction
     time_in_state = float(observation.get("time_in_state", 0.0))  # 0-1
     scaling_direction = float(observation.get("scaling_direction", 0.5))  # 0/0.5/1
+
+    # NEW: Load indicators (scale-independent)
+    rps_per_pod = float(observation.get("rps_per_pod", 0.0))  # RPS per pod
+    rps_delta = float(observation.get("rps_delta", 0.0))  # Change in RPS/pod
+    error_rate = float(observation.get("error_rate", 0.0))  # Error % (0-10%)
 
     # Bars and colors
     cpu_col = _color(cpu, warn=70, crit=90)  # higher is worse
@@ -307,6 +313,38 @@ def log_verbose_details(  # noqa: PLR0915
     logger.info(
         f"     | {cpu_d_str} | {mem_d_str} | {rt_d_str} | {time_str} | Dir {dir_str}"
     )
+
+    # === LINE 3: Load Indicators ===
+    # RPS per pod: Show with bar (0-10 RPS typical, scale to 0-100% for bar)
+    rps_normalized = min(rps_per_pod * 10.0, 100.0)  # Assume 10 RPS = 100%
+    rps_bar = _bar(rps_normalized, width=10)
+
+    # Color RPS based on load: green (low), yellow (medium), red (high)
+    rps_col = _color(rps_normalized, warn=60, crit=85)
+    rps_str = f"{rps_col}RPS/pod {rps_per_pod:5.2f} {rps_bar}{RESET}"
+
+    # RPS Delta: green if decreasing, red if increasing
+    rps_d_col = _delta_color(rps_delta)
+    rps_d_str = f"{rps_d_col}ΔRPS {rps_delta:+5.2f}{RESET}"
+
+    # Error Rate: Critical metric - red if > 1%, yellow if > 0.1%
+    ERROR_WARN_THRESHOLD = 0.1
+    ERROR_CRIT_THRESHOLD = 1.0
+    if error_rate >= ERROR_CRIT_THRESHOLD:
+        err_col = "\033[31m"  # Red
+        err_symbol = "🔴"
+    elif error_rate >= ERROR_WARN_THRESHOLD:
+        err_col = "\033[33m"  # Yellow
+        err_symbol = "⚠️ "
+    else:
+        err_col = "\033[32m"  # Green
+        err_symbol = "✓ "
+
+    # Show error rate with bar (0-10% range)
+    err_bar = _bar(min(error_rate * 10.0, 100.0), width=10)
+    err_str = f"{err_col}{err_symbol}ERR {error_rate:5.2f}% {err_bar}{RESET}"
+
+    logger.info(f"     | {rps_str} | {rps_d_str} | {err_str}")
 
     # === DEBUG: Q-values ===
     if q_vals is None:

@@ -9,7 +9,7 @@ def _metrics_query(
     namespace: str,
     deployment_name: str,
     interval: int = 15,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     cpu_query = f"""
         (
             sum by (pod) (
@@ -66,11 +66,40 @@ def _metrics_query(
         )
         """
 
+    # Query for total request rate (RPS)
+    rps_query = f"""
+        sum(
+            rate(http_requests_total{{
+                namespace="{namespace}",
+                pod=~"{deployment_name}-.*"
+            }}[{interval}s])
+        )
+        """
+
+    # Query for error rate (5xx errors)
+    error_rate_query = f"""
+        sum(
+            rate(http_requests_total{{
+                namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
+                http_status=~"5.."
+            }}[{interval}s])
+        ) /
+        sum(
+            rate(http_requests_total{{
+                namespace="{namespace}",
+                pod=~"{deployment_name}-.*"
+            }}[{interval}s])
+        ) * 100
+        """
+
     return (
         cpu_query,
         memory_query,
         cpu_limits_query,
         memory_limits_query,
+        rps_query,
+        error_rate_query,
     )
 
 
@@ -232,6 +261,54 @@ def _get_response_time(
     return response_time
 
 
+def _get_request_rate(
+    prometheus: PrometheusConnect,
+    rps_query: str,
+    logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
+) -> float:
+    """Get current request rate (RPS) for the deployment."""
+    try:
+        result = prometheus.custom_query(rps_query)
+        if result and len(result) > 0:
+            rps = float(result[0]["value"][1])
+            logger.debug(f"Current RPS: {rps:.2f}")
+            return rps
+        logger.debug("No RPS data available, returning 0.0")
+        return 0.0
+    except PrometheusApiClientException as e:
+        logger.warning(f"Failed to fetch RPS: {e}. Returning 0.0")
+        return 0.0
+    except Exception as e:
+        logger.error(f"Unexpected error fetching RPS: {e}. Returning 0.0")
+        return 0.0
+
+
+def _get_error_rate(
+    prometheus: PrometheusConnect,
+    error_rate_query: str,
+    logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
+) -> float:
+    """Get current error rate (% of 5xx responses) for the deployment."""
+    try:
+        result = prometheus.custom_query(error_rate_query)
+        if result and len(result) > 0:
+            error_pct = float(result[0]["value"][1])
+            # Handle NaN (occurs when no requests exist)
+            if np.isnan(error_pct):
+                logger.debug("Error rate is NaN (no requests), returning 0.0%")
+                return 0.0
+            logger.debug(f"Current error rate: {error_pct:.2f}%")
+            return error_pct
+        logger.debug("No error rate data available, returning 0.0%")
+        return 0.0
+    except PrometheusApiClientException as e:
+        logger.warning(f"Failed to fetch error rate: {e}. Returning 0.0%")
+        return 0.0
+    except Exception as e:
+        logger.error(f"Unexpected error fetching error rate: {e}. Returning 0.0%")
+        return 0.0
+
+
 def _scrape_metrics(
     fetch_timeout: int,
     prometheus: PrometheusConnect,
@@ -322,17 +399,19 @@ def get_metrics(  # noqa: PLR0912, PLR0915
     endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
     increase: bool = False,
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
-    last_known_metrics: tuple[float, float, float, int] | None = None,
+    last_known_metrics: tuple[float, float, float, int, float, float] | None = None,
     desired_replicas: int | None = None,
-) -> tuple[float, float, float, int]:
+) -> tuple[float, float, float, int, float, float]:
     """
-    Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count)
-    cpu in %, memory in %, averaged over matched pods.
+    Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count,
+             request_rate, error_rate)
+    cpu in %, memory in %, response_time in ms, request_rate in RPS,
+    error_rate in %.
 
     Args:
         replicas: Ready replicas from Prometheus (actual pods running)
         desired_replicas: Desired replica count from scaling action
-        last_known_metrics: Previous valid metrics to use as fallback on timeout
+        last_known_metrics: Previous valid metrics (now includes RPS and error rate)
     """
     if increase or wait_time > 0:
         time.sleep(wait_time)
@@ -372,14 +451,21 @@ def get_metrics(  # noqa: PLR0912, PLR0915
             time.sleep(1)
             continue
 
-        cpu_query, memory_query, cpu_limits_query, memory_limits_query = _metrics_query(
-            namespace, deployment_name, interval=interval
-        )
+        (
+            cpu_query,
+            memory_query,
+            cpu_limits_query,
+            memory_limits_query,
+            rps_query,
+            error_rate_query,
+        ) = _metrics_query(namespace, deployment_name, interval=interval)
         logger.debug("Metrics queries prepared, querying Prometheus...")
         logger.debug(f"CPU Query: {cpu_query}")
         logger.debug(f"Memory Query: {memory_query}")
         logger.debug(f"CPU Limits Query: {cpu_limits_query}")
         logger.debug(f"Memory Limits Query: {memory_limits_query}")
+        logger.debug(f"RPS Query: {rps_query}")
+        logger.debug(f"Error Rate Query: {error_rate_query}")
 
         try:
             fetch_timeout = timeout / 2
@@ -427,6 +513,19 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                 logger=logger,
             )
 
+            # Fetch RPS and error rate (independent of per-pod metrics)
+            request_rate = _get_request_rate(
+                prometheus=prometheus,
+                rps_query=rps_query,
+                logger=logger,
+            )
+
+            error_rate = _get_error_rate(
+                prometheus=prometheus,
+                error_rate_query=error_rate_query,
+                logger=logger,
+            )
+
             collected = len(pod_names)
             if collected == 0:
                 logger.warning(
@@ -460,9 +559,18 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                     f"Metrics collected from {collected} pods: \n"
                     f"CPU usage mean {cpu_mean:.3f}%, \n"
                     f"Memory usage mean {mem_mean:.3f}%, \n"
-                    f"Response time {response_time:.3f} ms"
+                    f"Response time {response_time:.3f} ms, \n"
+                    f"Request rate {request_rate:.2f} RPS, \n"
+                    f"Error rate {error_rate:.2f}%"
                 )
-                return cpu_mean, mem_mean, response_time, collected
+                return (
+                    cpu_mean,
+                    mem_mean,
+                    response_time,
+                    collected,
+                    request_rate,
+                    error_rate,
+                )
 
             # If we collected most pods (e.g., 90%+), use partial data with warning
             METRICS_COMPLETENESS_THRESHOLD = 0.9
@@ -482,10 +590,18 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                     f"({completeness_ratio * 100:.1f}% complete). "
                     f"CPU={cpu_mean:.2f}%, MEM={mem_mean:.2f}%"
                 )
-                return cpu_mean, mem_mean, response_time, collected
+                return (
+                    cpu_mean,
+                    mem_mean,
+                    response_time,
+                    collected,
+                    request_rate,
+                    error_rate,
+                )
 
             logger.warning(
-                f"Only collected metrics from {collected} pods, expected {actual_replicas}"
+                f"Only collected metrics from {collected} pods, "
+                f"expected {actual_replicas}"
             )
             continue
 
@@ -498,29 +614,69 @@ def get_metrics(  # noqa: PLR0912, PLR0915
 
     # Timeout reached - use fallback strategy with intelligent adjustment
     if last_known_metrics is not None:
-        last_cpu, last_mem, last_rt, last_replicas = last_known_metrics
+        (
+            last_cpu,
+            last_mem,
+            last_rt,
+            last_replicas,
+            last_rps,
+            last_error_rate,
+        ) = last_known_metrics
 
-        # actual_replicas was already determined at the start of this function
-        # So we can use it directly here
-        # Note: If desired_replicas was None, actual_replicas == replicas (unchanged)
-
-        # Now adjust metrics based on replica count change
-        # ALWAYS adjust if replica count changed, regardless of direction
         if last_replicas != actual_replicas and actual_replicas > 0:
-            # Calculate scale factor: if 36 pods → 10 pods, factor = 36/10 = 3.6x load
-            #  per pod
+            # scale factor untuk perkiraan jumah sumber daya yang dipakai
             scale_factor = last_replicas / actual_replicas
             adjusted_cpu = min(last_cpu * scale_factor, 100.0)
             adjusted_mem = min(last_mem * scale_factor, 100.0)
 
+            if last_rt > 0:
+                if scale_factor > 1.0:
+                    # RT increases exponentially under overload
+                    # 2x load → ~2.8x RT (queuing delays)
+                    rt_multiplier = min(scale_factor**1.5, 5.0)
+                    adjusted_rt = last_rt * rt_multiplier
+                else:
+                    # RT improves, but conservatively
+                    rt_multiplier = max(scale_factor**0.7, 0.5)
+                    adjusted_rt = last_rt * rt_multiplier
+            else:
+                adjusted_rt = last_rt
+
+            # RPS: Total stays same (external load unchanged)
+            adjusted_rps = last_rps
+
+            # Error Rate: Correlates with overload pressure
+            if scale_factor > 1.0:  # Scale DOWN
+                # Errors increase dramatically (timeouts, 503s)
+                # 2x load → 4x errors (cascading failures)
+                error_multiplier = scale_factor**2
+                adjusted_error_rate = min(last_error_rate * error_multiplier, 100.0)
+                # If no previous errors but severe overload, estimate baseline
+                if last_error_rate == 0.0 and scale_factor > 2.0:
+                    adjusted_error_rate = min((scale_factor - 1.0) * 2.0, 10.0)
+            else:  # Scale UP
+                # Errors decrease with more capacity
+                error_multiplier = scale_factor**2
+                adjusted_error_rate = max(last_error_rate * error_multiplier, 0.0)
+
             logger.warning(
                 f"Timeout with replica change detected! "
-                f"Pods: {last_replicas}→{actual_replicas} (scale_factor={scale_factor:.2f}x). "
+                f"Pods: {last_replicas}→{actual_replicas} "
+                f"(scale_factor={scale_factor:.2f}x). "
                 f"Adjusting metrics: "
                 f"CPU {last_cpu:.1f}%→{adjusted_cpu:.1f}%, "
-                f"MEM {last_mem:.1f}%→{adjusted_mem:.1f}%"
+                f"MEM {last_mem:.1f}%→{adjusted_mem:.1f}%, "
+                f"RT {last_rt:.1f}ms→{adjusted_rt:.1f}ms, "
+                f"Errors {last_error_rate:.2f}%→{adjusted_error_rate:.2f}%"
             )
-            return adjusted_cpu, adjusted_mem, last_rt, actual_replicas
+            return (
+                adjusted_cpu,
+                adjusted_mem,
+                adjusted_rt,
+                actual_replicas,
+                adjusted_rps,
+                adjusted_error_rate,
+            )
 
         # No replica change, use last known values as-is
         logger.warning(
@@ -534,7 +690,10 @@ def get_metrics(  # noqa: PLR0912, PLR0915
             last_mem,
             last_rt,
             actual_replicas,
-        )  # No historical data - return conservative high values to trigger scale-up
+            last_rps,
+            last_error_rate,
+        )
+    # No historical data - return conservative high values to trigger scale-up
     # This prevents under-provisioning when we have no data to work with
     conservative_replicas = max(actual_replicas, 2) if actual_replicas > 0 else 2
     logger.error(
@@ -542,4 +701,4 @@ def get_metrics(  # noqa: PLR0912, PLR0915
         f"Returning conservative high values to prevent under-scaling. "
         f"Using {conservative_replicas} replicas."
     )
-    return 80.0, 80.0, 100.0, conservative_replicas
+    return 80.0, 80.0, 100.0, conservative_replicas, 0.0, 0.0
