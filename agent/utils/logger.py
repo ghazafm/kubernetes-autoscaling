@@ -311,7 +311,7 @@ def log_verbose_details(  # noqa: PLR0915
     dir_str = f"{dir_color}{dir_symbol}{dir_text}{RESET}"
 
     logger.info(
-        f"     | {cpu_d_str} | {mem_d_str} | {rt_d_str} | {time_str} | Dir {dir_str}"
+        f"{hdr}| {cpu_d_str} | {mem_d_str} | {rt_d_str} | {time_str} | Dir {dir_str}"
     )
 
     # === LINE 3: Load Indicators ===
@@ -344,7 +344,7 @@ def log_verbose_details(  # noqa: PLR0915
     err_bar = _bar(min(error_rate * 10.0, 100.0), width=10)
     err_str = f"{err_col}{err_symbol}ERR {error_rate:5.2f}% {err_bar}{RESET}"
 
-    logger.info(f"     | {rps_str} | {rps_d_str} | {err_str}")
+    logger.info(f"{hdr}| {rps_str} | {rps_d_str} | {err_str}")
 
     # === DEBUG: Q-values ===
     if q_vals is None:
