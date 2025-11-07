@@ -79,11 +79,26 @@ class KubernetesEnv:
             "cpu_usage": (0, 100.0),
             "memory_usage": (0, 100.0),
             "response_time": (0, 100.0),
-            "last_action": (0, 99),  # Fixed: should be 0-99, not 1-99
+            "current_replica_pct": (0, 100.0),
+            "last_action": (0, 99),
+            "cpu_delta": (-100.0, 100.0),
+            "memory_delta": (-100.0, 100.0),
+            "rt_delta": (-100.0, 100.0),
+            "time_in_state": (0, 1.0),
+            "scaling_direction": (0, 1.0),  # 0=down, 0.5=same, 1=up
         }
 
         # Track last known good metrics for fallback during timeout
         self.last_known_metrics: tuple[float, float, float, int] | None = None
+
+        # Track previous metrics for delta calculation
+        self.prev_cpu_usage = 0.0
+        self.prev_memory_usage = 0.0
+        self.prev_response_time = 0.0
+
+        # Track time in current replica state for stability
+        self.steps_at_current_replica = 0
+        self.max_steps_tracking = 20  # Normalize time_in_state to 0-1
 
         self.logger.info("Initialized KubernetesEnv environment")
         self.logger.info(f"Environment configuration: {self.__dict__}")
@@ -263,15 +278,57 @@ class KubernetesEnv:
         response_time_percentage = min(
             (self.response_time / self.max_response_time) * 100.0, 100.0
         )
+
+        # Calculate current replica percentage based on ACTUAL ready replicas
+        current_replica_percentage = (
+            (self.replica - self.min_replicas) / self.range_replicas * 100.0
+            if self.range_replicas > 0
+            else 0.0
+        )
+
+        # Calculate deltas (normalized to -100 to +100 range)
+        cpu_delta = self.cpu_usage - self.prev_cpu_usage
+        memory_delta = self.memory_usage - self.prev_memory_usage
+        rt_delta = response_time_percentage - self.prev_response_time
+
+        # Calculate scaling direction: -1 (down), 0 (same), +1 (up)
+        # Based on actual replica change, not action intent
+        if hasattr(self, "prev_replica"):
+            scaling_direction_raw = self.replica - self.prev_replica
+            if scaling_direction_raw > 0:
+                scaling_direction = 1.0  # Scaled up
+            elif scaling_direction_raw < 0:
+                scaling_direction = 0.0  # Scaled down
+            else:
+                scaling_direction = 0.5  # No change
+        else:
+            scaling_direction = 0.5  # First observation, no previous state
+
+        # Calculate time in current state (normalized 0-1)
+        time_in_state = min(
+            self.steps_at_current_replica / self.max_steps_tracking, 1.0
+        )
+
         return {
             "cpu_usage": self.cpu_usage,
             "memory_usage": self.memory_usage,
             "response_time": response_time_percentage,
+            "current_replica_pct": current_replica_percentage,
             "last_action": self.last_action,
+            "cpu_delta": cpu_delta,
+            "memory_delta": memory_delta,
+            "rt_delta": rt_delta,
+            "time_in_state": time_in_state,
+            "scaling_direction": scaling_direction,
         }
 
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
         self.last_action = action
+
+        # Store previous replica count for scaling direction calculation
+        self.prev_replica = (
+            self.replica if hasattr(self, "replica") else self.min_replicas
+        )
 
         # Map discrete action (0-99) to continuous percentage (0.0-1.0)
         # Action 0 → 0.0 (min_replicas)
@@ -288,12 +345,26 @@ class KubernetesEnv:
 
         self._scale_and_get_metrics()
 
+        # Update time-in-state counter
+        if self.replica == self.prev_replica:
+            self.steps_at_current_replica += 1
+        else:
+            self.steps_at_current_replica = 0
+
         reward = self._calculate_reward()
 
         self.iteration -= 1
         terminated = bool(self.iteration <= 0)
 
         observation = self._get_observation()
+
+        # Update previous metrics for next delta calculation
+        response_time_percentage = min(
+            (self.response_time / self.max_response_time) * 100.0, 100.0
+        )
+        self.prev_cpu_usage = self.cpu_usage
+        self.prev_memory_usage = self.memory_usage
+        self.prev_response_time = response_time_percentage
         info = {
             "iteration": self.iteration,
             "action": action,
@@ -322,6 +393,25 @@ class KubernetesEnv:
         )
         self.replica_state = self.min_replicas
         self.last_known_metrics = None
+
+        # Reset previous metrics tracking
+        self.prev_cpu_usage = 0.0
+        self.prev_memory_usage = 0.0
+        self.prev_response_time = 0.0
+
+        # Reset time-in-state tracking
+        self.steps_at_current_replica = 0
+
         self._scale_and_get_metrics()
+
+        # Initialize previous metrics after first measurement
+        response_time_percentage = min(
+            (self.response_time / self.max_response_time) * 100.0, 100.0
+        )
+        self.prev_cpu_usage = self.cpu_usage
+        self.prev_memory_usage = self.memory_usage
+        self.prev_response_time = response_time_percentage
+        self.prev_replica = self.replica
+
         self.last_action = 0
         return self._get_observation()

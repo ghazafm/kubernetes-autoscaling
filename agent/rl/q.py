@@ -39,8 +39,10 @@ class Q:
         """Increment the episode count"""
         self.episodes_trained += count
 
-    def get_state_key(self, observation: dict) -> tuple[int, int, int, int]:
-        """Convert observation to a hashable state key"""
+    def get_state_key(
+        self, observation: dict
+    ) -> tuple[int, int, int, int, int, int, int, int, int, int]:
+        """Convert observation to a hashable state key with discretization"""
         cpu = int(observation["cpu_usage"])
         memory = int(observation["memory_usage"])
         action = int(observation["last_action"])
@@ -51,7 +53,38 @@ class Q:
         else:
             response_time = int(response_time_raw)
 
-        return (cpu, memory, response_time, action)
+        # NEW: Discretize additional state components
+        replica_pct = int(observation.get("current_replica_pct", 0))
+
+        # Discretize deltas to -100 to +100 range, then shift to 0-200
+        cpu_delta = int(observation.get("cpu_delta", 0) + 100)
+        memory_delta = int(observation.get("memory_delta", 0) + 100)
+        rt_delta = int(observation.get("rt_delta", 0) + 100)
+
+        # Discretize time_in_state (0-1) to bins (0-10)
+        time_in_state = int(observation.get("time_in_state", 0) * 10)
+
+        # Discretize scaling_direction (0, 0.5, 1) to (0, 1, 2)
+        scaling_dir_raw = observation.get("scaling_direction", 0.5)
+        if scaling_dir_raw <= 0.25:
+            scaling_direction = 0  # Down
+        elif scaling_dir_raw >= 0.75:
+            scaling_direction = 2  # Up
+        else:
+            scaling_direction = 1  # Same
+
+        return (
+            cpu,
+            memory,
+            response_time,
+            replica_pct,
+            action,
+            cpu_delta,
+            memory_delta,
+            rt_delta,
+            time_in_state,
+            scaling_direction,
+        )
 
     def get_action(self, observation: dict) -> int:
         """Choose action using epsilon-greedy strategy"""

@@ -50,7 +50,9 @@ class DQN(Q):
         self.buffer_size = buffer_size
         self.target_update_freq = target_update_freq
         self.grad_clip_norm = grad_clip_norm
-        self._state_dim = 4  # [cpu%, mem%, response_time_norm, last_action%]
+        # State: [cpu%, mem%, rt%, replica%, action%,
+        #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_dir]
+        self._state_dim = 10
 
         self.policy_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
         self.target_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
@@ -77,7 +79,35 @@ class DQN(Q):
                 response_time_raw / 100.0, 1.0
             )  # Normalize and cap at 1.0
 
-        return np.array([cpu, memory, response_time, last_action], dtype=np.float32)
+        # NEW: Current replica percentage (already 0-100, normalize to 0-1)
+        current_replica_pct = observation.get("current_replica_pct", 0.0) / 100.0
+
+        # NEW: Metric deltas (already -100 to +100, normalize to -1 to +1)
+        cpu_delta = np.clip(observation.get("cpu_delta", 0.0) / 100.0, -1.0, 1.0)
+        memory_delta = np.clip(observation.get("memory_delta", 0.0) / 100.0, -1.0, 1.0)
+        rt_delta = np.clip(observation.get("rt_delta", 0.0) / 100.0, -1.0, 1.0)
+
+        # NEW: Time in state (already 0-1)
+        time_in_state = observation.get("time_in_state", 0.0)
+
+        # NEW: Scaling direction (already 0, 0.5, or 1)
+        scaling_direction = observation.get("scaling_direction", 0.5)
+
+        return np.array(
+            [
+                cpu,
+                memory,
+                response_time,
+                current_replica_pct,
+                last_action,
+                cpu_delta,
+                memory_delta,
+                rt_delta,
+                time_in_state,
+                scaling_direction,
+            ],
+            dtype=np.float32,
+        )
 
     def get_action(self, observation: dict) -> int:
         """Choose action using epsilon-greedy strategy"""
