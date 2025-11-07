@@ -80,11 +80,22 @@ def _color(v: float, warn: float, crit: float, reverse: bool = False) -> str:
     """
     Colorize value by thresholds (green < warn < yellow < crit < red).
     reverse=True flips logic (good when 'lower is better' like response time).
+    For RT, values > crit are always red (severe violations).
     """
     # ANSI colors
     GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
-    ok = v <= warn if reverse else v < warn
-    mid = (warn < v <= crit) if reverse else (warn <= v < crit)
+
+    if reverse:
+        ok = v <= warn
+        mid = warn < v <= crit
+    else:
+        # For normal metrics (higher is worse)
+        ok = v < warn
+        mid = warn <= v < crit
+        # Always red if exceeds critical threshold
+        if v >= crit:
+            return RED
+
     return GREEN if ok else (YELLOW if mid else RED)
 
 
@@ -210,10 +221,13 @@ def log_verbose_details(  # noqa: PLR0915
     # Bars and colors
     cpu_col = _color(cpu, warn=70, crit=90)  # higher is worse
     mem_col = _color(mem, warn=75, crit=90)  # higher is worse
+    # RT can exceed 100%, so use higher thresholds for color coding
     rt_col = _color(rt_percentage, warn=80, crit=100, reverse=False)
 
     cpu_bar = _bar(cpu)
     mem_bar = _bar(mem)
+    # For RT bar, clamp display to 200% max so severe violations are visible
+    rt_bar = _bar(min(rt_percentage, 200.0), width=12)
     replica_bar = _bar(replica_pct)
 
     # Q-values (works for both Q and DQN if available)
@@ -228,7 +242,7 @@ def log_verbose_details(  # noqa: PLR0915
     hdr = f"▶ Iter {iter_no:02d} " if isinstance(iter_no, int) else "▶ "
     cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
     mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-    rt_str = f"{rt_col}RT {rt_percentage:6.1f}%{RESET}"
+    rt_str = f"{rt_col}RT {rt_percentage:6.1f}% {rt_bar}{RESET}"
     replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
     act_str = f"ACT {int(act):3d}"
 
