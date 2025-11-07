@@ -65,6 +65,13 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
     mem = [30.0, 45.0, 70.0, 90.0, 55.0]
     resp = [10.0, 15.0, 30.0, 60.0, 25.0]
     replica = [1, 2, 3, 4, 3]
+    # NEW: 10D state components
+    replica_pct = [0.0, 2.0, 4.1, 6.1, 4.1]  # percentage of range
+    cpu_delta = [0.0, 20.0, 20.0, 20.0, -30.0]
+    mem_delta = [0.0, 15.0, 25.0, 20.0, -35.0]
+    rt_delta = [0.0, 5.0, 15.0, 30.0, -35.0]
+    time_in_state = [0.0, 0.1, 0.2, 0.3, 0.0]
+    scaling_direction = [0.5, 1.0, 1.0, 1.0, 0.0]  # same, up, up, up, down
 
     # actions and rewards (toy values)
     actions = [1, 1, 0, -1, 0]
@@ -79,7 +86,13 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
                 "cpu_usage": cpu[j],
                 "memory_usage": mem[j],
                 "response_time": resp[j],
+                "current_replica_pct": replica_pct[j],
                 "last_action": replica[j],
+                "cpu_delta": cpu_delta[j],
+                "memory_delta": mem_delta[j],
+                "rt_delta": rt_delta[j],
+                "time_in_state": time_in_state[j],
+                "scaling_direction": scaling_direction[j],
             }
         )
 
@@ -87,7 +100,13 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
         "cpu_usage": cpu,
         "memory_usage": mem,
         "response_time": resp,
+        "current_replica_pct": replica_pct,
         "replica": replica,
+        "cpu_delta": cpu_delta,
+        "memory_delta": mem_delta,
+        "rt_delta": rt_delta,
+        "time_in_state": time_in_state,
+        "scaling_direction": scaling_direction,
         "action": actions,
         "reward": rewards,
         "next_state": next_states,
@@ -199,11 +218,48 @@ def train(
                 except Exception:
                     last_act_val = 0
 
+            # NEW: Extract 10D state components from CSV
+            try:
+                current_replica_pct_val = float(data.get("current_replica_pct", 0.0))
+            except Exception:
+                current_replica_pct_val = 0.0
+
+            try:
+                cpu_delta_val = float(data.get("cpu_delta", 0.0))
+            except Exception:
+                cpu_delta_val = 0.0
+
+            try:
+                mem_delta_val = float(data.get("memory_delta", 0.0))
+            except Exception:
+                mem_delta_val = 0.0
+
+            try:
+                rt_delta_val = float(data.get("rt_delta", 0.0))
+            except Exception:
+                rt_delta_val = 0.0
+
+            try:
+                time_in_state_val = float(data.get("time_in_state", 0.0))
+            except Exception:
+                time_in_state_val = 0.0
+
+            try:
+                scaling_direction_val = float(data.get("scaling_direction", 0.5))
+            except Exception:
+                scaling_direction_val = 0.5
+
             obs = {
                 "cpu_usage": cpu_val,
                 "memory_usage": mem_val,
                 "response_time": resp_val,
+                "current_replica_pct": current_replica_pct_val,
                 "last_action": last_act_val,
+                "cpu_delta": cpu_delta_val,
+                "memory_delta": mem_delta_val,
+                "rt_delta": rt_delta_val,
+                "time_in_state": time_in_state_val,
+                "scaling_direction": scaling_direction_val,
             }
             action = data.get("action", 0)
             # Extract next state / reward / done with fallbacks for CSV shapes

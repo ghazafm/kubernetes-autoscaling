@@ -103,6 +103,67 @@ class KubernetesEnv:
         self.logger.info("Initialized KubernetesEnv environment")
         self.logger.info(f"Environment configuration: {self.__dict__}")
 
+    def verify_deployment_resources(self) -> bool:
+        """
+        Verify that all pods in the deployment have resource limits configured.
+
+        Returns:
+            bool: True if all pods have limits, False otherwise
+
+        Raises:
+            ValueError: If deployment has pods without resource limits
+        """
+        try:
+            pods = self.core.list_namespaced_pod(
+                namespace=self.namespace, label_selector=f"app={self.deployment_name}"
+            )
+
+            if not pods.items:
+                self.logger.warning(
+                    f"No pods found for deployment {self.deployment_name}. "
+                    "Skipping resource limit verification."
+                )
+                return True
+
+            missing_limits = []
+            for pod in pods.items:
+                pod_name = pod.metadata.name
+                for container in pod.spec.containers:
+                    if not container.resources or not container.resources.limits:
+                        missing_limits.append(
+                            f"{pod_name}/{container.name}: No limits defined"
+                        )
+                    else:
+                        if not container.resources.limits.get("cpu"):
+                            missing_limits.append(
+                                f"{pod_name}/{container.name}: CPU limit missing"
+                            )
+                        if not container.resources.limits.get("memory"):
+                            missing_limits.append(
+                                f"{pod_name}/{container.name}: Memory limit missing"
+                            )
+
+            if missing_limits:
+                error_msg = (
+                    f"Deployment {self.deployment_name} has pods without proper "
+                    f"resource limits:\n"
+                    + "\n".join(missing_limits)
+                    + "\n\nThis will cause metrics collection to fail. "
+                    "Please update your deployment with resource limits."
+                )
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+
+            self.logger.info(
+                f"✅ All pods in deployment {self.deployment_name} have "
+                "proper resource limits configured"
+            )
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to verify deployment resources: {e}")
+            raise
+
     def _scale(self) -> None:
         """Scale deployment with persistent retry until success.
 
@@ -258,6 +319,7 @@ class KubernetesEnv:
                 increase=increase,
                 logger=self.logger,
                 last_known_metrics=self.last_known_metrics,
+                desired_replicas=desired_replicas,
             )
         )
 
@@ -403,6 +465,16 @@ class KubernetesEnv:
         self.steps_at_current_replica = 0
 
         self._scale_and_get_metrics()
+
+        # Verify resource limits are configured (will raise if missing)
+        try:
+            self.verify_deployment_resources()
+        except ValueError:
+            self.logger.error(
+                "Resource limit verification failed. "
+                "Training cannot proceed without proper limits."
+            )
+            raise
 
         # Initialize previous metrics after first measurement
         response_time_percentage = min(

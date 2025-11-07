@@ -323,16 +323,45 @@ def get_metrics(  # noqa: PLR0912, PLR0915
     increase: bool = False,
     logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
     last_known_metrics: tuple[float, float, float, int] | None = None,
+    desired_replicas: int | None = None,
 ) -> tuple[float, float, float, int]:
     """
     Returns (cpu_usage_mean, memory_usage_mean, response_time, replica_count)
     cpu in %, memory in %, averaged over matched pods.
 
     Args:
+        replicas: Ready replicas from Prometheus (actual pods running)
+        desired_replicas: Desired replica count from scaling action
         last_known_metrics: Previous valid metrics to use as fallback on timeout
     """
     if increase or wait_time > 0:
         time.sleep(wait_time)
+
+    # Detect stale replica data BEFORE metrics collection to avoid waiting
+    # for wrong count
+    # This prevents timeouts caused by waiting for pods that don't exist
+    actual_replicas = replicas
+
+    if desired_replicas is not None:
+        # During scale-down: Prometheus may report old count while pods terminate
+        if replicas > desired_replicas:
+            time.sleep(10)
+            logger.warning(
+                f"Stale replica data detected BEFORE metrics collection: "
+                f"Prometheus reports {replicas} but desired is {desired_replicas}. "
+                f"Will collect metrics for {desired_replicas} pods to avoid timeout."
+            )
+            actual_replicas = desired_replicas
+
+        # During scale-up: Prometheus may show fewer if cluster can't provision
+        elif replicas < desired_replicas:
+            time.sleep(10)
+            logger.debug(
+                f"Scale-up in progress or capacity limit: "
+                f"Desired {desired_replicas} but {replicas} ready. "
+                f"Will collect metrics for {replicas} available pods."
+            )
+            actual_replicas = replicas
 
     start = time.time()
     while time.time() - start < timeout:
@@ -367,7 +396,7 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                 memory_query=memory_query,
                 cpu_limits_query=cpu_limits_query,
                 memory_limits_query=memory_limits_query,
-                replicas=replicas,
+                replicas=actual_replicas,  # Use corrected replica count
                 logger=logger,
             )
             if not cpu_usage_results or not memory_usage_results:
@@ -416,7 +445,7 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                 time.sleep(2)
                 continue
 
-            if collected == replicas:
+            if collected == actual_replicas:
                 cpu_mean = float(np.mean(cpu_percentages)) if cpu_percentages else 0.0
                 mem_mean = (
                     float(np.mean(memory_percentages)) if memory_percentages else 0.0
@@ -437,7 +466,9 @@ def get_metrics(  # noqa: PLR0912, PLR0915
 
             # If we collected most pods (e.g., 90%+), use partial data with warning
             METRICS_COMPLETENESS_THRESHOLD = 0.9
-            completeness_ratio = collected / replicas if replicas > 0 else 0
+            completeness_ratio = (
+                collected / actual_replicas if actual_replicas > 0 else 0
+            )
             if completeness_ratio >= METRICS_COMPLETENESS_THRESHOLD and len(
                 cpu_percentages
             ) == len(memory_percentages):
@@ -447,14 +478,14 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                 )
 
                 logger.warning(
-                    f"Using partial metrics from {collected}/{replicas} pods "
+                    f"Using partial metrics from {collected}/{actual_replicas} pods "
                     f"({completeness_ratio * 100:.1f}% complete). "
                     f"CPU={cpu_mean:.2f}%, MEM={mem_mean:.2f}%"
                 )
                 return cpu_mean, mem_mean, response_time, collected
 
             logger.warning(
-                f"Only collected metrics from {collected} pods, expected {replicas}"
+                f"Only collected metrics from {collected} pods, expected {actual_replicas}"
             )
             continue
 
@@ -469,36 +500,46 @@ def get_metrics(  # noqa: PLR0912, PLR0915
     if last_known_metrics is not None:
         last_cpu, last_mem, last_rt, last_replicas = last_known_metrics
 
-        # If pods crashed (replica count decreased), scale up utilization proportionally
-        # This prevents cascading failures where crash → timeout → agent doesn't scaleup
-        if last_replicas > replicas:
-            # Calculate scale factor: if 7 pods → 4 pods, factor = 7/4 = 1.75x load
-            # per pod
-            scale_factor = last_replicas / replicas
+        # actual_replicas was already determined at the start of this function
+        # So we can use it directly here
+        # Note: If desired_replicas was None, actual_replicas == replicas (unchanged)
+
+        # Now adjust metrics based on replica count change
+        # ALWAYS adjust if replica count changed, regardless of direction
+        if last_replicas != actual_replicas and actual_replicas > 0:
+            # Calculate scale factor: if 36 pods → 10 pods, factor = 36/10 = 3.6x load
+            #  per pod
+            scale_factor = last_replicas / actual_replicas
             adjusted_cpu = min(last_cpu * scale_factor, 100.0)
             adjusted_mem = min(last_mem * scale_factor, 100.0)
 
             logger.warning(
-                f"Timeout during replica decrease detected! "
-                f"Pods: {last_replicas}→{replicas}. "
-                f"Scaling metrics by {scale_factor:.2f}x: "
+                f"Timeout with replica change detected! "
+                f"Pods: {last_replicas}→{actual_replicas} (scale_factor={scale_factor:.2f}x). "
+                f"Adjusting metrics: "
                 f"CPU {last_cpu:.1f}%→{adjusted_cpu:.1f}%, "
                 f"MEM {last_mem:.1f}%→{adjusted_mem:.1f}%"
             )
-            return adjusted_cpu, adjusted_mem, last_rt, replicas
+            return adjusted_cpu, adjusted_mem, last_rt, actual_replicas
 
-        # If replicas increased or stayed same, use last known values as-is
+        # No replica change, use last known values as-is
         logger.warning(
             f"Timeout reached while fetching metrics. "
             f"Using last known good values: "
             f"CPU={last_cpu:.2f}%, MEM={last_mem:.2f}%, "
-            f"RT={last_rt:.2f}ms, Replicas={replicas}"
+            f"RT={last_rt:.2f}ms, Replicas={actual_replicas}"
         )
-        return last_cpu, last_mem, last_rt, replicas
-
-    # No historical data - return conservative high values
+        return (
+            last_cpu,
+            last_mem,
+            last_rt,
+            actual_replicas,
+        )  # No historical data - return conservative high values to trigger scale-up
+    # This prevents under-provisioning when we have no data to work with
+    conservative_replicas = max(actual_replicas, 2) if actual_replicas > 0 else 2
     logger.error(
-        "Timeout reached while fetching metrics and no historical data available. "
-        "Returning conservative high values to prevent under-scaling."
+        f"Timeout reached while fetching metrics and no historical data available. "
+        f"Returning conservative high values to prevent under-scaling. "
+        f"Using {conservative_replicas} replicas."
     )
-    return 100.0, 100.0, 100.0, replicas
+    return 80.0, 80.0, 100.0, conservative_replicas

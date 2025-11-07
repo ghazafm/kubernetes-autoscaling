@@ -243,25 +243,6 @@ def log_verbose_details(  # noqa: PLR0915
         f"{replica_str} | {act_str} | {q_str} | {best_s}"
     )
 
-    # === LINE 1: Core Metrics ===
-    hdr = f"▶ Iter {iter_no:02d} " if isinstance(iter_no, int) else "▶ "
-    cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
-    mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-    rt_str = f"{rt_col}RT {rt_percentage:6.1f}%{RESET}"
-    replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
-    act_str = f"ACT {int(act):3d}"
-
-    if qmax is not None and best_idx is not None:
-        q_str = f"Qmax {qmax:+.3f}"
-        best_s = f"Best {best_idx:3d}"
-    else:
-        q_str, best_s = "Qmax  n/a", "Best n/a"
-
-    logger.info(
-        f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
-        f"{replica_str} | {act_str} | {q_str} | {best_s}"
-    )
-
     # === LINE 2: Deltas, Stability, Direction ===
     # Color deltas: green if decreasing (good for CPU/Mem/RT), red if increasing
     def _delta_color(delta: float) -> str:
@@ -302,8 +283,7 @@ def log_verbose_details(  # noqa: PLR0915
     dir_str = f"{dir_color}{dir_symbol}{dir_text}{RESET}"
 
     logger.info(
-        f"     | {cpu_d_str} | {mem_d_str} | {rt_d_str} | "
-        f"{time_str} | Dir {dir_str}"
+        f"     | {cpu_d_str} | {mem_d_str} | {rt_d_str} | {time_str} | Dir {dir_str}"
     )
 
     # === DEBUG: Q-values ===
