@@ -84,3 +84,4 @@ kubeconfig
 *.temp
 .cache/
 *.env
+*.txt

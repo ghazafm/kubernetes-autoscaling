@@ -192,16 +192,21 @@ def log_verbose_details(
     # Pull metrics with sane defaults
     cpu = float(observation.get("cpu_usage", 0.0))  # %
     mem = float(observation.get("memory_usage", 0.0))  # %
-    rt = float(observation.get("response_time", 0.0))  # ms (assumed)
+    # response_time in observation is normalized percentage (0-100)
+    # Get actual RT from env if available, otherwise denormalize
+    rt_percentage = float(observation.get("response_time", 0.0))  # percentage
+    # Try to get actual response time from environment's max_response_time
+    # If not available, show as percentage
     act = observation.get("last_action", 0)  # 0-100 (your convention)
     iter_no = observation.get("iteration")  # optional
 
     # Bars and colors
     cpu_col = _color(cpu, warn=70, crit=90)  # higher is worse
     mem_col = _color(mem, warn=75, crit=90)  # higher is worse
+    # Color based on percentage (0-100), where >100 is critical
     rt_col = _color(
-        rt, warn=200, crit=500, reverse=True
-    )  # lower is better ⇒ reverse thresholds
+        rt_percentage, warn=80, crit=100, reverse=False
+    )  # higher percentage is worse
 
     cpu_bar = _bar(cpu)
     mem_bar = _bar(mem)
@@ -214,7 +219,8 @@ def log_verbose_details(
     hdr = f"▶ Iter {iter_no:02d} " if isinstance(iter_no, int) else "▶ "
     cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
     mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-    rt_str = f"{rt_col}RT {_fmt_ms(rt)}{RESET}"
+    # Show response time as percentage of SLA
+    rt_str = f"{rt_col}RT {rt_percentage:6.1f}%{RESET}"
     act_str = f"ACT {int(act):3d}"
 
     if qmax is not None and best_idx is not None:
