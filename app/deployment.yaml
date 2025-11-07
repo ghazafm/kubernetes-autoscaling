@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: flask-app
+  namespace: default
   labels:
     app: flask-app
 spec:
@@ -13,43 +14,44 @@ spec:
     metadata:
       labels:
         app: flask-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
       - name: flask-app
         image: fauzanghaza/flask-app:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 5000
           name: http-app
+          protocol: TCP
         - containerPort: 8000
           name: http-metrics
-        env:
-        - name: APP_HOST
-          value: "0.0.0.0"
-        - name: APP_PORT
-          value: "5000"
-        - name: METRICS_PORT
-          value: "8000"
-        - name: DEBUG
-          value: "false"
-        - name: DEFAULT_SLEEP_TIME
-          value: "0.3"
-        - name: MAX_MEMORY_MB
-          value: "100"
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: flask-app-config
         livenessProbe:
           httpGet:
             path: /health
             port: 5000
+            scheme: HTTP
           initialDelaySeconds: 10
           periodSeconds: 30
           timeoutSeconds: 5
+          successThreshold: 1
           failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /ready
             port: 5000
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 10
           timeoutSeconds: 3
+          successThreshold: 1
           failureThreshold: 3
         resources:
           requests:
@@ -58,11 +60,20 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        # Ensure resources are always enforced
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+              - ALL
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: flask-app
+  namespace: default
   labels:
     app: flask-app
 spec:
@@ -73,6 +84,8 @@ spec:
   - name: http-app
     port: 80
     targetPort: 5000
+    protocol: TCP
   - name: http-metrics
     port: 8000
     targetPort: 8000
+    protocol: TCP
