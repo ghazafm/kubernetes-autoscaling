@@ -119,6 +119,16 @@ class Trainer:
                     )
 
                     obs = self.env.reset()
+                    self.logger.info("Environment reset.")
+                    self.logger.debug(
+                        f"Initial observation type: {type(obs)}, value: {obs}"
+                    )
+                    log_verbose_details(
+                        observation=obs,
+                        agent=self.agent,
+                        verbose=True,
+                        logger=self.logger,
+                    )
                     total = 0.0
                     iteration_errors = 0
                     max_iteration_errors = 10
