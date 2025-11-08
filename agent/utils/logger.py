@@ -274,13 +274,13 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
         # Color epsilon: green (low=exploit), yellow (mid), red (high=explore)
         eps_col = _color(epsilon * 100, warn=30, crit=60, reverse=True)
         eps_str = f"{eps_col}ε {epsilon:.3f}{RESET}"
+        logger.info(f"{hdr}| {act_str} | {q_str} | {best_s} | {eps_str}")
         logger.info(
-            f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
-            f"{replica_str} | {act_str} | {q_str} | {best_s} | {eps_str}"
+            f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | {replica_str}"
         )
     else:
         logger.info(
-            f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
+            f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
             f"{replica_str} | {act_str} | {q_str} | {best_s}"
         )
 
@@ -324,7 +324,8 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     dir_str = f"{dir_color}{dir_symbol}{dir_text}{RESET}"
 
     logger.info(
-        f"{hdr}| {cpu_d_str} | {mem_d_str} | {rt_d_str} | {time_str} | Dir {dir_str}"
+        f"{' ' * len(hdr)}| {cpu_d_str} | {mem_d_str} | {rt_d_str} | "
+        f"{time_str} | Dir {dir_str}"
     )
 
     # === LINE 3: Load Indicators ===
@@ -357,7 +358,7 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     err_bar = _bar(min(error_rate * 10.0, 100.0), width=10)
     err_str = f"{err_col}{err_symbol}ERR {error_rate:5.2f}% {err_bar}{RESET}"
 
-    logger.info(f"{hdr}| {rps_str} | {rps_d_str} | {err_str}")
+    logger.info(f"{' ' * len(hdr)}| {rps_str} | {rps_d_str} | {err_str}")
 
     # === DEBUG: Q-values ===
     if q_vals is None:
