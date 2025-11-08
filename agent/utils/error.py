@@ -237,8 +237,14 @@ def _get_pod_readiness_error_estimate(
         NOT_READY_RATIO_THRESHOLD = 0.1
         if not_ready_ratio > NOT_READY_RATIO_THRESHOLD:  # More than 10% not ready
             logger.warning(
-                f"Pod readiness issue: {ready_pods}/{total_pods} ready "
-                f"(estimated error contribution: {estimated_error_contribution:.1f}%)"
+                f"⚠️  Pod readiness issue detected: "
+                f"{ready_pods}/{total_pods} ready ({not_ready_ratio * 100:.1f}% not ready) → "
+                f"estimated error contribution: {estimated_error_contribution:.1f}%"
+            )
+        elif estimated_error_contribution > 0:
+            logger.info(
+                f"Pod readiness: {ready_pods}/{total_pods} ready → "
+                f"error contribution: {estimated_error_contribution:.1f}%"
             )
 
         return estimated_error_contribution
@@ -298,9 +304,16 @@ def get_error_rate(
 
     breakdown["final_error_rate_pct"] = total_error_rate
 
-    logger.debug(
-        f"Enhanced error rate: {total_error_rate:.2f}% "
-        f"(base: {error_rate:.2f}%, readiness adj: {readiness_error_estimate:.1f}%)"
-    )
+    # Log detailed error breakdown when errors detected
+    if total_error_rate > 0:
+        logger.info(
+            f"🔴 Error rate: {total_error_rate:.2f}% "
+            f"(app 5xx: {error_rate:.2f}%, pod readiness: {readiness_error_estimate:.2f}%)"
+        )
+    else:
+        logger.debug(
+            f"Enhanced error rate: {total_error_rate:.2f}% "
+            f"(base: {error_rate:.2f}%, readiness adj: {readiness_error_estimate:.1f}%)"
+        )
 
     return total_error_rate, breakdown
