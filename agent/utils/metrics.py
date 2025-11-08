@@ -3,13 +3,14 @@ import time
 
 import numpy as np
 from prometheus_api_client import PrometheusApiClientException, PrometheusConnect
+from utils import get_error_rate
 
 
 def _metrics_query(
     namespace: str,
     deployment_name: str,
     interval: int = 15,
-) -> tuple[str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str]:
     cpu_query = f"""
         (
             sum by (pod) (
@@ -76,30 +77,12 @@ def _metrics_query(
         )
         """
 
-    # Query for error rate (5xx errors)
-    error_rate_query = f"""
-        sum(
-            rate(http_requests_total{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                http_status=~"5.."
-            }}[{interval}s])
-        ) /
-        sum(
-            rate(http_requests_total{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*"
-            }}[{interval}s])
-        ) * 100
-        """
-
     return (
         cpu_query,
         memory_query,
         cpu_limits_query,
         memory_limits_query,
         rps_query,
-        error_rate_query,
     )
 
 
@@ -283,32 +266,6 @@ def _get_request_rate(
         return 0.0
 
 
-def _get_error_rate(
-    prometheus: PrometheusConnect,
-    error_rate_query: str,
-    logger: logging.Logger = logging.getLogger(__name__),  # noqa: B008
-) -> float:
-    """Get current error rate (% of 5xx responses) for the deployment."""
-    try:
-        result = prometheus.custom_query(error_rate_query)
-        if result and len(result) > 0:
-            error_pct = float(result[0]["value"][1])
-            # Handle NaN (occurs when no requests exist)
-            if np.isnan(error_pct):
-                logger.debug("Error rate is NaN (no requests), returning 0.0%")
-                return 0.0
-            logger.debug(f"Current error rate: {error_pct:.2f}%")
-            return error_pct
-        logger.debug("No error rate data available, returning 0.0%")
-        return 0.0
-    except PrometheusApiClientException as e:
-        logger.warning(f"Failed to fetch error rate: {e}. Returning 0.0%")
-        return 0.0
-    except Exception as e:
-        logger.error(f"Unexpected error fetching error rate: {e}. Returning 0.0%")
-        return 0.0
-
-
 def _scrape_metrics(
     fetch_timeout: int,
     prometheus: PrometheusConnect,
@@ -457,7 +414,6 @@ def get_metrics(  # noqa: PLR0912, PLR0915
             cpu_limits_query,
             memory_limits_query,
             rps_query,
-            error_rate_query,
         ) = _metrics_query(namespace, deployment_name, interval=interval)
         logger.debug("Metrics queries prepared, querying Prometheus...")
         logger.debug(f"CPU Query: {cpu_query}")
@@ -465,7 +421,6 @@ def get_metrics(  # noqa: PLR0912, PLR0915
         logger.debug(f"CPU Limits Query: {cpu_limits_query}")
         logger.debug(f"Memory Limits Query: {memory_limits_query}")
         logger.debug(f"RPS Query: {rps_query}")
-        logger.debug(f"Error Rate Query: {error_rate_query}")
 
         try:
             fetch_timeout = timeout / 2
@@ -520,10 +475,18 @@ def get_metrics(  # noqa: PLR0912, PLR0915
                 logger=logger,
             )
 
-            error_rate = _get_error_rate(
+            # This includes app 5xx errors, connection failures, and pod readiness
+            error_rate, error_breakdown = get_error_rate(
                 prometheus=prometheus,
-                error_rate_query=error_rate_query,
+                deployment_name=deployment_name,
+                namespace=namespace,
+                interval=interval,
+                desired_replicas=actual_replicas,
                 logger=logger,
+            )
+
+            logger.debug(
+                f"Error rate: {error_rate:.2f}% (breakdown: {error_breakdown})"
             )
 
             collected = len(pod_names)
@@ -624,38 +587,51 @@ def get_metrics(  # noqa: PLR0912, PLR0915
         ) = last_known_metrics
 
         if last_replicas != actual_replicas and actual_replicas > 0:
-            # scale factor untuk perkiraan jumah sumber daya yang dipakai
             scale_factor = last_replicas / actual_replicas
             adjusted_cpu = min(last_cpu * scale_factor, 100.0)
             adjusted_mem = min(last_mem * scale_factor, 100.0)
 
             if last_rt > 0:
                 if scale_factor > 1.0:
-                    # RT increases exponentially under overload
-                    # 2x load → ~2.8x RT (queuing delays)
                     rt_multiplier = min(scale_factor**1.5, 5.0)
                     adjusted_rt = last_rt * rt_multiplier
                 else:
-                    # RT improves, but conservatively
                     rt_multiplier = max(scale_factor**0.7, 0.5)
                     adjusted_rt = last_rt * rt_multiplier
             else:
                 adjusted_rt = last_rt
 
-            # RPS: Total stays same (external load unchanged)
             adjusted_rps = last_rps
 
-            # Error Rate: Correlates with overload pressure
-            if scale_factor > 1.0:  # Scale DOWN
-                # Errors increase dramatically (timeouts, 503s)
-                # 2x load → 4x errors (cascading failures)
-                error_multiplier = scale_factor**2
-                adjusted_error_rate = min(last_error_rate * error_multiplier, 100.0)
-                # If no previous errors but severe overload, estimate baseline
-                if last_error_rate == 0.0 and scale_factor > 2.0:
-                    adjusted_error_rate = min((scale_factor - 1.0) * 2.0, 10.0)
-            else:  # Scale UP
-                # Errors decrease with more capacity
+            SCALE_FACTOR_THRESHOLD = 1.0
+            SCALE_FACTOR_LOW = 1.5
+            SCALE_FACTOR_VERY_AGGRESIVE = 3.0
+            SCALE_FACTOR_MODERATE = 2.0
+            if scale_factor > SCALE_FACTOR_THRESHOLD:
+                if scale_factor > SCALE_FACTOR_VERY_AGGRESIVE:
+                    base_error = 30.0
+                    adjusted_error_rate = min(
+                        base_error + (scale_factor - 3.0) * 10.0,
+                        75.0,
+                    )
+                    logger.debug(
+                        f"Very aggressive scale-down ({scale_factor:.1f}x): "
+                        f"error rate {adjusted_error_rate:.1f}%"
+                    )
+                elif scale_factor > SCALE_FACTOR_MODERATE:
+                    adjusted_error_rate = min(15.0 + (scale_factor - 2.0) * 15.0, 40.0)
+                    logger.debug(
+                        f"Moderate scale-down ({scale_factor:.1f}x): "
+                        f"error rate {adjusted_error_rate:.1f}%"
+                    )
+                elif scale_factor > SCALE_FACTOR_LOW:
+                    adjusted_error_rate = min(5.0 + (scale_factor - 1.5) * 10.0, 20.0)
+                else:
+                    error_multiplier = scale_factor**2
+                    adjusted_error_rate = min(
+                        max(last_error_rate * error_multiplier, 2.0), 10.0
+                    )
+            else:
                 error_multiplier = scale_factor**2
                 adjusted_error_rate = max(last_error_rate * error_multiplier, 0.0)
 

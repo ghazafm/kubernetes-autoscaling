@@ -197,7 +197,7 @@ def _safe_q_values(  # noqa: PLR0912
     return None, None, None
 
 
-def log_verbose_details(  # noqa: PLR0915
+def log_verbose_details(  # noqa: PLR0912, PLR0915
     observation: Dict[str, Any], agent: Any, verbose: bool, logger: Logger
 ) -> None:
     """
@@ -248,6 +248,9 @@ def log_verbose_details(  # noqa: PLR0915
     state_key = agent.get_state_key(observation)
     q_vals, qmax, best_idx = _safe_q_values(agent, state_key, logger)
 
+    # Epsilon (exploration rate) for DQN agents
+    epsilon = getattr(agent, "epsilon", None)
+
     RESET = "\033[0m"
     CYAN = "\033[36m"
     BLUE = "\033[34m"
@@ -266,10 +269,20 @@ def log_verbose_details(  # noqa: PLR0915
     else:
         q_str, best_s = "Qmax  n/a", "Best n/a"
 
-    logger.info(
-        f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
-        f"{replica_str} | {act_str} | {q_str} | {best_s}"
-    )
+    # Add epsilon to line 1 for DQN agents
+    if epsilon is not None:
+        # Color epsilon: green (low=exploit), yellow (mid), red (high=explore)
+        eps_col = _color(epsilon * 100, warn=30, crit=60, reverse=True)
+        eps_str = f"{eps_col}ε {epsilon:.3f}{RESET}"
+        logger.info(
+            f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
+            f"{replica_str} | {act_str} | {q_str} | {best_s} | {eps_str}"
+        )
+    else:
+        logger.info(
+            f"{hdr}| {cpu_str} | {mem_str} | {rt_str} | "
+            f"{replica_str} | {act_str} | {q_str} | {best_s}"
+        )
 
     # === LINE 2: Deltas, Stability, Direction ===
     # Color deltas: green if decreasing (good for CPU/Mem/RT), red if increasing

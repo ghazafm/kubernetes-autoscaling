@@ -24,7 +24,6 @@ Measures CPU usage rate per pod over the last 35 seconds. Uses OR logic to inclu
     rate(container_cpu_usage_seconds_total{
       namespace="default",
       pod=~"flask-app-.*",
-      container!="",
       container!="POD"
     }[35s])
   )
@@ -33,7 +32,6 @@ Measures CPU usage rate per pod over the last 35 seconds. Uses OR logic to inclu
     container_cpu_usage_seconds_total{
       namespace="default",
       pod=~"flask-app-.*",
-      container!="",
       container!="POD"
     }
   ) * 0
@@ -55,7 +53,6 @@ sum by (pod) (
   container_memory_working_set_bytes{
     namespace="default",
     pod=~"flask-app-.*",
-    container!="",
     container!="POD"
   }
 )
@@ -172,7 +169,6 @@ avg(
     rate(container_cpu_usage_seconds_total{
       namespace="default",
       pod=~"flask-app-.*",
-      container!="",
       container!="POD"
     }[1m])
   )
@@ -186,7 +182,6 @@ avg(
   container_memory_working_set_bytes{
     namespace="default",
     pod=~"flask-app-.*",
-    container!="",
     container!="POD"
   }
 ) / 1024 / 1024
@@ -298,7 +293,6 @@ sum by (pod) (
   rate(container_cpu_usage_seconds_total{
     namespace="default",
     pod=~"flask-app-.*",
-    container!="",
     container!="POD"
   }[1m])
 ) / on(pod) group_left()
@@ -317,7 +311,6 @@ sum by (pod) (
   container_memory_working_set_bytes{
     namespace="default",
     pod=~"flask-app-.*",
-    container!="",
     container!="POD"
   }
 ) / on(pod) group_left()
@@ -366,8 +359,7 @@ SELECT action FROM autoscaling_actions WHERE time > now() - 1h
 ### Using `curl`
 ```bash
 # Test CPU usage query
-curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
-  --data-urlencode 'query=sum(rate(container_cpu_usage_seconds_total{namespace="default",pod=~"flask-app-.*",container!="",container!="POD"}[1m]))'
+curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \container!="POD"}[1m]))'
 
 # Test pod count
 curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
@@ -398,7 +390,6 @@ avg(
     rate(container_cpu_usage_seconds_total{
       namespace="default",
       pod=~"flask-app-.*",
-      container!="",
       container!="POD"
     }[1m])
   )

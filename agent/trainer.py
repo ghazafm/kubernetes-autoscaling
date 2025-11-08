@@ -113,7 +113,9 @@ class Trainer:
             for ep in range(episodes):
                 try:
                     self.agent.add_episode_count()
-                    self.logger.info(f"\nEpisode {ep + 1}/{episodes}")
+                    epsilon = getattr(self.agent, "epsilon", None)
+                    eps_info = f" | ε {epsilon:.3f}" if epsilon is not None else ""
+                    self.logger.info(f"\nEpisode {ep + 1}/{episodes}{eps_info}")
                     self.logger.info(
                         f"Total episodes trained: {self.agent.episodes_trained}"
                     )

@@ -80,30 +80,23 @@ class DQN(Q):
                 response_time_raw / 100.0, 1.0
             )  # Normalize and cap at 1.0
 
-        # NEW: Current replica percentage (already 0-100, normalize to 0-1)
         current_replica_pct = observation.get("current_replica_pct", 0.0) / 100.0
 
-        # NEW: Metric deltas (already -100 to +100, normalize to -1 to +1)
         cpu_delta = np.clip(observation.get("cpu_delta", 0.0) / 100.0, -1.0, 1.0)
         memory_delta = np.clip(observation.get("memory_delta", 0.0) / 100.0, -1.0, 1.0)
         rt_delta = np.clip(observation.get("rt_delta", 0.0) / 100.0, -1.0, 1.0)
 
-        # NEW: Time in state (already 0-1)
         time_in_state = observation.get("time_in_state", 0.0)
 
-        # NEW: Scaling direction (already 0, 0.5, or 1)
         scaling_direction = observation.get("scaling_direction", 0.5)
 
-        # NEW: RPS per pod (scale-independent, normalize by expected max ~10 RPS/pod)
         rps_per_pod = observation.get("rps_per_pod", 0.0) / 10.0
-        rps_per_pod = np.clip(rps_per_pod, 0.0, 1.0)  # Cap at 1.0
+        rps_per_pod = np.clip(rps_per_pod, 0.0, 1.0)
 
-        # NEW: RPS delta (already -100 to +100, normalize to -1 to +1)
         rps_delta = np.clip(observation.get("rps_delta", 0.0) / 10.0, -1.0, 1.0)
 
-        # NEW: Error rate (0-10%, normalize to 0-1)
         error_rate = observation.get("error_rate", 0.0) / 10.0
-        error_rate = np.clip(error_rate, 0.0, 1.0)  # Cap at 1.0
+        error_rate = np.clip(error_rate, 0.0, 1.0)
 
         return np.array(
             [
@@ -174,9 +167,9 @@ class DQN(Q):
             if len(self.replay_buffer) < self.batch_size:
                 if self.train_step % self.target_update_freq == 0:
                     self.target_net.load_state_dict(self.policy_net.state_dict())
-                    self.logger.debug(
-                        f"Target network updated at step {self.train_step} (buffer not "
-                        "ready for learning)"
+                    self.logger.info(
+                        f"🎯 Target network updated at step {self.train_step} "
+                        f"(buffer: {len(self.replay_buffer)}/{self.batch_size})"
                     )
                 return
 
@@ -210,10 +203,18 @@ class DQN(Q):
             )
             self.optimizer.step()
 
+            # Log policy network learning every 100 steps
+            if self.train_step % 100 == 0:
+                self.logger.info(
+                    f"📚 Policy network learning | Step {self.train_step} | "
+                    f"Loss: {loss.item():.4f} | Buffer: {len(self.replay_buffer)}"
+                )
+
             if self.train_step % self.target_update_freq == 0:
                 self.target_net.load_state_dict(self.policy_net.state_dict())
-                self.logger.debug(
-                    f"Target network updated at step {self.train_step} (after learning)"
+                self.logger.info(
+                    f"🎯 Target network updated at step {self.train_step} "
+                    f"(loss: {loss.item():.4f})"
                 )
 
         except Exception as e:
