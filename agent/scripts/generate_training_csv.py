@@ -110,6 +110,7 @@ def _env_reward(
     mem: float,
     resp: float,
     replica_state: int,
+    error_rate: float,
     *,
     min_replicas: int = 1,
     max_replicas: int = 50,
@@ -118,11 +119,12 @@ def _env_reward(
     max_cpu: float = 90.0,
     max_memory: float = 90.0,
     max_response_time: float = 100.0,
-    response_time_weight: float = 1.0,
+    response_time_weight: float = 1.5,
+    error_rate_weight: float = 1.0,
     cpu_memory_weight: float = 0.5,
     cost_weight: float = 0.3,
 ) -> float:
-    # follow KubernetesEnv._calculate_reward()
+    # follow KubernetesEnv._calculate_reward() exactly
     range_replicas = max(1, max_replicas - min_replicas)
     response_time_percentage = (resp / max_response_time) * 100.0
 
@@ -140,15 +142,36 @@ def _env_reward(
     else:
         mem_pen = 0.0
 
-    resp_pen = min(
-        response_time_weight, max(0.0, (response_time_percentage - 100.0) / 100.0)
-    )
+    # Response time penalty - match environment.py exactly
+    RESPONSE_TIME_HIGH_THRESHOLD = 80.0
+    RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
+
+    if response_time_percentage < RESPONSE_TIME_HIGH_THRESHOLD:
+        resp_pen = 0.0
+    elif response_time_percentage < RESPONSE_TIME_VIOLATION_THRESHOLD:
+        resp_pen = 0.2 * ((response_time_percentage - 80.0) / 20.0)
+    else:
+        overage = (response_time_percentage - 100.0) / 100.0
+        resp_pen = min(
+            response_time_weight,
+            response_time_weight * (1.0 - (1.0 / (1.0 + overage))),
+        )
+
+    # Error rate penalty - match environment.py exactly
+    ERROR_RATE_THRESHOLD = 1.0
+    if error_rate > ERROR_RATE_THRESHOLD:
+        error_pen = min(
+            (error_rate / 10.0) * error_rate_weight,
+            error_rate_weight,
+        )
+    else:
+        error_pen = 0.0
 
     cpu_mem_pen = cpu_memory_weight * (cpu_pen + mem_pen)
 
     cost_pen = cost_weight * (replica_state - min_replicas) / range_replicas
 
-    reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen
+    reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen - error_pen
     return float(max(min(reward, 1.0), -1.0))
 
 
@@ -170,7 +193,8 @@ def build_row(
     min_memory: float = 20.0,
     max_memory: float = 90.0,
     max_response_time: float = 100.0,
-    response_time_weight: float = 1.0,
+    response_time_weight: float = 1.5,
+    error_rate_weight: float = 1.0,
     cpu_memory_weight: float = 0.5,
     cost_weight: float = 0.3,
 ) -> dict:
@@ -186,12 +210,29 @@ def build_row(
     # Convert response time (in ms) to percentage of max_response_time for observation
     resp_pct = round((float(resp) / max_response_time) * 100.0, 2)
 
+    # Calculate current RPS per pod and error rate BEFORE reward calculation
+    current_rps_per_pod = _calculate_rps_per_pod(
+        cpu, mem, replica, max_replicas=max_replicas
+    )
+
+    current_error_rate = _calculate_error_rate(
+        cpu,
+        mem,
+        resp,
+        replica,
+        current_rps_per_pod,
+        max_cpu=max_cpu,
+        max_memory=max_memory,
+        max_response_time=max_response_time,
+    )
+
     # compute reward using environment logic (pass raw milliseconds for resp)
     reward = _env_reward(
         cpu_pct,
         mem_pct,
         resp,  # Pass raw milliseconds, _env_reward will convert to percentage
         replica,
+        current_error_rate,  # NEW: Pass error_rate for penalty calculation
         min_replicas=min_replicas,
         max_replicas=max_replicas,
         min_cpu=min_cpu,
@@ -200,6 +241,7 @@ def build_row(
         max_memory=max_memory,
         max_response_time=max_response_time,
         response_time_weight=response_time_weight,
+        error_rate_weight=error_rate_weight,  # NEW: Pass error_rate_weight
         cpu_memory_weight=cpu_memory_weight,
         cost_weight=cost_weight,
     )
@@ -242,17 +284,7 @@ def build_row(
     # NEW: Calculate RPS delta
     rps_delta = next_rps_per_pod - current_rps_per_pod
 
-    # NEW: Calculate error rate for current and next state
-    current_error_rate = _calculate_error_rate(
-        cpu,
-        mem,
-        resp,
-        replica,
-        current_rps_per_pod,
-        max_cpu=max_cpu,
-        max_memory=max_memory,
-        max_response_time=max_response_time,
-    )
+    # NEW: Calculate error rate for next state only (current already calculated above for reward)
     next_error_rate = _calculate_error_rate(
         next_cpu,
         next_mem,
@@ -325,7 +357,8 @@ def generate(
     min_memory: float = 20.0,
     max_memory: float = 90.0,
     max_response_time: float = 100.0,
-    response_time_weight: float = 1.0,
+    response_time_weight: float = 1.5,
+    error_rate_weight: float = 1.0,
     cpu_memory_weight: float = 0.5,
     cost_weight: float = 0.3,
 ) -> None:
@@ -430,6 +463,7 @@ def generate(
                 max_memory=max_memory,
                 max_response_time=max_response_time,
                 response_time_weight=response_time_weight,
+                error_rate_weight=error_rate_weight,
                 cpu_memory_weight=cpu_memory_weight,
                 cost_weight=cost_weight,
             )
@@ -454,7 +488,8 @@ if __name__ == "__main__":
     default_min_memory = float(os.getenv("MIN_MEMORY", "20.0"))
     default_max_memory = float(os.getenv("MAX_MEMORY", "90.0"))
     default_max_response_time = float(os.getenv("MAX_RESPONSE_TIME", "100.0"))
-    default_response_time_weight = float(os.getenv("RESPONSE_TIME_WEIGHT", "1.0"))
+    default_response_time_weight = float(os.getenv("RESPONSE_TIME_WEIGHT", "1.5"))
+    default_error_rate_weight = float(os.getenv("ERROR_RATE_WEIGHT", "1.0"))
     default_cpu_memory_weight = float(os.getenv("CPU_MEMORY_WEIGHT", "0.5"))
     default_cost_weight = float(os.getenv("COST_WEIGHT", "0.15"))
 
@@ -474,6 +509,7 @@ if __name__ == "__main__":
     p.add_argument(
         "--response-time-weight", type=float, default=default_response_time_weight
     )
+    p.add_argument("--error-rate-weight", type=float, default=default_error_rate_weight)
     p.add_argument("--cpu-memory-weight", type=float, default=default_cpu_memory_weight)
     p.add_argument("--cost-weight", type=float, default=default_cost_weight)
     args = p.parse_args()
@@ -484,7 +520,10 @@ if __name__ == "__main__":
     print(f"  MIN_MEMORY={args.min_memory}%, MAX_MEMORY={args.max_memory}%")
     print(f"  MAX_RESPONSE_TIME={args.max_response_time}ms")
     print(
-        f"  Weights: RT={args.response_time_weight}, CPU/MEM={args.cpu_memory_weight}, COST={args.cost_weight}"
+        f"  Weights: RT={args.response_time_weight}, "
+        f"ERROR={args.error_rate_weight}, "
+        f"CPU/MEM={args.cpu_memory_weight}, "
+        f"COST={args.cost_weight}"
     )
     print(f"  Generating {args.rows} rows → {args.out}")
 
@@ -500,6 +539,7 @@ if __name__ == "__main__":
         max_memory=args.max_memory,
         max_response_time=args.max_response_time,
         response_time_weight=args.response_time_weight,
+        error_rate_weight=args.error_rate_weight,
         cpu_memory_weight=args.cpu_memory_weight,
         cost_weight=args.cost_weight,
     )

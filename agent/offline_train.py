@@ -65,13 +65,16 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
     mem = [30.0, 45.0, 70.0, 90.0, 55.0]
     resp = [10.0, 15.0, 30.0, 60.0, 25.0]
     replica = [1, 2, 3, 4, 3]
-    # NEW: 10D state components
+    # NEW: 13D state components
     replica_pct = [0.0, 2.0, 4.1, 6.1, 4.1]  # percentage of range
     cpu_delta = [0.0, 20.0, 20.0, 20.0, -30.0]
     mem_delta = [0.0, 15.0, 25.0, 20.0, -35.0]
     rt_delta = [0.0, 5.0, 15.0, 30.0, -35.0]
     time_in_state = [0.0, 0.1, 0.2, 0.3, 0.0]
     scaling_direction = [0.5, 1.0, 1.0, 1.0, 0.0]  # same, up, up, up, down
+    rps_per_pod = [5.0, 7.5, 6.0, 4.5, 5.5]  # requests per second per pod
+    rps_delta = [0.0, 2.5, -1.5, -1.5, 1.0]  # change in RPS per pod
+    error_rate = [0.0, 0.5, 1.2, 2.5, 1.0]  # error rate percentage
 
     # actions and rewards (toy values)
     actions = [1, 1, 0, -1, 0]
@@ -93,6 +96,9 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
                 "rt_delta": rt_delta[j],
                 "time_in_state": time_in_state[j],
                 "scaling_direction": scaling_direction[j],
+                "rps_per_pod": rps_per_pod[j],
+                "rps_delta": rps_delta[j],
+                "error_rate": error_rate[j],
             }
         )
 
@@ -107,6 +113,9 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
         "rt_delta": rt_delta,
         "time_in_state": time_in_state,
         "scaling_direction": scaling_direction,
+        "rps_per_pod": rps_per_pod,
+        "rps_delta": rps_delta,
+        "error_rate": error_rate,
         "action": actions,
         "reward": rewards,
         "next_state": next_states,
@@ -218,7 +227,7 @@ def train(
                 except Exception:
                     last_act_val = 0
 
-            # NEW: Extract 10D state components from CSV
+            # NEW: Extract 13D state components from CSV
             try:
                 current_replica_pct_val = float(data.get("current_replica_pct", 0.0))
             except Exception:
@@ -249,6 +258,21 @@ def train(
             except Exception:
                 scaling_direction_val = 0.5
 
+            try:
+                rps_per_pod_val = float(data.get("rps_per_pod", 0.0))
+            except Exception:
+                rps_per_pod_val = 0.0
+
+            try:
+                rps_delta_val = float(data.get("rps_delta", 0.0))
+            except Exception:
+                rps_delta_val = 0.0
+
+            try:
+                error_rate_val = float(data.get("error_rate", 0.0))
+            except Exception:
+                error_rate_val = 0.0
+
             obs = {
                 "cpu_usage": cpu_val,
                 "memory_usage": mem_val,
@@ -260,6 +284,9 @@ def train(
                 "rt_delta": rt_delta_val,
                 "time_in_state": time_in_state_val,
                 "scaling_direction": scaling_direction_val,
+                "rps_per_pod": rps_per_pod_val,
+                "rps_delta": rps_delta_val,
+                "error_rate": error_rate_val,
             }
             action = data.get("action", 0)
             # Extract next state / reward / done with fallbacks for CSV shapes
