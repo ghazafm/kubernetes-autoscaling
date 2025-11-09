@@ -54,6 +54,7 @@ function scaleDuration(minutes) {
 // Base pattern (1 hour cycle)
 const basePattern = [
   // ===== WARM-UP PHASE (Baseline establishment) =====
+  { duration: scaleDuration(1), target: 0 },     // No requests initially
   { duration: scaleDuration(1), target: 2 },     // Gentle start - 2 users
   { duration: scaleDuration(2), target: 2 },     // Baseline LOW traffic
 
