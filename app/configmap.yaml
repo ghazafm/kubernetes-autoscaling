@@ -14,7 +14,17 @@ data:
 
   # Performance tuning
   DEFAULT_SLEEP_TIME: "0.3"
-  MAX_MEMORY_MB: "100"
+
+  # Memory configuration (optimized for 512Mi container limit)
+  # Formula: (512 - 220 overhead) / 2 concurrent = 146 MB per request
+  # With 2-3 concurrent requests, container reaches 70-85% memory usage
+  MAX_MEMORY_MB: "140"
+
+  # CPU configuration (optimized for 500m CPU limit)
+  # Formula: Conservative limit to prevent timeouts under concurrent load
+  # 2.5M iterations ≈ 5-10s CPU time, safe under throttling
+  # With 3-5 concurrent requests, container reaches 70-95% CPU usage
+  MAX_CPU_ITERATIONS: "2500000"
 
   # Add more configuration as needed
   # LOG_LEVEL: "INFO"

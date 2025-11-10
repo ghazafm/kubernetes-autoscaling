@@ -210,30 +210,31 @@ function calculateSleepTime(phase, requestType) {
 }
 
 // Generate CPU iterations based on load phase and realism
+// Optimized for 500m CPU limit with MAX_CPU_ITERATIONS=2500000
 function getCpuIterations(phase) {
   let base, variance;
 
   switch(phase) {
     case 'NIGHT':
     case 'LOW':
-      base = 800000;      // Light CPU tasks
-      variance = 400000;
+      base = 500000;      // Light CPU tasks (0.5M-1M iterations)
+      variance = 500000;  // ~1-3 seconds CPU time
       break;
     case 'MEDIUM':
-      base = 1500000;     // Moderate CPU tasks
-      variance = 500000;
+      base = 1000000;     // Moderate CPU tasks (1M-1.5M iterations)
+      variance = 500000;  // ~2-5 seconds CPU time
       break;
     case 'HIGH':
-      base = 2000000;     // Heavy CPU tasks
-      variance = 800000;
+      base = 1500000;     // Heavy CPU tasks (1.5M-2M iterations)
+      variance = 500000;  // ~4-8 seconds CPU time
       break;
     case 'PEAK':
     case 'EXTREME':
-      base = 2500000;     // Very heavy CPU tasks
-      variance = 1000000;
+      base = 2000000;     // Maximum CPU tasks (2M-2.5M iterations)
+      variance = 500000;  // ~6-12 seconds CPU time (safe under concurrent load)
       break;
     default:
-      base = 1500000;
+      base = 1200000;
       variance = 500000;
   }
 
@@ -241,30 +242,31 @@ function getCpuIterations(phase) {
 }
 
 // Generate memory size based on load phase and realism
+// Optimized for 512Mi container limit with MAX_MEMORY_MB=140
 function getMemorySize(phase) {
   let base, variance;
 
   switch(phase) {
     case 'NIGHT':
     case 'LOW':
-      base = 25;          // Small allocations
+      base = 20;          // Small allocations (20-35 MB)
       variance = 15;
       break;
     case 'MEDIUM':
-      base = 40;          // Moderate allocations
+      base = 40;          // Moderate allocations (40-60 MB)
       variance = 20;
       break;
     case 'HIGH':
-      base = 55;          // Large allocations
+      base = 60;          // Large allocations (60-85 MB)
       variance = 25;
       break;
     case 'PEAK':
     case 'EXTREME':
-      base = 65;          // Very large allocations
-      variance = 30;
+      base = 80;          // Maximum allocations (80-120 MB)
+      variance = 40;      // Up to 120 MB max (safe for 140 MB limit)
       break;
     default:
-      base = 45;
+      base = 50;
       variance = 20;
   }
 
