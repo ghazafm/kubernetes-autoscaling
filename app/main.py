@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import math
 import os
 import time
@@ -10,7 +11,7 @@ app = Flask(__name__)
 
 # Configuration from environment variables
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
-APP_HOST = os.environ.get("APP_HOST", "0.0.0.0")
+APP_HOST = os.environ.get("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.environ.get("APP_PORT", "5000"))
 DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
 DEFAULT_SLEEP_TIME = float(os.environ.get("DEFAULT_SLEEP_TIME", "0.3"))
@@ -60,27 +61,47 @@ def memory_intensive():
     size_mb = request.args.get("size_mb", default=50, type=int)
 
     # Cap maximum allocation based on environment config
-    size_mb = min(size_mb, MAX_MEMORY_MB)
+    safe_mb = min(max(0, size_mb), MAX_MEMORY_MB)
 
-    elements = (size_mb * 1024 * 1024) // 8
+    # Allocate a contiguous block of bytes instead of a list of Python ints.
+    # Python ints are much larger than 8 bytes (object overhead), so
+    # list(range(...)) will consume far more memory than requested and can
+    # easily OOM the container under concurrent requests.
+    try:
+        allocated = bytearray(safe_mb * 1024 * 1024)
+        # Touch the allocation sparsely to ensure memory is actually committed
+        if safe_mb > 0:
+            step = max(1, (safe_mb * 1024 * 1024) // 1024)
+            for i in range(0, len(allocated), step):
+                allocated[i] = 0
 
-    large_list = list(range(elements))
+        # Use a tiny sample to return so we don't keep large objects around
+        sample_sum = len(allocated) if allocated is not None else 0
 
-    large_dict = {i: f"value_{i}" * 10 for i in range(min(elements // 100, 10000))}
+        # Free memory promptly
+        del allocated
 
-    total = sum(large_list[::1000])
-
-    del large_list
-    del large_dict
-
-    return jsonify(
-        {
-            "status": "success",
-            "message": "Memory-intensive task completed",
-            "allocated_mb": size_mb,
-            "sample_sum": total,
-        }
-    )
+        return jsonify(
+            {
+                "status": "success",
+                "message": "Memory-intensive task completed",
+                "allocated_mb": safe_mb,
+                "sample_sum": sample_sum,
+            }
+        )
+    except MemoryError:
+        # If the allocation fails, return a clear error so load tests can record it
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Memory allocation failed (MemoryError)",
+                    "requested_mb": size_mb,
+                    "capped_mb": safe_mb,
+                }
+            ),
+            503,
+        )
 
 
 @app.route("/health")
@@ -96,7 +117,7 @@ def ready():
 
 
 if __name__ == "__main__":
-    print(f"🚀 Starting Flask app on {APP_HOST}:{APP_PORT}")
-    print(f"📊 Metrics available on port {METRICS_PORT}")
-    print(f"🐛 Debug mode: {DEBUG_MODE}")
+    logging.info(f"🚀 Starting Flask app on {APP_HOST}:{APP_PORT}")
+    logging.info(f"📊 Metrics available on port {METRICS_PORT}")
+    logging.info(f"🐛 Debug mode: {DEBUG_MODE}")
     app.run(host=APP_HOST, port=APP_PORT, debug=DEBUG_MODE)

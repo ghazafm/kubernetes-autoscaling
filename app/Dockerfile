@@ -20,5 +20,5 @@ ENV APP_HOST=0.0.0.0 \
     DEFAULT_SLEEP_TIME=0.3 \
     MAX_MEMORY_MB=100
 
-# Run the application
-CMD ["python", "main.py"]
+# Run the application via Gunicorn in production mode. Use 2 workers by default; tune based on memory limits.
+CMD ["gunicorn", "-w", "2", "-k", "gthread", "-b", "0.0.0.0:5000", "main:app"]

@@ -6,6 +6,8 @@ click==8.3.0
     # via flask
 flask==3.1.2
     # via app (pyproject.toml)
+gunicorn==23.0.0
+    # via app (pyproject.toml)
 itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
@@ -15,6 +17,8 @@ markupsafe==3.0.3
     #   flask
     #   jinja2
     #   werkzeug
+packaging==25.0
+    # via gunicorn
 prometheus-client==0.23.1
     # via rl-autoscale
 rl-autoscale==1.0.3
