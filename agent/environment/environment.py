@@ -1,3 +1,4 @@
+import math
 import time
 from logging import Logger
 from typing import Optional
@@ -80,12 +81,12 @@ class KubernetesEnv:
         self.observation_space = {
             "cpu_usage": (0, 100.0),
             "memory_usage": (0, 100.0),
-            "response_time": (0, 100.0),
+            "response_time": (0, 1000.0),  # FIXED: Allow RT up to 1000% (10x violation)
             "current_replica_pct": (0, 100.0),
             "last_action": (0, 99),
             "cpu_delta": (-100.0, 100.0),
             "memory_delta": (-100.0, 100.0),
-            "rt_delta": (-100.0, 100.0),
+            "rt_delta": (-1000.0, 1000.0),  # FIXED: Match RT range
             "time_in_state": (0, 1.0),
             "scaling_direction": (0, 1.0),  # 0=down, 0.5=same, 1=up
             # NEW: Load indicators (scale-independent)
@@ -266,56 +267,89 @@ class KubernetesEnv:
         # Convert response time to percentage for scale-independent SLA
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
 
-        # CPU penalty: binary (0 if within bounds, scaled penalty if outside)
+        # CPU penalty: normalized to [0, 1] range
         if self.cpu_usage < self.min_cpu:
-            cpu_pen = (self.min_cpu - self.cpu_usage) / self.min_cpu
+            cpu_pen = (self.min_cpu - self.cpu_usage) / 100.0
         elif self.cpu_usage > self.max_cpu:
-            cpu_pen = (self.cpu_usage - self.max_cpu) / (100 - self.max_cpu)
+            cpu_pen = (self.cpu_usage - self.max_cpu) / 100.0
         else:
             cpu_pen = 0.0
 
-        # Memory penalty: binary (0 if within bounds, scaled penalty if outside)
+        # Memory penalty: normalized to [0, 1] range
         if self.memory_usage < self.min_memory:
-            mem_pen = (self.min_memory - self.memory_usage) / self.min_memory
+            mem_pen = (self.min_memory - self.memory_usage) / 100.0
         elif self.memory_usage > self.max_memory:
-            mem_pen = (self.memory_usage - self.max_memory) / (100 - self.max_memory)
+            mem_pen = (self.memory_usage - self.max_memory) / 100.0
         else:
             mem_pen = 0.0
 
+        # Response Time Penalty - FIXED FORMULA
+        # Uses sigmoid-like curve to properly handle extreme violations
+        # while keeping penalties in [0, 1] range
         RESPONSE_TIME_HIGH_THRESHOLD = 80.0
         RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
 
         if response_time_percentage < RESPONSE_TIME_HIGH_THRESHOLD:
+            # No penalty for acceptable response times
             resp_pen = 0.0
         elif response_time_percentage < RESPONSE_TIME_VIOLATION_THRESHOLD:
-            resp_pen = 0.2 * ((response_time_percentage - 80.0) / 20.0)
+            # Linear ramp from 80% to 100%: penalty grows from 0.0 to 1.0
+            normalized_rt = (response_time_percentage - 80.0) / 20.0  # 0.0 to 1.0
+            resp_pen = normalized_rt
         else:
-            overage = (response_time_percentage - 100.0) / 100.0
-            resp_pen = min(
-                self.response_time_weight,
-                self.response_time_weight * (1.0 - (1.0 / (1.0 + overage))),
-            )
+            # Exponential penalty for severe violations (RT > 100%)
+            # This ensures severe violations are heavily penalized
+            # but still capped at 1.0 to prevent overwhelming other penalties
+            violation_severity = (response_time_percentage - 100.0) / 100.0
+            # Use tanh to create smooth saturation at 1.0
 
+            resp_pen = math.tanh(
+                1.0 + violation_severity
+            )  # Approaches 1.0 asymptotically
+
+        # Error Rate Penalty - normalized to [0, 1]
         ERROR_RATE_THRESHOLD = 1.0
         if self.error_rate > ERROR_RATE_THRESHOLD:
-            error_pen = min(
-                (self.error_rate / 10.0) * self.error_rate_weight,
-                self.error_rate_weight,
-            )
+            error_pen = min((self.error_rate - 1.0) / 9.0, 1.0)
         else:
             error_pen = 0.0
 
-        cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
-
-        cost_pen = (
+        # Combine penalties with weights
+        # All individual penalties are now in [0, 1] range
+        # Weights determine relative importance
+        weighted_resp_pen = self.response_time_weight * resp_pen
+        weighted_error_pen = self.error_rate_weight * error_pen
+        weighted_cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
+        weighted_cost_pen = (
             self.cost_weight
             * (self.replica_state - self.min_replicas)
             / self.range_replicas
         )
 
-        reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen - error_pen
+        # Calculate total penalty
+        total_penalty = (
+            weighted_resp_pen
+            + weighted_error_pen
+            + weighted_cpu_mem_pen
+            + weighted_cost_pen
+        )
 
-        # Clamp for stability
+        # Normalize total penalty to ensure reward stays in [-1, 1] range
+        # Maximum possible penalty is sum of all weights
+        max_possible_penalty = (
+            self.response_time_weight
+            + self.error_rate_weight
+            + self.cpu_memory_weight * 2.0  # CPU + Memory can both max out
+            + self.cost_weight
+        )
+
+        # Normalize penalty to [0, 1] range
+        normalized_penalty = min(total_penalty / max_possible_penalty, 1.0)
+
+        # Final reward: 1.0 (perfect) to -1.0 (worst)
+        reward = 1.0 - 2.0 * normalized_penalty
+
+        # Clamp for stability (should already be in range, but safety check)
         return float(max(min(reward, 1.0), -1.0))
 
     def _scale_and_get_metrics(self) -> None:
@@ -368,9 +402,13 @@ class KubernetesEnv:
             )
 
     def _get_observation(self) -> dict[str, float]:
-        response_time_percentage = min(
-            (self.response_time / self.max_response_time) * 100.0, 100.0
-        )
+        # FIXED: Don't clamp RT percentage - let DQN see full severity of violations
+        # This allows the neural network to learn the true state of the system
+        response_time_percentage = (self.response_time / self.max_response_time) * 100.0
+
+        # However, cap at a reasonable maximum for numerical stability (10x violation)
+        # This prevents extreme outliers from destabilizing training
+        response_time_percentage = min(response_time_percentage, 1000.0)
 
         # Calculate current replica percentage based on ACTUAL ready replicas
         current_replica_percentage = (
