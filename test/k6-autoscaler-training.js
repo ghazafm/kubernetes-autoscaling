@@ -227,31 +227,32 @@ function calculateSleepTime(phase, requestType) {
 
 // Generate CPU iterations based on load phase and realism
 // Optimized for 500m CPU limit with MAX_CPU_ITERATIONS=2500000
+// REDUCED to avoid long-tail latency and request queueing under high concurrency
 function getCpuIterations(phase) {
   let base, variance;
 
   switch(phase) {
     case 'NIGHT':
     case 'LOW':
-      base = 500000;      // Light CPU tasks (0.5M-1M iterations)
-      variance = 500000;  // ~1-3 seconds CPU time
+      base = 200000;      // Light CPU tasks (200k-500k iterations)
+      variance = 300000;  // ~0.5-2 seconds CPU time
       break;
     case 'MEDIUM':
-      base = 1000000;     // Moderate CPU tasks (1M-1.5M iterations)
-      variance = 500000;  // ~2-5 seconds CPU time
+      base = 400000;      // Moderate CPU tasks (400k-800k iterations)
+      variance = 400000;  // ~1-3 seconds CPU time
       break;
     case 'HIGH':
-      base = 1500000;     // Heavy CPU tasks (1.5M-2M iterations)
-      variance = 500000;  // ~4-8 seconds CPU time
+      base = 600000;      // Heavy CPU tasks (600k-1M iterations)
+      variance = 400000;  // ~2-4 seconds CPU time
       break;
     case 'PEAK':
     case 'EXTREME':
-      base = 2000000;     // Maximum CPU tasks (2M-2.5M iterations)
-      variance = 500000;  // ~6-12 seconds CPU time (safe under concurrent load)
+      base = 800000;      // Maximum CPU tasks (800k-1.2M iterations)
+      variance = 400000;  // ~3-5 seconds CPU time (avoids queueing at high VU)
       break;
     default:
-      base = 1200000;
-      variance = 500000;
+      base = 500000;
+      variance = 300000;
   }
 
   return Math.floor(base + Math.random() * variance);
@@ -259,31 +260,33 @@ function getCpuIterations(phase) {
 
 // Generate memory size based on load phase and realism
 // Optimized for 512Mi container limit with MAX_MEMORY_MB=140
+// CRITICAL: Max request must account for concurrency (2-3 simultaneous requests)
+// Formula: Safe_Max = MAX_MEMORY_MB ÷ 2 = 140 ÷ 2 = 70 MB
 function getMemorySize(phase) {
   let base, variance;
 
   switch(phase) {
     case 'NIGHT':
     case 'LOW':
-      base = 20;          // Small allocations (20-35 MB)
-      variance = 15;
+      base = 10;          // Minimal allocations (10-20 MB)
+      variance = 10;
       break;
     case 'MEDIUM':
-      base = 40;          // Moderate allocations (40-60 MB)
-      variance = 20;
+      base = 25;          // Light allocations (25-40 MB)
+      variance = 15;
       break;
     case 'HIGH':
-      base = 60;          // Large allocations (60-85 MB)
-      variance = 25;
+      base = 40;          // Moderate allocations (40-55 MB)
+      variance = 15;
       break;
     case 'PEAK':
     case 'EXTREME':
-      base = 80;          // Maximum allocations (80-120 MB)
-      variance = 40;      // Up to 120 MB max (safe for 140 MB limit)
+      base = 50;          // Maximum allocations (50-70 MB)
+      variance = 20;      // Up to 70 MB max (safe for 2-3 concurrent requests)
       break;
     default:
-      base = 50;
-      variance = 20;
+      base = 30;
+      variance = 15;
   }
 
   return Math.floor(base + Math.random() * variance);

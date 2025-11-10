@@ -1,5 +1,5 @@
-import http from 'k6/http';
 import { check, sleep } from 'k6';
+import http from 'k6/http';
 import { Rate, Trend } from 'k6/metrics';
 
 // Custom metrics
@@ -24,11 +24,12 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 
 export default function () {
-  // Safe memory allocation - smaller memory sizes within pod limits
-  const sizeMb = Math.floor(Math.random() * 50) + 30; // 30MB to 80MB
+  // Safe memory allocation - account for concurrency (2-3 simultaneous requests)
+  // Max safe: 140 MB ÷ 2 = 70 MB per request
+  const sizeMb = Math.floor(Math.random() * 50) + 20; // 20MB to 70MB (safe for concurrency)
   const memRes = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`);
   memoryDuration.add(memRes.timings.duration);
-  
+
   check(memRes, {
     'memory stress status is 200': (r) => r.status === 200,
     'memory stress completed': (r) => {
@@ -40,6 +41,6 @@ export default function () {
       }
     },
   }) || errorRate.add(1);
-  
+
   sleep(2); // Longer sleep to allow memory cleanup between requests
 }

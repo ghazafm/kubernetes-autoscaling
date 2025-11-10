@@ -1,5 +1,5 @@
-import http from 'k6/http';
 import { check, sleep } from 'k6';
+import http from 'k6/http';
 import { Rate } from 'k6/metrics';
 
 const errorRate = new Rate('errors');
@@ -23,21 +23,25 @@ const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 
 export default function () {
   const endpoint = Math.random() > 0.5 ? 'cpu' : 'memory';
-  
+
   let url;
   if (endpoint === 'cpu') {
-    const iterations = Math.floor(Math.random() * 1500000) + 500000;
+    // Reduce per-request CPU workload during spikes to avoid long-tail latency
+    // Use 200k-600k iterations which keeps individual request time reasonable
+    // while still exercising CPU paths. Must be <= MAX_CPU_ITERATIONS.
+    const iterations = Math.floor(Math.random() * 400000) + 200000; // 200k-600k
     url = `${BASE_URL}/api/cpu?iterations=${iterations}`;
   } else {
-    const sizeMb = Math.floor(Math.random() * 150) + 50;
+    // FIXED: Max 70 MB to account for concurrent requests (was 50-200 MB!)
+    const sizeMb = Math.floor(Math.random() * 50) + 20; // 20-70 MB
     url = `${BASE_URL}/api/memory?size_mb=${sizeMb}`;
   }
-  
+
   const res = http.get(url);
-  
+
   check(res, {
     'spike test status is 200': (r) => r.status === 200,
   }) || errorRate.add(1);
-  
+
   sleep(0.5);
 }

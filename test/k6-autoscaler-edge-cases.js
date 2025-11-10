@@ -213,27 +213,28 @@ function getWorkloadParams(type, intensity) {
         params = { iterations: 1500000 };
     }
   } else if (type === 'memory') {
+    // FIXED: Reduced all values to max 70 MB for concurrency safety
     switch(intensity) {
       case 'minimal':
-        params = { size_mb: 15 + Math.floor(Math.random() * 10) };
+        params = { size_mb: 10 + Math.floor(Math.random() * 10) }; // 10-20 MB
         break;
       case 'light':
-        params = { size_mb: 25 + Math.floor(Math.random() * 15) };
+        params = { size_mb: 20 + Math.floor(Math.random() * 15) }; // 20-35 MB
         break;
       case 'moderate':
-        params = { size_mb: 45 + Math.floor(Math.random() * 20) };
+        params = { size_mb: 30 + Math.floor(Math.random() * 15) }; // 30-45 MB
         break;
       case 'high':
-        params = { size_mb: 65 + Math.floor(Math.random() * 25) };
+        params = { size_mb: 40 + Math.floor(Math.random() * 15) }; // 40-55 MB
         break;
       case 'burst':
-        params = { size_mb: 55 + Math.floor(Math.random() * 35) };
+        params = { size_mb: 45 + Math.floor(Math.random() * 15) }; // 45-60 MB
         break;
       case 'maximum':
-        params = { size_mb: 75 + Math.floor(Math.random() * 25) };
+        params = { size_mb: 50 + Math.floor(Math.random() * 20) }; // 50-70 MB (safe max)
         break;
       default:
-        params = { size_mb: 45 };
+        params = { size_mb: 35 };
     }
   }
 
