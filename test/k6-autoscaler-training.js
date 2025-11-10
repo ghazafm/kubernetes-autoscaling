@@ -35,6 +35,21 @@ const requestTypeDistribution = new Counter('request_type_distribution');
 const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
 const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 
+// Dynamic load calculation based on replica capacity
+// This ensures k6 generates enough load to stress the full replica range
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+// Formula: VUs = replicas * requests_per_pod * utilization_target
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+
 // Helper function to scale duration
 function scaleDuration(minutes) {
   const totalMinutes = minutes * DURATION_MULTIPLIER;
@@ -52,66 +67,67 @@ function scaleDuration(minutes) {
 }
 
 // Base pattern (1 hour cycle)
+// Now uses dynamic VU targets based on MAX_REPLICAS
 const basePattern = [
   // ===== WARM-UP PHASE (Baseline establishment) =====
-  { duration: scaleDuration(1), target: 0 },     // No requests initially
-  { duration: scaleDuration(1), target: 2 },     // Gentle start - 2 users
-  { duration: scaleDuration(2), target: 2 },     // Baseline LOW traffic
+  { duration: scaleDuration(1), target: 0 },               // No requests initially
+  { duration: scaleDuration(1), target: VU_WARMUP },       // Gentle start
+  { duration: scaleDuration(2), target: VU_WARMUP },       // Baseline LOW traffic
 
   // ===== PHASE 1: GRADUAL MORNING RAMP-UP (Simulates business hours start) =====
-  { duration: scaleDuration(1), target: 5 },     // Early morning users arrive
-  { duration: scaleDuration(2), target: 5 },     // Low morning traffic
-  { duration: scaleDuration(1), target: 10 },    // More users logging in
-  { duration: scaleDuration(2), target: 10 },    // Growing morning traffic
-  { duration: scaleDuration(1), target: 15 },    // Peak morning traffic
-  { duration: scaleDuration(3), target: 15 },    // Sustained morning activity
+  { duration: scaleDuration(1), target: VU_LOW * 0.5 },    // Early morning users arrive
+  { duration: scaleDuration(2), target: VU_LOW * 0.5 },    // Low morning traffic
+  { duration: scaleDuration(1), target: VU_LOW },          // More users logging in
+  { duration: scaleDuration(2), target: VU_LOW },          // Growing morning traffic
+  { duration: scaleDuration(1), target: VU_LOW * 1.5 },    // Peak morning traffic
+  { duration: scaleDuration(3), target: VU_LOW * 1.5 },    // Sustained morning activity
 
   // ===== PHASE 2: STEADY DAYTIME LOAD (Normal business operations) =====
-  { duration: scaleDuration(1), target: 20 },    // Midday increase
-  { duration: scaleDuration(4), target: 20 },    // Stable daytime load
+  { duration: scaleDuration(1), target: VU_MEDIUM },       // Midday increase
+  { duration: scaleDuration(4), target: VU_MEDIUM },       // Stable daytime load
 
   // ===== PHASE 3: LUNCH HOUR DIP (Realistic traffic pattern) =====
-  { duration: scaleDuration(1), target: 12 },    // Users taking lunch break
-  { duration: scaleDuration(2), target: 12 },    // Reduced lunch activity
+  { duration: scaleDuration(1), target: VU_LOW },          // Users taking lunch break
+  { duration: scaleDuration(2), target: VU_LOW },          // Reduced lunch activity
 
   // ===== PHASE 4: POST-LUNCH RECOVERY =====
-  { duration: scaleDuration(1), target: 18 },    // Users returning
-  { duration: scaleDuration(3), target: 18 },    // Afternoon steady state
+  { duration: scaleDuration(1), target: VU_MEDIUM * 1.2 }, // Users returning
+  { duration: scaleDuration(3), target: VU_MEDIUM * 1.2 }, // Afternoon steady state
 
   // ===== PHASE 5: AFTERNOON PEAK (Highest daily load) =====
-  { duration: scaleDuration(1), target: 25 },    // Building to peak
-  { duration: scaleDuration(2), target: 30 },    // Ramp to peak
-  { duration: scaleDuration(4), target: 30 },    // Sustained peak load
+  { duration: scaleDuration(1), target: VU_HIGH },         // Building to peak
+  { duration: scaleDuration(2), target: VU_PEAK },         // Ramp to peak
+  { duration: scaleDuration(4), target: VU_PEAK },         // Sustained peak load
 
   // ===== PHASE 6: FLASH SPIKE (Sudden event - viral content, promotion) =====
-  { duration: scaleDuration(0.5), target: 50 },  // Sudden viral spike
-  { duration: scaleDuration(2), target: 50 },    // Spike sustained
-  { duration: scaleDuration(1), target: 30 },    // Quick recovery to normal peak
+  { duration: scaleDuration(0.5), target: VU_SPIKE },      // Sudden viral spike
+  { duration: scaleDuration(2), target: VU_SPIKE },        // Spike sustained
+  { duration: scaleDuration(1), target: VU_PEAK },         // Quick recovery to normal peak
 
   // ===== PHASE 7: GRADUAL EVENING DECLINE =====
-  { duration: scaleDuration(1), target: 25 },    // Early evening decrease
-  { duration: scaleDuration(2), target: 20 },    // Continued decline
-  { duration: scaleDuration(2), target: 15 },    // Further decrease
-  { duration: scaleDuration(2), target: 10 },    // Late evening
+  { duration: scaleDuration(1), target: VU_HIGH },         // Early evening decrease
+  { duration: scaleDuration(2), target: VU_MEDIUM },       // Continued decline
+  { duration: scaleDuration(2), target: VU_LOW * 1.5 },    // Further decrease
+  { duration: scaleDuration(2), target: VU_LOW },          // Late evening
 
   // ===== PHASE 8: NIGHT-TIME LOW (Maintenance window simulation) =====
-  { duration: scaleDuration(1), target: 5 },     // Night users
-  { duration: scaleDuration(3), target: 5 },     // Sustained low load
-  { duration: scaleDuration(1), target: 3 },     // Deep night
-  { duration: scaleDuration(2), target: 3 },     // Minimal activity
+  { duration: scaleDuration(1), target: VU_WARMUP * 2 },   // Night users
+  { duration: scaleDuration(3), target: VU_WARMUP * 2 },   // Sustained low load
+  { duration: scaleDuration(1), target: VU_WARMUP },       // Deep night
+  { duration: scaleDuration(2), target: VU_WARMUP },       // Minimal activity
 
   // ===== PHASE 9: OSCILLATING LOAD (Test rapid adaptation) =====
-  { duration: scaleDuration(0.5), target: 15 },  // Quick up
-  { duration: scaleDuration(1), target: 15 },    // Hold
-  { duration: scaleDuration(0.5), target: 8 },   // Quick down
-  { duration: scaleDuration(1), target: 8 },     // Hold
-  { duration: scaleDuration(0.5), target: 20 },  // Quick up again
-  { duration: scaleDuration(1), target: 20 },    // Hold
-  { duration: scaleDuration(0.5), target: 5 },   // Quick down
+  { duration: scaleDuration(0.5), target: VU_LOW * 1.5 },  // Quick up
+  { duration: scaleDuration(1), target: VU_LOW * 1.5 },    // Hold
+  { duration: scaleDuration(0.5), target: VU_WARMUP * 3 }, // Quick down
+  { duration: scaleDuration(1), target: VU_WARMUP * 3 },   // Hold
+  { duration: scaleDuration(0.5), target: VU_MEDIUM },     // Quick up again
+  { duration: scaleDuration(1), target: VU_MEDIUM },       // Hold
+  { duration: scaleDuration(0.5), target: VU_WARMUP * 2 }, // Quick down
 
   // ===== PHASE 10: GRACEFUL SHUTDOWN =====
-  { duration: scaleDuration(1), target: 2 },     // Final users
-  { duration: scaleDuration(0.5), target: 0 },   // Complete ramp down
+  { duration: scaleDuration(1), target: VU_WARMUP },       // Final users
+  { duration: scaleDuration(0.5), target: 0 },             // Complete ramp down
 ];
 
 // Generate stages by repeating the pattern
@@ -271,6 +287,33 @@ function getMemorySize(phase) {
   }
 
   return Math.floor(base + Math.random() * variance);
+}
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🎯 RL AUTOSCALER TRAINING - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
+  console.log(`Cycle Count: ${CYCLE_COUNT}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs (${MIN_REPLICAS}-${Math.ceil(VU_WARMUP/REQUESTS_PER_POD_TARGET)} pods)`);
+  console.log(`   LOW:    ${VU_LOW} VUs (~${Math.ceil(VU_LOW/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (~${Math.ceil(VU_MEDIUM/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   HIGH:   ${VU_HIGH} VUs (~${Math.ceil(VU_HIGH/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   PEAK:   ${VU_PEAK} VUs (~${Math.ceil(VU_PEAK/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   SPIKE:  ${VU_SPIKE} VUs (~${Math.ceil(VU_SPIKE/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log('');
+  console.log('💡 RL Agent Training Coverage:');
+  console.log(`   This load will train across ${MIN_REPLICAS}-${MAX_REPLICAS} replica range`);
+  console.log(`   Each pod will experience 60-100% utilization at PEAK`);
+  console.log('═══════════════════════════════════════════════════════\n');
 }
 
 export default function () {

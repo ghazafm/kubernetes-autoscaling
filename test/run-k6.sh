@@ -23,6 +23,9 @@ fi
 BASE_URL=${BASE_URL:-http://localhost:5000}
 DURATION_MULTIPLIER=${DURATION_MULTIPLIER:-}
 CYCLE_COUNT=${CYCLE_COUNT:-}
+MAX_REPLICAS=${MAX_REPLICAS:-50}
+MIN_REPLICAS=${MIN_REPLICAS:-1}
+REQUESTS_PER_POD=${REQUESTS_PER_POD:-8}
 
 TEST_FILE=${1:-k6.js}
 
@@ -61,6 +64,11 @@ run_test() {
     if [ -n "$CYCLE_COUNT" ]; then
         k6_cmd="$k6_cmd --env CYCLE_COUNT=\"$CYCLE_COUNT\""
     fi
+
+    # Pass replica configuration for dynamic load scaling
+    k6_cmd="$k6_cmd --env MAX_REPLICAS=\"$MAX_REPLICAS\""
+    k6_cmd="$k6_cmd --env MIN_REPLICAS=\"$MIN_REPLICAS\""
+    k6_cmd="$k6_cmd --env REQUESTS_PER_POD=\"$REQUESTS_PER_POD\""
 
     k6_cmd="$k6_cmd \"$test_file\""
 
