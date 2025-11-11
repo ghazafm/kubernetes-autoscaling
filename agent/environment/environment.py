@@ -547,6 +547,11 @@ class KubernetesEnv:
         # Reset time-in-state tracking
         self.steps_at_current_replica = 0
 
+        # Ensure the logged action reflects the reset (no-op) rather than
+        # the previous agent action. _scale_and_get_metrics() calls _scale()
+        # which logs the current `replica_state` and `last_action` — at
+        # reset we want that `last_action` to be 0.
+        self.last_action = 0
         self._scale_and_get_metrics()
 
         # Verify resource limits are configured (will raise if missing)
@@ -570,5 +575,5 @@ class KubernetesEnv:
         self.prev_rps_per_pod = rps_per_pod
         self.prev_replica = self.replica
 
-        self.last_action = 0
+        # last_action is already set to 0 above
         return self._get_observation()
