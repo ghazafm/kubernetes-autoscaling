@@ -50,6 +50,11 @@ const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60%
 const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
 const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
 
+// Helper to ensure integer VU targets (k6 requires integers)
+function ensureInt(value) {
+  return Math.ceil(value);
+}
+
 // Helper function to scale duration
 function scaleDuration(minutes) {
   const totalMinutes = minutes * DURATION_MULTIPLIER;
@@ -75,12 +80,12 @@ const basePattern = [
   { duration: scaleDuration(2), target: VU_WARMUP },       // Baseline LOW traffic
 
   // ===== PHASE 1: GRADUAL MORNING RAMP-UP (Simulates business hours start) =====
-  { duration: scaleDuration(1), target: VU_LOW * 0.5 },    // Early morning users arrive
-  { duration: scaleDuration(2), target: VU_LOW * 0.5 },    // Low morning traffic
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },    // Early morning users arrive
+  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 0.5) },    // Low morning traffic
   { duration: scaleDuration(1), target: VU_LOW },          // More users logging in
   { duration: scaleDuration(2), target: VU_LOW },          // Growing morning traffic
-  { duration: scaleDuration(1), target: VU_LOW * 1.5 },    // Peak morning traffic
-  { duration: scaleDuration(3), target: VU_LOW * 1.5 },    // Sustained morning activity
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },    // Peak morning traffic
+  { duration: scaleDuration(3), target: ensureInt(VU_LOW * 1.5) },    // Sustained morning activity
 
   // ===== PHASE 2: STEADY DAYTIME LOAD (Normal business operations) =====
   { duration: scaleDuration(1), target: VU_MEDIUM },       // Midday increase
@@ -91,8 +96,8 @@ const basePattern = [
   { duration: scaleDuration(2), target: VU_LOW },          // Reduced lunch activity
 
   // ===== PHASE 4: POST-LUNCH RECOVERY =====
-  { duration: scaleDuration(1), target: VU_MEDIUM * 1.2 }, // Users returning
-  { duration: scaleDuration(3), target: VU_MEDIUM * 1.2 }, // Afternoon steady state
+  { duration: scaleDuration(1), target: ensureInt(VU_MEDIUM * 1.2) }, // Users returning
+  { duration: scaleDuration(3), target: ensureInt(VU_MEDIUM * 1.2) }, // Afternoon steady state
 
   // ===== PHASE 5: AFTERNOON PEAK (Highest daily load) =====
   { duration: scaleDuration(1), target: VU_HIGH },         // Building to peak
@@ -107,23 +112,23 @@ const basePattern = [
   // ===== PHASE 7: GRADUAL EVENING DECLINE =====
   { duration: scaleDuration(1), target: VU_HIGH },         // Early evening decrease
   { duration: scaleDuration(2), target: VU_MEDIUM },       // Continued decline
-  { duration: scaleDuration(2), target: VU_LOW * 1.5 },    // Further decrease
+  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 1.5) },    // Further decrease
   { duration: scaleDuration(2), target: VU_LOW },          // Late evening
 
   // ===== PHASE 8: NIGHT-TIME LOW (Maintenance window simulation) =====
-  { duration: scaleDuration(1), target: VU_WARMUP * 2 },   // Night users
-  { duration: scaleDuration(3), target: VU_WARMUP * 2 },   // Sustained low load
+  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 2) },   // Night users
+  { duration: scaleDuration(3), target: ensureInt(VU_WARMUP * 2) },   // Sustained low load
   { duration: scaleDuration(1), target: VU_WARMUP },       // Deep night
   { duration: scaleDuration(2), target: VU_WARMUP },       // Minimal activity
 
   // ===== PHASE 9: OSCILLATING LOAD (Test rapid adaptation) =====
-  { duration: scaleDuration(0.5), target: VU_LOW * 1.5 },  // Quick up
-  { duration: scaleDuration(1), target: VU_LOW * 1.5 },    // Hold
-  { duration: scaleDuration(0.5), target: VU_WARMUP * 3 }, // Quick down
-  { duration: scaleDuration(1), target: VU_WARMUP * 3 },   // Hold
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 1.5) },  // Quick up
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },    // Hold
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 3) }, // Quick down
+  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 3) },   // Hold
   { duration: scaleDuration(0.5), target: VU_MEDIUM },     // Quick up again
   { duration: scaleDuration(1), target: VU_MEDIUM },       // Hold
-  { duration: scaleDuration(0.5), target: VU_WARMUP * 2 }, // Quick down
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 2) }, // Quick down
 
   // ===== PHASE 10: GRACEFUL SHUTDOWN =====
   { duration: scaleDuration(1), target: VU_WARMUP },       // Final users
