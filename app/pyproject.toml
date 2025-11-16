@@ -9,3 +9,9 @@ dependencies = [
     "gunicorn>=23.0.0",
     "rl-autoscale>=1.0.3",
 ]
+
+[tool.uv]
+compile-bytecode = true
+
+[tool.pip]
+compile-bytecode = true

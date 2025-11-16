@@ -53,6 +53,8 @@ tensorboard/
 *.parquet
 *.pkl
 *.pickle
+*instructions.md
+*mode*
 
 # Jupyter Notebook
 .ipynb_checkpoints
