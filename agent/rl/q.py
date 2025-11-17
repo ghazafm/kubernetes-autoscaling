@@ -39,6 +39,12 @@ class Q:
         """Increment the episode count"""
         self.episodes_trained += count
 
+    def reset_epsilon(self, value: float) -> None:
+        """Reset epsilon to a specific value for periodic re-exploration"""
+        old_epsilon = self.epsilon
+        self.epsilon = max(self.epsilon_min, min(value, 1.0))
+        self.logger.info(f"🔄 Epsilon reset: {old_epsilon:.4f} → {self.epsilon:.4f}")
+
     def get_state_key(
         self, observation: dict
     ) -> tuple[int, int, int, int, int, int, int, int, int, int]:
@@ -66,9 +72,11 @@ class Q:
 
         # Discretize scaling_direction (0, 0.5, 1) to (0, 1, 2)
         scaling_dir_raw = observation.get("scaling_direction", 0.5)
-        if scaling_dir_raw <= 0.25:
+        SCALING_DIRECTION_THRESHOLD = 0.25
+        SCALING_DIRECTION_UP_THRESHOLD = 0.75
+        if scaling_dir_raw <= SCALING_DIRECTION_THRESHOLD:
             scaling_direction = 0  # Down
-        elif scaling_dir_raw >= 0.75:
+        elif scaling_dir_raw >= SCALING_DIRECTION_UP_THRESHOLD:
             scaling_direction = 2  # Up
         else:
             scaling_direction = 1  # Same

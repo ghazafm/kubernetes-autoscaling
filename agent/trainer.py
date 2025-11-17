@@ -27,6 +27,9 @@ class Trainer:
         resume_path: str = "",
         reset_epsilon: bool = True,
         change_epsilon_decay: Optional[float] = None,
+        periodic_epsilon_reset: bool = False,
+        epsilon_reset_interval: int = 200,
+        epsilon_reset_value: float = 0.3,
     ) -> None:
         self.agent = agent
         self.env = env
@@ -34,6 +37,9 @@ class Trainer:
         self.savecfg: Optional[SaveConfig] = None
         self._old_sigint = None
         self._old_sigterm = None
+        self.periodic_epsilon_reset = periodic_epsilon_reset
+        self.epsilon_reset_interval = epsilon_reset_interval
+        self.epsilon_reset_value = epsilon_reset_value
         if resume and resume_path:
             try:
                 start_epsilon = self.agent.epsilon
@@ -119,6 +125,17 @@ class Trainer:
                     self.logger.info(
                         f"Total episodes trained: {self.agent.episodes_trained}"
                     )
+
+                    if (
+                        self.periodic_epsilon_reset
+                        and ep > 0
+                        and ep % self.epsilon_reset_interval == 0
+                    ):
+                        self.agent.reset_epsilon(self.epsilon_reset_value)
+                        self.logger.info(
+                            f"🔄 Periodic epsilon reset at episode {ep + 1} "
+                            f"(interval: {self.epsilon_reset_interval})"
+                        )
 
                     obs = self.env.reset()
                     self.logger.info("Environment reset.")

@@ -166,6 +166,11 @@ if __name__ == "__main__":
                 resume_path=resume_path,
                 reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
                 change_epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
+                periodic_epsilon_reset=ast.literal_eval(
+                    os.getenv("PERIODIC_EPSILON_RESET", "False")
+                ),
+                epsilon_reset_interval=int(os.getenv("EPSILON_RESET_INTERVAL", "200")),
+                epsilon_reset_value=float(os.getenv("EPSILON_RESET_VALUE", "0.3")),
             )
 
             # Start training
