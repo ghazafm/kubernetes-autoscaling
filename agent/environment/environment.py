@@ -492,15 +492,17 @@ class KubernetesEnv:
                 return current_replicas, 0
 
             # Menahan downscale hingga agen RL meminta beberapa kali berturut-turut
-            min_confirm = self.min_down_confirmations
-            if self._pending_down_count < min_confirm:
-                self.logger.info(
-                    f"Downscale candidate (count "
-                    f"{self._pending_down_count}/{min_confirm}) - not applied yet"
-                )
-                return current_replicas, 0
-            # Melakukan increment pada counter jika arah permintaan sama;
-            self._pending_down_count = self._pending_down_count + 1
+            min_confirm = int(self.min_down_confirmations)
+            if min_confirm > 0:
+                self._pending_down_count = self._pending_down_count + 1
+                if self._pending_down_count < min_confirm:
+                    self.logger.info(
+                        f"Downscale candidate (count "
+                        f"{self._pending_down_count}/{min_confirm}) - not applied yet"
+                    )
+                    return current_replicas, 0
+            else:
+                pass
         else:
             # reset pending jika tidak sedang downscale
             self._pending_down_count = 0
