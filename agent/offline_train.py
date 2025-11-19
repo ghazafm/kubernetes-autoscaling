@@ -329,7 +329,7 @@ def train(
                 nxt = {}
             nxt["terminated"] = done_bool
 
-            agent.update_q_table(obs, action, reward, nxt)
+            agent.update(obs, action, reward, nxt)
 
             obs = next_obs
             total_reward += float(reward)

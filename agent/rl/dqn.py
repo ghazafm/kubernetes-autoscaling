@@ -43,6 +43,8 @@ class DQN(Q):
 
         self.train_step = 0
 
+        #  DQN (Deep Q-Network)
+        # Digunakan untuk membedakan saat menyimpan/memuat dan logging
         self.agent_type = "DQN"
 
         self.device = device
@@ -51,7 +53,7 @@ class DQN(Q):
         self.target_update_freq = target_update_freq
         self.grad_clip_norm = grad_clip_norm
         # State: [cpu%, mem%, rt%, replica%, action%,
-        #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_dir,
+        #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_direction,
         #         rps_per_pod, rps_Δ, error_rate]
         self._state_dim = 13
 
@@ -61,6 +63,8 @@ class DQN(Q):
         self.target_net.eval()
 
         # Optimizer + Replay Buffer
+        # Optimizer: untuk meng-update bobot network berdasarkan gradien
+        # Replay buffer: menyimpan pengalaman (s,a,r,s',done) untuk sampling acak
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=self.learning_rate)
         self.replay_buffer = ReplayBuffer(self.buffer_size)
         self.logger.info("Initialized DQN agent")
@@ -68,33 +72,51 @@ class DQN(Q):
 
     def get_state_key(self, observation: dict) -> np.ndarray:
         """Convert observation to a numpy array state for DQN"""
+        # Normalisasi CPU dari persen ke rentang 0-1
+        # Contoh: cpu_usage=50 -> cpu=0.5
         cpu = observation["cpu_usage"] / 100.0  # Normalize to 0-1
+        # Normalisasi memory dari persen ke 0-1
+        # Contoh: memory_usage=30 -> memory=0.3
         memory = observation["memory_usage"] / 100.0  # Normalize to 0-1
+        # Normalisasi last_action (0-99) ke 0-1 supaya skala sama dengan fitur lain
+        # Contoh: last_action=50 -> last_action=50/99 ~ 0.505
         last_action = observation["last_action"] / 99.0  # Normalize to 0-1
 
         response_time_raw = observation["response_time"]
         if np.isnan(response_time_raw) or response_time_raw is None:
             response_time = 0.0
         else:
+            # Normalisasi response time dan batasi maksimal ke 1.0
+            # Contoh: response_time=120 -> response_time/100=1.2 -> cap=1.0
             response_time = min(
                 response_time_raw / 100.0, 1.0
             )  # Normalize and cap at 1.0
 
+        # Presentase replica saat ini dinormalisasi ke 0-1
         current_replica_pct = observation.get("current_replica_pct", 0.0) / 100.0
 
+        # Delta CPU: perubahan relatif, dipotong ke [-1,1]
+        # Contoh: cpu_delta=150 -> /100=1.5 -> clip=1.0
         cpu_delta = np.clip(observation.get("cpu_delta", 0.0) / 100.0, -1.0, 1.0)
+        # Delta memory: sama seperti cpu_delta
         memory_delta = np.clip(observation.get("memory_delta", 0.0) / 100.0, -1.0, 1.0)
+        # Delta response time: di-normalisasi dan di-clip
         rt_delta = np.clip(observation.get("rt_delta", 0.0) / 100.0, -1.0, 1.0)
 
+        # Lama berada di state saat ini (dalam satuan yang sudah distandarkan)
         time_in_state = observation.get("time_in_state", 0.0)
 
+        # Arah skala: 0 down, 0.5 same, 1 up — tetapkan skala 0-1 untuk network
         scaling_direction = observation.get("scaling_direction", 0.5)
 
+        # Requests per pod: dibagi 10 untuk mengurangi skala dan di-clip 0-1
         rps_per_pod = observation.get("rps_per_pod", 0.0) / 10.0
         rps_per_pod = np.clip(rps_per_pod, 0.0, 1.0)
 
+        # Perubahan RPS per pod, di-normalisasi dan di-clip
         rps_delta = np.clip(observation.get("rps_delta", 0.0) / 10.0, -1.0, 1.0)
 
+        # Error rate: dibagi 10 agar skala kecil, di-clip 0-1
         error_rate = observation.get("error_rate", 0.0) / 10.0
         error_rate = np.clip(error_rate, 0.0, 1.0)
 
@@ -122,6 +144,8 @@ class DQN(Q):
         state = self.get_state_key(observation)
 
         if np.random.rand() < self.epsilon:
+            # Eksplorasi: pilih action acak sesuai epsilon-greedy
+            # Contoh: n_actions=100 -> pilih integer [0,99]
             action = np.random.randint(0, self.n_actions)
         else:
             # Set to eval mode for inference (BatchNorm compatibility)
@@ -137,7 +161,7 @@ class DQN(Q):
 
         return action
 
-    def update_q_table(
+    def update(
         self, observation: dict, action: int, reward: float, next_observation: dict
     ) -> None:
         """Update Q-table using Q-learning algorithm and DQN if enabled"""
@@ -188,16 +212,23 @@ class DQN(Q):
 
             # target: r + gamma * max_a' Q_target(s',a') * (1 - done)
             with torch.no_grad():
+                # Jadi reward dihitung dengan menggunakan target network.
+                # rumus Q Learning: target = r + (gamma) * max_a' Q_target(s',a')
+                # Jadi jika reward sangat negatif, maka target juga akan negatif besar
+
                 q_next = self.target_net(next_states)  # [B, A]
                 max_q_next, _ = torch.max(q_next, dim=1)  # [B]
                 target = rewards + (1.0 - dones) * self.discount_factor * max_q_next
 
-            # Huber loss lebih stabil
+            # Perhitungan loss Huber
+            # Contoh: jika q_sa = [1.0, 2.0], target = [1.5, 1.8],
+            # maka loss dihitung menggunakan smooth_l1_loss
             loss = F.smooth_l1_loss(q_sa, target)
 
             # step
             self.optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            # Untuk memotong jika gradien terlalu besar
             torch.nn.utils.clip_grad_norm_(
                 self.policy_net.parameters(), self.grad_clip_norm
             )
@@ -248,7 +279,10 @@ class DQN(Q):
                 "episodes_trained": episode_count,
             }
 
-            # Create directory if it doesn't exist
+            # Buat folder tujuan jika belum ada
+            # Kita menyimpan state_dict dari policy dan target network
+            # sehingga training bisa dilanjutkan persis dari titik sebelumnya
+            # Contoh filepath: models/dqn_2025-11-19.pth
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
 
             torch.save(model_data, filepath)
@@ -268,6 +302,7 @@ class DQN(Q):
             )
 
             # Load network states
+            # Memuat kembali state network dan optimizer agar training dapat dilanjutkan
             self.policy_net.load_state_dict(model_data["policy_net_state_dict"])
             self.target_net.load_state_dict(model_data["target_net_state_dict"])
             self.optimizer.load_state_dict(model_data["optimizer_state_dict"])
