@@ -104,6 +104,15 @@ if __name__ == "__main__":
         error_rate_weight=_env_float("ERROR_RATE_WEIGHT", 1.0),
         cpu_memory_weight=_env_float("CPU_MEMORY_WEIGHT", 0.5),
         cost_weight=_env_float("COST_WEIGHT", 0.3),
+        # Pass safety/tuning parameters into the environment (use env vars when present)
+        max_up_step=_env_int("MAX_UP_STEP", 4),
+        max_down_step=_env_int("MAX_DOWN_STEP", 1),
+        min_down_confirmations=_env_int("MIN_DOWN_CONFIRMATIONS", 2),
+        cooldown_up_secs=_env_int("COOLDOWN_UP_SECS", 60),
+        cooldown_down_secs=_env_int("COOLDOWN_DOWN_SECS", 240),
+        error_block_threshold_pct=_env_float("ERROR_BLOCK_THRESHOLD_PCT", 1.0),
+        ewma_alpha=_env_float("EWMA_ALPHA", 0.3),
+        stability_penalty=_env_float("STABILITY_PENALTY", 0.05),
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()

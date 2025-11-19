@@ -9,6 +9,12 @@ from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
 
+# NOTE:
+# This module no longer reads tuning values from environment variables.
+# Tuning/safety parameters (max_up_step, max_down_step, etc.) are accepted
+# as constructor arguments to `KubernetesEnv` so callers (for example
+# `agent/train.py`) can centralize env parsing and pass the values in.
+
 
 class KubernetesEnv:
     def __init__(  # noqa: PLR0913, PLR0915
@@ -40,6 +46,15 @@ class KubernetesEnv:
         error_rate_weight: float = 0.8,
         cpu_memory_weight: float = 0.4,
         cost_weight: float = 0.2,
+        # Safety / stability tuning (prefer passing these from caller e.g. train.py)
+        max_up_step: int = 4,
+        max_down_step: int = 1,
+        min_down_confirmations: int = 2,
+        cooldown_up_secs: int = 60,
+        cooldown_down_secs: int = 240,
+        error_block_threshold_pct: float = 1.0,
+        ewma_alpha: float = 0.3,
+        stability_penalty: float = 0.05,
     ) -> None:
         # Ensure a usable logger is always present
         self.logger: logging.Logger = (
@@ -75,18 +90,39 @@ class KubernetesEnv:
         self.metrics_quantile = metrics_quantile
         self.max_scaling_retries = max_scaling_retries
 
-        # Safety / stability defaults (can be overridden via env or caller)
-        # These defaults implement the percent->safe-delta wrapper for 0..99 actions
-        self.MAX_UP_STEP: int = 4
-        self.MAX_DOWN_STEP: int = 1
-        self.MIN_DOWN_CONFIRMATIONS: int = 2
-        self.COOLDOWN_UP_SECS: int = 60
-        self.COOLDOWN_DOWN_SECS: int = 240
+        # Safety / stability parameters (passed from caller)
+        self.max_up_step: int = int(max_up_step)
+        self.max_down_step: int = int(max_down_step)
+        self.min_down_confirmations: int = int(min_down_confirmations)
+        self.cooldown_up_secs: int = int(cooldown_up_secs)
+        self.cooldown_down_secs: int = int(cooldown_down_secs)
         # Threshold (in percent) above which error rate will block downscales.
-        # Use explicit _PCT suffix to make units obvious: 1.0 == 1%
-        self.ERROR_BLOCK_THRESHOLD_PCT: float = 1.0
-        self.EWMA_ALPHA: float = 0.3
-        self.STABILITY_PENALTY: float = 0.05
+        self.error_block_threshold_pct: float = float(error_block_threshold_pct)
+        self.ewma_alpha: float = float(ewma_alpha)
+        self.stability_penalty: float = float(stability_penalty)
+
+        # Validation / safety clamps
+        # EWMA_ALPHA should be in [0.0, 1.0]
+        if self.ewma_alpha < 0.0:
+            self.logger.warning(f"ewma_alpha {self.ewma_alpha} < 0.0, clamping to 0.0")
+            self.ewma_alpha = 0.0
+        if self.ewma_alpha > 1.0:
+            self.logger.warning(f"ewma_alpha {self.ewma_alpha} > 1.0, clamping to 1.0")
+            self.ewma_alpha = 1.0
+
+        # Ensure sensible integer bounds
+        if self.max_up_step < 1:
+            self.logger.warning(f"max_up_step {self.max_up_step} < 1, setting to 1")
+            self.max_up_step = 1
+        if self.max_down_step < 1:
+            self.logger.warning(f"max_down_step {self.max_down_step} < 1, setting to 1")
+            self.max_down_step = 1
+        self.cooldown_up_secs = max(self.cooldown_up_secs, 0)
+        self.cooldown_down_secs = max(self.cooldown_down_secs, 0)
+
+        # ERROR_BLOCK_THRESHOLD_PCT should be reasonable (0..100)
+        self.error_block_threshold_pct = max(self.error_block_threshold_pct, 0.0)
+        self.error_block_threshold_pct = min(self.error_block_threshold_pct, 100.0)
 
         # Runtime state for safety wrapper and initial replica bookkeeping
         self._pending_down_count: int = 0
@@ -389,7 +425,7 @@ class KubernetesEnv:
         reward = 1.0 - 2.0 * normalized_penalty
 
         # Menerapkan stability penalti jika ada scaling yang terjadi pada langkah ini
-        stability_penalty = float(self.STABILITY_PENALTY)
+        stability_penalty = float(self.stability_penalty)
         if stability_penalty and self._last_applied_delta != 0:
             reward -= stability_penalty
 
@@ -420,7 +456,7 @@ class KubernetesEnv:
             return current_replicas, 0
 
         #  menentukan maksium step kebawah atau keatas
-        max_step = int(self.MAX_UP_STEP if delta > 0 else self.MAX_DOWN_STEP)
+        max_step = int(self.max_up_step if delta > 0 else self.max_down_step)
 
         # membatasi step agar sesuai dengan max_step
         # copysign untuk menjaga tanda (positif/negatif) dari delta
@@ -441,7 +477,7 @@ class KubernetesEnv:
                 rt > self.max_response_time
                 or cpu > self.max_cpu
                 or memory > self.max_memory
-                or error_rate > float(self.ERROR_BLOCK_THRESHOLD_PCT)
+                or error_rate > float(self.error_block_threshold_pct)
             ):
                 # Jika salah satu metrik melebihi batas maksimum, batalkan downscale.
                 # Hal ini untuk mencegah penurunan kapasitas saat aplikasi sedang
@@ -456,7 +492,7 @@ class KubernetesEnv:
                 return current_replicas, 0
 
             # Menahan downscale hingga agen RL meminta beberapa kali berturut-turut
-            min_confirm = self.MIN_DOWN_CONFIRMATIONS
+            min_confirm = self.min_down_confirmations
             if self._pending_down_count < min_confirm:
                 self.logger.info(
                     f"Downscale candidate (count "
@@ -473,8 +509,8 @@ class KubernetesEnv:
         # Default tidak ada cooldown untuk upscale, hanya jika ada kasus khusus
         last_up_time = self._last_scale_up_time
         last_down_time = self._last_scale_down_time
-        cooldown_up = self.COOLDOWN_UP_SECS
-        cooldown_down = self.COOLDOWN_DOWN_SECS
+        cooldown_up = self.cooldown_up_secs
+        cooldown_down = self.cooldown_down_secs
 
         # Menerapkan wait cooldown sebelum melakukan scaling lagi
         if is_downscale and (now - last_down_time) < cooldown_down:
@@ -569,7 +605,7 @@ class KubernetesEnv:
         # Menambahkan variabel untuk menghitung EWMA setiap metrik (berfungsi sebagai
         # parameter check pada saat downscale)
         # contoh 0.3 * 4000 + 0.7 * 3500 = 3650 (perubahan lebih halus)
-        alpha = self.EWMA_ALPHA
+        alpha = self.ewma_alpha
         self.smoothed_response_time = (
             alpha * self.response_time + (1 - alpha) * self.smoothed_response_time
         )
