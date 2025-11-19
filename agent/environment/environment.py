@@ -501,8 +501,6 @@ class KubernetesEnv:
                         f"{self._pending_down_count}/{min_confirm}) - not applied yet"
                     )
                     return current_replicas, 0
-            else:
-                pass
         else:
             # reset pending jika tidak sedang downscale
             self._pending_down_count = 0
