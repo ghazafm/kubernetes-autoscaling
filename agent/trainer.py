@@ -198,6 +198,9 @@ class Trainer:
                             time.sleep(5)
                             continue
 
+                        self.logger.info("=" * 110)
+                        self.logger.info("")
+
                     self.logger.info(
                         f"Episode {ep + 1} completed. Total reward: {total}"
                     )
