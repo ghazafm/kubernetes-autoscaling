@@ -1,6 +1,6 @@
-import math
+import logging
 import time
-from logging import Logger
+from math import copysign
 from typing import Optional
 
 from database.influxdb import InfluxDB
@@ -9,9 +9,15 @@ from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
 
+# NOTE:
+# This module no longer reads tuning values from environment variables.
+# Tuning/safety parameters (max_up_step, max_down_step, etc.) are accepted
+# as constructor arguments to `KubernetesEnv` so callers (for example
+# `agent/train.py`) can centralize env parsing and pass the values in.
+
 
 class KubernetesEnv:
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0915
         self,
         min_replicas: int = 1,
         max_replicas: int = 50,
@@ -26,7 +32,7 @@ class KubernetesEnv:
         timeout: int = 120,
         wait_time: int = 30,
         verbose: bool = False,
-        logger: Optional[Logger] = None,
+        logger: Optional[logging.Logger] = None,
         influxdb: Optional[InfluxDB] = None,
         prometheus_url: str = "http://localhost:1234/prom",
         metrics_endpoints_method: list[tuple[str, str]] = (
@@ -40,27 +46,39 @@ class KubernetesEnv:
         error_rate_weight: float = 0.8,
         cpu_memory_weight: float = 0.4,
         cost_weight: float = 0.2,
+        # Safety / stability tuning (prefer passing these from caller e.g. train.py)
+        max_up_step: int = 4,
+        max_down_step: int = 1,
+        min_down_confirmations: int = 2,
+        cooldown_up_secs: int = 60,
+        cooldown_down_secs: int = 240,
+        error_block_threshold_pct: float = 1.0,
+        ewma_alpha: float = 0.3,
+        stability_penalty: float = 0.05,
     ) -> None:
-        self.logger = logger
+        # Ensure a usable logger is always present
+        self.logger: logging.Logger = (
+            logger if logger is not None else logging.getLogger(__name__)
+        )
         config.load_kube_config()
         self.cluster = client.AppsV1Api()
         self.api = client.CustomObjectsApi()
         self.core = client.CoreV1Api()
-        self.min_replicas = min_replicas
-        self.max_replicas = max_replicas
-        self.range_replicas = max(1, self.max_replicas - self.min_replicas)
-        self.iteration = iteration
-        self.initial_iteration = iteration
-        self.namespace = namespace
-        self.deployment_name = deployment_name
-        self.min_cpu = min_cpu
-        self.min_memory = min_memory
-        self.max_cpu = max_cpu
-        self.max_memory = max_memory
-        self.max_response_time = max_response_time
-        self.verbose = verbose
-        self.timeout = timeout
-        self.wait_time = wait_time
+        self.min_replicas: int = min_replicas
+        self.max_replicas: int = max_replicas
+        self.range_replicas: int = max(1, self.max_replicas - self.min_replicas)
+        self.iteration: int | float = iteration
+        self.initial_iteration: int | float = iteration
+        self.namespace: str = namespace
+        self.deployment_name: str = deployment_name
+        self.min_cpu: float = min_cpu
+        self.min_memory: float = min_memory
+        self.max_cpu: float = max_cpu
+        self.max_memory: float = max_memory
+        self.max_response_time: float = max_response_time
+        self.verbose: bool = verbose
+        self.timeout: int = timeout
+        self.wait_time: int = wait_time
         self.last_action = 0
         self.influxdb = influxdb
         self.prometheus = PrometheusConnect(
@@ -71,6 +89,57 @@ class KubernetesEnv:
         self.metrics_interval = metrics_interval
         self.metrics_quantile = metrics_quantile
         self.max_scaling_retries = max_scaling_retries
+
+        # Safety / stability parameters (passed from caller)
+        self.max_up_step: int = int(max_up_step)
+        self.max_down_step: int = int(max_down_step)
+        self.min_down_confirmations: int = int(min_down_confirmations)
+        self.cooldown_up_secs: int = int(cooldown_up_secs)
+        self.cooldown_down_secs: int = int(cooldown_down_secs)
+        # Threshold (in percent) above which error rate will block downscales.
+        self.error_block_threshold_pct: float = float(error_block_threshold_pct)
+        self.ewma_alpha: float = float(ewma_alpha)
+        self.stability_penalty: float = float(stability_penalty)
+
+        # Validation / safety clamps
+        # EWMA_ALPHA should be in [0.0, 1.0]
+        if self.ewma_alpha < 0.0:
+            self.logger.warning(f"ewma_alpha {self.ewma_alpha} < 0.0, clamping to 0.0")
+            self.ewma_alpha = 0.0
+        if self.ewma_alpha > 1.0:
+            self.logger.warning(f"ewma_alpha {self.ewma_alpha} > 1.0, clamping to 1.0")
+            self.ewma_alpha = 1.0
+
+        # Ensure sensible integer bounds
+        if self.max_up_step < 1:
+            self.logger.warning(f"max_up_step {self.max_up_step} < 1, setting to 1")
+            self.max_up_step = 1
+        if self.max_down_step < 1:
+            self.logger.warning(f"max_down_step {self.max_down_step} < 1, setting to 1")
+            self.max_down_step = 1
+        self.cooldown_up_secs = max(self.cooldown_up_secs, 0)
+        self.cooldown_down_secs = max(self.cooldown_down_secs, 0)
+
+        # ERROR_BLOCK_THRESHOLD_PCT should be reasonable (0..100)
+        self.error_block_threshold_pct = max(self.error_block_threshold_pct, 0.0)
+        self.error_block_threshold_pct = min(self.error_block_threshold_pct, 100.0)
+
+        # Runtime state for safety wrapper and initial replica bookkeeping
+        self._pending_down_count: int = 0
+        self._last_scale_up_time: float = 0.0
+        self._last_scale_down_time: float = 0.0
+        self.smoothed_response_time: float = 0.0
+        self.smoothed_cpu: float = 0.0
+        self.smoothed_memory: float = 0.0
+        self.smoothed_error_rate: float = 0.0
+
+        # Replica bookkeeping: ensure attributes exist and have sensible defaults
+        # min_replicas is already an int from the constructor signature,
+        # no need to cast again.
+        self.replica: int = self.min_replicas
+        self.replica_state: int = self.min_replicas
+        self.replica_state_old: int = self.min_replicas
+        self._last_applied_delta: int = 0
 
         self.action_space = list(range(100))
         self.response_time_weight = response_time_weight
@@ -92,7 +161,7 @@ class KubernetesEnv:
             # NEW: Load indicators (scale-independent)
             "rps_per_pod": (0, 100.0),  # Requests per second per pod
             "rps_delta": (-100.0, 100.0),  # Change in RPS per pod
-            "error_rate": (0, 10.0),  # Error percentage (0-10%)
+            "error_rate": (0, 100.0),  # Error percentage (0-100%)
         }
 
         # Track last known good metrics for fallback during timeout
@@ -111,7 +180,14 @@ class KubernetesEnv:
         self.max_steps_tracking = 20
 
         self.logger.info("Initialized KubernetesEnv environment")
-        self.logger.info(f"Environment configuration: {self.__dict__}")
+        # Log a subset of configuration to avoid dumping large objects
+        conf = {
+            "min_replicas": self.min_replicas,
+            "max_replicas": self.max_replicas,
+            "namespace": self.namespace,
+            "deployment_name": self.deployment_name,
+        }
+        self.logger.info(f"Environment configuration: {conf}")
 
     def verify_deployment_resources(self) -> bool:
         """
@@ -203,7 +279,7 @@ class KubernetesEnv:
                 self.cluster.patch_namespaced_deployment_scale(
                     name=self.deployment_name,
                     body=client.V1Scale(
-                        spec=client.V1ScaleSpec(replicas=int(self.replica_state))
+                        spec=client.V1ScaleSpec(replicas=self.replica_state)
                     ),
                     namespace=self.namespace,
                     _request_timeout=current_timeout,
@@ -264,10 +340,12 @@ class KubernetesEnv:
         )
 
     def _calculate_reward(self) -> float:
-        # Convert response time to percentage for scale-independent SLA
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
+        response_time_percentage = min(response_time_percentage, 1000.0)
 
-        # CPU penalty: normalized to [0, 1] range
+        # Logika dasar cpu dan memory penalty
+        # Penalti dihitung berdasarkan seberapa jauh metrik berada di luar
+        # batas yang ditentukan (min/max). Penalti dinormalisasi ke rentang 0..1
         if self.cpu_usage < self.min_cpu:
             cpu_pen = (self.min_cpu - self.cpu_usage) / 100.0
         elif self.cpu_usage > self.max_cpu:
@@ -275,7 +353,6 @@ class KubernetesEnv:
         else:
             cpu_pen = 0.0
 
-        # Memory penalty: normalized to [0, 1] range
         if self.memory_usage < self.min_memory:
             mem_pen = (self.min_memory - self.memory_usage) / 100.0
         elif self.memory_usage > self.max_memory:
@@ -283,50 +360,49 @@ class KubernetesEnv:
         else:
             mem_pen = 0.0
 
-        # Response Time Penalty - FIXED FORMULA
-        # Uses sigmoid-like curve to properly handle extreme violations
-        # while keeping penalties in [0, 1] range
+        # Response time thresholds (persentase dari max_response_time)
         RESPONSE_TIME_HIGH_THRESHOLD = 80.0
         RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
 
-        if response_time_percentage < RESPONSE_TIME_HIGH_THRESHOLD:
-            # No penalty for acceptable response times
+        MAX_RESPONSE_PENALTY = 2.0
+        if response_time_percentage <= RESPONSE_TIME_HIGH_THRESHOLD:
             resp_pen = 0.0
-        elif response_time_percentage < RESPONSE_TIME_VIOLATION_THRESHOLD:
-            # Linear ramp from 80% to 100%: penalty grows from 0.0 to 1.0
-            normalized_rt = (response_time_percentage - 80.0) / 20.0  # 0.0 to 1.0
-            resp_pen = normalized_rt
+        elif response_time_percentage <= RESPONSE_TIME_VIOLATION_THRESHOLD:
+            # Linear mapping from [HIGH, VIOLATION] -> [0.0, 1.0]
+            resp_pen = (response_time_percentage - RESPONSE_TIME_HIGH_THRESHOLD) / (
+                RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
+            )
         else:
-            # Exponential penalty for severe violations (RT > 100%)
-            # This ensures severe violations are heavily penalized
-            # but still capped at 1.0 to prevent overwhelming other penalties
-            violation_severity = (response_time_percentage - 100.0) / 100.0
-            # Use tanh to create smooth saturation at 1.0
+            # Berguna untuk menambahkan penalti lebih dari batas pelanggaran
+            # Menghitung penalti yang melebihi batas atas dengan maksimal
+            # MAX_RESPONSE_PENALTY
+            over = (
+                response_time_percentage - RESPONSE_TIME_VIOLATION_THRESHOLD
+            ) / RESPONSE_TIME_VIOLATION_THRESHOLD
+            resp_pen = 1.0 + over
 
-            resp_pen = math.tanh(
-                1.0 + violation_severity
-            )  # Approaches 1.0 asymptotically
+        # Memberi batasan pada resp_pen [0.0, MAX_RESPONSE_PENALTY]
+        resp_pen = max(0.0, min(resp_pen, MAX_RESPONSE_PENALTY))
 
-        # Error Rate Penalty - normalized to [0, 1]
-        ERROR_RATE_THRESHOLD = 1.0
-        if self.error_rate > ERROR_RATE_THRESHOLD:
-            error_pen = min((self.error_rate - 1.0) / 9.0, 1.0)
-        else:
-            error_pen = 0.0
+        # Normalisasi penalti error terhadap batas atas ruang observasi.
+        # Ekspektasi error_rate adalah persentase 0..100.0
+        ERROR_RATE_MAX = self.observation_space["error_rate"][1]
+        error_pen = min(max(self.error_rate, 0.0) / ERROR_RATE_MAX, 1.0)
 
-        # Combine penalties with weights
-        # All individual penalties are now in [0, 1] range
-        # Weights determine relative importance
+        # Menghitung biaya berdasarkan jumlah replica yang digunakan
+        # Membuat model cenderung meminimalkan jumlah replica untuk efisiensi biaya
+        cost_pen = (
+            (self.replica_state - self.min_replicas) / self.range_replicas
+            if self.range_replicas > 0
+            else 0.0
+        )
+
+        # Menghitung total penalty dengan bobot masing-masing komponen
         weighted_resp_pen = self.response_time_weight * resp_pen
         weighted_error_pen = self.error_rate_weight * error_pen
         weighted_cpu_mem_pen = self.cpu_memory_weight * (cpu_pen + mem_pen)
-        weighted_cost_pen = (
-            self.cost_weight
-            * (self.replica_state - self.min_replicas)
-            / self.range_replicas
-        )
+        weighted_cost_pen = self.cost_weight * cost_pen
 
-        # Calculate total penalty
         total_penalty = (
             weighted_resp_pen
             + weighted_error_pen
@@ -334,26 +410,149 @@ class KubernetesEnv:
             + weighted_cost_pen
         )
 
-        # Normalize total penalty to ensure reward stays in [-1, 1] range
-        # Maximum possible penalty is sum of all weights
         max_possible_penalty = (
             self.response_time_weight
             + self.error_rate_weight
-            + self.cpu_memory_weight * 2.0  # CPU + Memory can both max out
+            + self.cpu_memory_weight * 2.0
             + self.cost_weight
         )
 
-        # Normalize penalty to [0, 1] range
+        # dinormalisasi agar hasil penalti tidak lebih dari 1
         normalized_penalty = min(total_penalty / max_possible_penalty, 1.0)
 
-        # Final reward: 1.0 (perfect) to -1.0 (worst)
+        # [-1, 1]
+        # Dikali dua agar minus bisa mencapai -1.0 pada kasus terburuk
         reward = 1.0 - 2.0 * normalized_penalty
 
-        # Clamp for stability (should already be in range, but safety check)
+        # Menerapkan stability penalti jika ada scaling yang terjadi pada langkah ini
+        stability_penalty = float(self.stability_penalty)
+        if stability_penalty and self._last_applied_delta != 0:
+            reward -= stability_penalty
+
+        # memastikikan reward dalam batasan
         return float(max(min(reward, 1.0), -1.0))
+
+    def _percent_action_to_safe_replicas(
+        self, action_percent: int, current_replicas: int
+    ) -> tuple[int, int]:
+        # returns: (final_replicas, applied_delta)
+        # Hitung target absolut dari 0..99 (aksi)
+        target: int = (
+            self.min_replicas + round((action_percent / 99.0) * self.range_replicas)
+            if self.range_replicas > 0
+            else self.min_replicas
+        )
+
+        # besar perubahan yang diinginkan (positif/negatif)
+        # delta = besar perubahan
+        delta: int = target - current_replicas
+        if delta == 0:
+            # no-op: reset pending down counter for safety and return
+            self._pending_down_count = 0
+            self.logger.debug(
+                f"No scaling needed: action {action_percent} -> target {target}, "
+                f"current {current_replicas}"
+            )
+            return current_replicas, 0
+
+        #  menentukan maksium step kebawah atau keatas
+        max_step = int(self.max_up_step if delta > 0 else self.max_down_step)
+
+        # membatasi step agar sesuai dengan max_step
+        # copysign untuk menjaga tanda (positif/negatif) dari delta
+        step = int(copysign(min(abs(delta), max_step), delta))
+        proposed = current_replicas + step
+
+        # Melakukan pengecekan sebelum melakukan downscale (menjaga stabilitas)
+        is_downscale: bool = proposed < current_replicas
+        if is_downscale:
+            # Menggunakan nilai EWMA (Exponential Weighted Moving Average),
+            # agar tidak terlalu sensitif terhadap fluktuasi metrik.
+            rt = self.smoothed_response_time
+            cpu = self.smoothed_cpu
+            memory = self.smoothed_memory
+            error_rate = self.smoothed_error_rate
+
+            if (
+                rt > self.max_response_time
+                or cpu > self.max_cpu
+                or memory > self.max_memory
+                or error_rate > float(self.error_block_threshold_pct)
+            ):
+                # Jika salah satu metrik melebihi batas maksimum, batalkan downscale.
+                # Hal ini untuk mencegah penurunan kapasitas saat aplikasi sedang
+                # mengalami beban tinggi atau masalah performa.
+                # Menghindari fluktuasi metrik yang dapat menyebabkan downscale yang
+                # tidak diinginkan.
+                self.logger.warning(
+                    f"Downscale blocked: RT={rt:.1f} (max {self.max_response_time}), "
+                    f"CPU={cpu:.1f} (max {self.max_cpu}), MEM={memory:.1f} "
+                    f"(max {self.max_memory}), ERR={error_rate:.2f}"
+                )
+                return current_replicas, 0
+
+            # Menahan downscale hingga agen RL meminta beberapa kali berturut-turut
+            min_confirm = self.min_down_confirmations
+            if self._pending_down_count < min_confirm:
+                self.logger.info(
+                    f"Downscale candidate (count "
+                    f"{self._pending_down_count}/{min_confirm}) - not applied yet"
+                )
+                return current_replicas, 0
+            # Melakukan increment pada counter jika arah permintaan sama;
+            self._pending_down_count = self._pending_down_count + 1
+        else:
+            # reset pending jika tidak sedang downscale
+            self._pending_down_count = 0
+
+        now = time.time()
+        # Default tidak ada cooldown untuk upscale, hanya jika ada kasus khusus
+        last_up_time = self._last_scale_up_time
+        last_down_time = self._last_scale_down_time
+        cooldown_up = self.cooldown_up_secs
+        cooldown_down = self.cooldown_down_secs
+
+        # Menerapkan wait cooldown sebelum melakukan scaling lagi
+        if is_downscale and (now - last_down_time) < cooldown_down:
+            self.logger.info(
+                f"Downscale suppressed due to cooldown "
+                f"({now - last_down_time:.0f}s<{cooldown_down}s)"
+            )
+            return current_replicas, 0
+        if (not is_downscale) and (now - last_up_time) < cooldown_up:
+            self.logger.info(
+                f"Upscale suppressed due to cooldown "
+                f"({now - last_up_time:.0f}s<{cooldown_up}s)"
+            )
+            return current_replicas, 0
+
+        # Finalisasi target replica setelah batasan diterapkan
+        applied_delta = step
+        final_replicas = int(
+            max(
+                self.min_replicas,
+                min(self.max_replicas, current_replicas + applied_delta),
+            )
+        )
+
+        # update last scale timestamps
+        if is_downscale:
+            self._last_scale_down_time = now
+        else:
+            self._last_scale_up_time = now
+
+        # debug log
+        self.logger.info(
+            f"Action {action_percent} -> target {target} | current {current_replicas} "
+            f"| apply_delta {applied_delta} -> final {final_replicas}"
+        )
+        # Mengembalikan nilai akhir dan delta(perubahan) yang diterapkan
+        return final_replicas, applied_delta
 
     def _scale_and_get_metrics(self) -> None:
         self._scale()
+        # Increase digunakan untuk menandai apakah ada penambahan replica
+        # (berguna untuk delay pada pengambilan metriks)
         increase: int = self.replica_state > self.replica_state_old
         ready, desired_replicas, ready_replicas = wait_for_pods_ready(
             prometheus=self.prometheus,
@@ -386,6 +585,7 @@ class KubernetesEnv:
             desired_replicas=desired_replicas,
         )
 
+        # Menyimpan metrik terakhir yang diketahui
         if self.replica > 0:
             self.last_known_metrics = (
                 self.cpu_usage,
@@ -402,28 +602,41 @@ class KubernetesEnv:
             )
 
     def _get_observation(self) -> dict[str, float]:
-        # FIXED: Don't clamp RT percentage - let DQN see full severity of violations
-        # This allows the neural network to learn the true state of the system
+        # Menambahkan variabel untuk menghitung EWMA setiap metrik (berfungsi sebagai
+        # parameter check pada saat downscale)
+        # contoh 0.3 * 4000 + 0.7 * 3500 = 3650 (perubahan lebih halus)
+        alpha = self.ewma_alpha
+        self.smoothed_response_time = (
+            alpha * self.response_time + (1 - alpha) * self.smoothed_response_time
+        )
+        self.smoothed_cpu = alpha * self.cpu_usage + (1 - alpha) * self.smoothed_cpu
+        self.smoothed_memory = (
+            alpha * self.memory_usage + (1 - alpha) * self.smoothed_memory
+        )
+        self.smoothed_error_rate = (
+            alpha * self.error_rate + (1 - alpha) * self.smoothed_error_rate
+        )
+
+        # Menghitung persentase response time terhadap max_response_time
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
 
-        # However, cap at a reasonable maximum for numerical stability (10x violation)
-        # This prevents extreme outliers from destabilizing training
+        # Beri batasan agar dapat mempercepat konvergensi pada reward dan observasi
+        # (RELU-like)
         response_time_percentage = min(response_time_percentage, 1000.0)
 
-        # Calculate current replica percentage based on ACTUAL ready replicas
+        # Menghitung persentase replica saat ini terhadap min-max replica
         current_replica_percentage = (
             (self.replica - self.min_replicas) / self.range_replicas * 100.0
             if self.range_replicas > 0
             else 0.0
         )
 
-        # Calculate deltas (normalized to -100 to +100 range)
+        # Calculate deltas(perubahan) (normalized to -100 to +100 range)
         cpu_delta = self.cpu_usage - self.prev_cpu_usage
         memory_delta = self.memory_usage - self.prev_memory_usage
         rt_delta = response_time_percentage - self.prev_response_time
 
-        # Calculate scaling direction: -1 (down), 0 (same), +1 (up)
-        # Based on actual replica change, not action intent
+        # Menghitung arah scaling [0=down, 0.5=same, 1=up]
         if hasattr(self, "prev_replica"):
             scaling_direction_raw = self.replica - self.prev_replica
             if scaling_direction_raw > 0:
@@ -433,18 +646,18 @@ class KubernetesEnv:
             else:
                 scaling_direction = 0.5  # No change
         else:
-            scaling_direction = 0.5  # First observation, no previous state
+            scaling_direction = 0.5  # First observation, tidak ada kondisi sebelumnya
 
         # Calculate time in current state (normalized 0-1)
         time_in_state = min(
             self.steps_at_current_replica / self.max_steps_tracking, 1.0
         )
 
-        # Calculate per-pod RPS (scale-independent normalization)
-        # This makes the metric flexible across any replica range
+        # Menghitung RPS per pod
+        # Ini membuat metrik fleksibel di berbagai rentang replika
         rps_per_pod = (self.request_rate / self.replica) if self.replica > 0 else 0.0
 
-        # Calculate RPS delta (change in per-pod load)
+        # Menghitung delta (perubahan) RPS (perubahan beban per pod)
         rps_delta = rps_per_pod - self.prev_rps_per_pod
 
         return {
@@ -458,7 +671,6 @@ class KubernetesEnv:
             "rt_delta": rt_delta,
             "time_in_state": time_in_state,
             "scaling_direction": scaling_direction,
-            # NEW: Load indicators
             "rps_per_pod": rps_per_pod,
             "rps_delta": rps_delta,
             "error_rate": self.error_rate,
@@ -467,32 +679,31 @@ class KubernetesEnv:
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
         self.last_action = action
 
-        # Store previous replica count for scaling direction calculation
-        self.prev_replica = (
-            self.replica if hasattr(self, "replica") else self.min_replicas
-        )
+        # prev_replica always exists (initialized in __init__), set directly
+        self.prev_replica = self.replica
 
-        # Map discrete action (0-99) to continuous percentage (0.0-1.0)
-        # Action 0 → 0.0 (min_replicas)
-        # Action 99 → 1.0 (max_replicas)
-        # Example: min=1, max=12, action=50 → 50/99≈0.505 → 1+0.505*11≈6.5→7 replicas
-        percentage = (
-            (action / 99.0) if len(self.action_space) > 1 else 0.0
-        )  # Map 0-99 to 0.0-1.0
+        # Keep action encoding 0..99 but apply percent->safe-delta wrapper
+        # to prevent harmful large jumps and flapping.
+        applied_delta: int = 0
+        final_replicas: int = self.replica
+        current_replicas = self.replica
         self.replica_state_old = self.replica_state
-        self.replica_state = round(self.min_replicas + percentage * self.range_replicas)
-        self.replica_state = max(
-            self.min_replicas, min(self.replica_state, self.max_replicas)
+
+        final_replicas, applied_delta = self._percent_action_to_safe_replicas(
+            action, current_replicas
         )
+        self.replica_state = final_replicas
 
         self._scale_and_get_metrics()
 
-        # Update time-in-state counter
+        # Update berapa step dengan replica saat ini
         if self.replica == self.prev_replica:
             self.steps_at_current_replica += 1
         else:
             self.steps_at_current_replica = 0
 
+        # menyimpan delta yang diterapkan untuk perhitungan reward
+        self._last_applied_delta = applied_delta
         reward = self._calculate_reward()
 
         self.iteration -= 1
@@ -500,14 +711,13 @@ class KubernetesEnv:
 
         observation = self._get_observation()
 
-        # Update previous metrics for next delta calculation
-        response_time_percentage = min(
-            (self.response_time / self.max_response_time) * 100.0, 100.0
-        )
+        # Memperbarui metrik sebelumnya untuk perhitungan delta di langkah berikutnya
         rps_per_pod = (self.request_rate / self.replica) if self.replica > 0 else 0.0
         self.prev_cpu_usage = self.cpu_usage
         self.prev_memory_usage = self.memory_usage
-        self.prev_response_time = response_time_percentage
+        self.prev_response_time = min(
+            (self.response_time / self.max_response_time) * 100.0, 100.0
+        )
         self.prev_rps_per_pod = rps_per_pod
         info = {
             "iteration": self.iteration,
@@ -519,6 +729,10 @@ class KubernetesEnv:
             "memory_usage": self.memory_usage,
             "response_time": self.response_time,
             "last_action": self.last_action,
+            "applied_delta": applied_delta,
+            "request_rate": self.request_rate,
+            "error_rate": self.error_rate,
+            "rps_per_pod": rps_per_pod,
         }
         self.influxdb.write_point(
             measurement="autoscaling_metrics",
@@ -532,9 +746,8 @@ class KubernetesEnv:
 
     def reset(self) -> dict[str, float]:
         self.iteration = self.initial_iteration
-        self.replica_state_old = (
-            self.replica_state if hasattr(self, "replica_state") else self.min_replicas
-        )
+        # replica_state is always present; no need for hasattr checks
+        self.replica_state_old = self.replica_state
         self.replica_state = self.min_replicas
         self.last_known_metrics = None
 

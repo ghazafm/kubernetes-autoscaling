@@ -18,6 +18,20 @@ from utils import (
 load_dotenv()
 
 
+def _env_int(key: str, default=None):
+    v = os.getenv(key)
+    return int(v) if v is not None else default
+
+
+def _env_float(key: str, default=None):
+    v = os.getenv(key)
+    return float(v) if v is not None else default
+
+
+def _env_bool(key: str, default=False):
+    return ast.literal_eval(os.getenv(key, str(default)))
+
+
 def find_latest_checkpoint(model_dir: Path) -> Path | None:
     """Find the most recent checkpoint in the model directory."""
     if not model_dir.exists():
@@ -66,9 +80,9 @@ if __name__ == "__main__":
         metrics_endpoints_method = [["/", "GET"], ["/docs", "GET"]]
 
     env = KubernetesEnv(
-        min_replicas=int(os.getenv("MIN_REPLICAS", "1")),
-        max_replicas=int(os.getenv("MAX_REPLICAS", "12")),
-        iteration=int(os.getenv("ITERATION", "10")),
+        min_replicas=_env_int("MIN_REPLICAS", 1),
+        max_replicas=_env_int("MAX_REPLICAS", 12),
+        iteration=_env_int("ITERATION", 10),
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME", "ecom-api"),
         min_cpu=int(os.getenv("MIN_CPU", "10")),
@@ -83,13 +97,22 @@ if __name__ == "__main__":
         influxdb=Influxdb,
         prometheus_url=os.getenv("PROMETHEUS_URL", "http://localhost:1234/prom"),
         metrics_endpoints_method=metrics_endpoints_method,
-        metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
-        metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
-        max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES", "1000")),
-        response_time_weight=float(os.getenv("RESPONSE_TIME_WEIGHT", "1.0")),
-        error_rate_weight=float(os.getenv("ERROR_RATE_WEIGHT", "1.0")),
-        cpu_memory_weight=float(os.getenv("CPU_MEMORY_WEIGHT", "0.5")),
-        cost_weight=float(os.getenv("COST_WEIGHT", "0.3")),
+        metrics_interval=_env_int("METRICS_INTERVAL", 15),
+        metrics_quantile=_env_float("METRICS_QUANTILE", 0.90),
+        max_scaling_retries=_env_int("MAX_SCALING_RETRIES", 1000),
+        response_time_weight=_env_float("RESPONSE_TIME_WEIGHT", 1.0),
+        error_rate_weight=_env_float("ERROR_RATE_WEIGHT", 1.0),
+        cpu_memory_weight=_env_float("CPU_MEMORY_WEIGHT", 0.5),
+        cost_weight=_env_float("COST_WEIGHT", 0.3),
+        # Pass safety/tuning parameters into the environment (use env vars when present)
+        max_up_step=_env_int("MAX_UP_STEP", 4),
+        max_down_step=_env_int("MAX_DOWN_STEP", 1),
+        min_down_confirmations=_env_int("MIN_DOWN_CONFIRMATIONS", 2),
+        cooldown_up_secs=_env_int("COOLDOWN_UP_SECS", 60),
+        cooldown_down_secs=_env_int("COOLDOWN_DOWN_SECS", 240),
+        error_block_threshold_pct=_env_float("ERROR_BLOCK_THRESHOLD_PCT", 1.0),
+        ewma_alpha=_env_float("EWMA_ALPHA", 0.3),
+        stability_penalty=_env_float("STABILITY_PENALTY", 0.05),
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()
@@ -130,31 +153,48 @@ if __name__ == "__main__":
 
         try:
             # Initialize agent
+            # Build agent kwargs only from env vars that are set. This avoids
+            # calling int()/float() on None which would raise TypeError.
             if choose_algorithm == "Q":
-                algorithm = Q(
-                    learning_rate=float(os.getenv("LEARNING_RATE", None)),
-                    discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
-                    epsilon_start=float(os.getenv("EPSILON_START", None)),
-                    epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
-                    epsilon_min=float(os.getenv("EPSILON_MIN", None)),
-                    created_at=start_time,
-                    logger=logger,
-                )
+                q_kwargs = {}
+                if _env_float("LEARNING_RATE") is not None:
+                    q_kwargs["learning_rate"] = _env_float("LEARNING_RATE")
+                if _env_float("DISCOUNT_FACTOR") is not None:
+                    q_kwargs["discount_factor"] = _env_float("DISCOUNT_FACTOR")
+                if _env_float("EPSILON_START") is not None:
+                    q_kwargs["epsilon_start"] = _env_float("EPSILON_START")
+                if _env_float("EPSILON_DECAY") is not None:
+                    q_kwargs["epsilon_decay"] = _env_float("EPSILON_DECAY")
+                if _env_float("EPSILON_MIN") is not None:
+                    q_kwargs["epsilon_min"] = _env_float("EPSILON_MIN")
+                q_kwargs["created_at"] = start_time
+                q_kwargs["logger"] = logger
+                algorithm = Q(**q_kwargs)
             elif choose_algorithm == "DQN":
-                algorithm = DQN(
-                    learning_rate=float(os.getenv("LEARNING_RATE", None)),
-                    discount_factor=float(os.getenv("DISCOUNT_FACTOR", None)),
-                    epsilon_start=float(os.getenv("EPSILON_START", None)),
-                    epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
-                    epsilon_min=float(os.getenv("EPSILON_MIN", None)),
-                    device=os.getenv("DEVICE", None),
-                    buffer_size=int(os.getenv("BUFFER_SIZE", None)),
-                    batch_size=int(os.getenv("BATCH_SIZE", None)),
-                    target_update_freq=int(os.getenv("TARGET_UPDATE_FREQ", None)),
-                    grad_clip_norm=float(os.getenv("GRAD_CLIP_NORM", None)),
-                    created_at=start_time,
-                    logger=logger,
-                )
+                d_kwargs = {}
+                if _env_float("LEARNING_RATE") is not None:
+                    d_kwargs["learning_rate"] = _env_float("LEARNING_RATE")
+                if _env_float("DISCOUNT_FACTOR") is not None:
+                    d_kwargs["discount_factor"] = _env_float("DISCOUNT_FACTOR")
+                if _env_float("EPSILON_START") is not None:
+                    d_kwargs["epsilon_start"] = _env_float("EPSILON_START")
+                if _env_float("EPSILON_DECAY") is not None:
+                    d_kwargs["epsilon_decay"] = _env_float("EPSILON_DECAY")
+                if _env_float("EPSILON_MIN") is not None:
+                    d_kwargs["epsilon_min"] = _env_float("EPSILON_MIN")
+                # ints
+                if _env_int("BUFFER_SIZE") is not None:
+                    d_kwargs["buffer_size"] = _env_int("BUFFER_SIZE")
+                if _env_int("BATCH_SIZE") is not None:
+                    d_kwargs["batch_size"] = _env_int("BATCH_SIZE")
+                if _env_int("TARGET_UPDATE_FREQ") is not None:
+                    d_kwargs["target_update_freq"] = _env_int("TARGET_UPDATE_FREQ")
+                if _env_float("GRAD_CLIP_NORM") is not None:
+                    d_kwargs["grad_clip_norm"] = _env_float("GRAD_CLIP_NORM")
+                d_kwargs["device"] = os.getenv("DEVICE", None)
+                d_kwargs["created_at"] = start_time
+                d_kwargs["logger"] = logger
+                algorithm = DQN(**d_kwargs)
             else:
                 raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
 
@@ -165,7 +205,7 @@ if __name__ == "__main__":
                 resume=resume_from_checkpoint,
                 resume_path=resume_path,
                 reset_epsilon=ast.literal_eval(os.getenv("RESET_EPSILON", "True")),
-                change_epsilon_decay=float(os.getenv("EPSILON_DECAY", None)),
+                change_epsilon_decay=_env_float("EPSILON_DECAY", None),
                 periodic_epsilon_reset=ast.literal_eval(
                     os.getenv("PERIODIC_EPSILON_RESET", "False")
                 ),
@@ -176,7 +216,7 @@ if __name__ == "__main__":
             # Start training
             logger.info("🚀 Starting training...")
             trainer.train(
-                episodes=int(os.getenv("EPISODES", None)),
+                episodes=_env_int("EPISODES", 1),
                 note=note,
                 start_time=start_time,
             )
@@ -205,7 +245,8 @@ if __name__ == "__main__":
 
     # Training completed - save final model and display stats
     if training_successful and hasattr(trainer, "agent"):
-        if hasattr(trainer.agent, "q_table"):
+        # Use agent_type to determine whether agent has a Q-table
+        if trainer.agent.agent_type.upper() == "Q":
             logger.info(f"\nQ-table size: {len(trainer.agent.q_table)} states")
             logger.info("Sample Q-values:")
             for _, (state, q_values) in enumerate(

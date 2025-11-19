@@ -3,6 +3,8 @@ from logging import Logger
 
 from prometheus_api_client import PrometheusConnect
 
+READY_RESULT_MIN_LENGTH = 2
+
 
 def wait_for_pods_ready(
     prometheus: PrometheusConnect,
@@ -49,7 +51,7 @@ def wait_for_pods_ready(
     while time.time() - start_time < timeout:
         try:
             desired_result = prometheus.custom_query(query=q_desired)
-            if not desired_result or len(desired_result) < 2:
+            if not desired_result or len(desired_result) < READY_RESULT_MIN_LENGTH:
                 logger.debug(
                     "wait_for_pods_ready: No desired replicas data from Prometheus"
                 )
@@ -57,7 +59,7 @@ def wait_for_pods_ready(
                 continue
 
             desired_value = str(desired_result[1])
-            if desired_value == "NaN" or desired_value == "":
+            if desired_value in {"NaN", ""}:
                 logger.debug(
                     "wait_for_pods_ready: Prometheus returned NaN for desired replicas"
                 )
@@ -79,16 +81,17 @@ def wait_for_pods_ready(
             )
 
             ready_result = prometheus.custom_query(query=q_ready)
-            if not ready_result or len(ready_result) < 2:
+            if not ready_result or len(ready_result) < READY_RESULT_MIN_LENGTH:
                 logger.debug(
                     "wait_for_pods_ready: No ready replicas data from Prometheus"
                 )
                 ready_replicas = 0
             else:
                 ready_value = str(ready_result[1])
-                if ready_value == "NaN" or ready_value == "":
+                if ready_value in {"NaN", ""}:
                     logger.debug(
-                        "wait_for_pods_ready: Prometheus returned NaN for ready replicas"
+                        "wait_for_pods_ready: Prometheus returned NaN for "
+                        "ready replicas"
                     )
                     ready_replicas = 0
                 else:

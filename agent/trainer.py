@@ -62,21 +62,17 @@ class Trainer:
             self.logger.warning("⚠️ Nothing to save yet.")
             return None
 
-        ext = (
-            ".pth" if getattr(self.agent, "agent_type", "").upper() == "DQN" else ".pkl"
-        )
-        model_type = (
-            "dqn"
-            if getattr(self.agent, "agent_type", "").upper() == "DQN"
-            else "qlearning"
-        )
+        # agent_type selalu di-set oleh konstruktor agent
+        is_dqn = self.agent.agent_type.upper() == "DQN"
+        ext = ".pth" if is_dqn else ".pkl"
+        model_type = "dqn" if is_dqn else "qlearning"
         interrupted_dir = Path(
             f"model/{model_type}/{self.savecfg.start_time}_{self.savecfg.note}/interrupted"
         )
         interrupted_dir.mkdir(parents=True, exist_ok=True)
 
         ts = int(time.time())
-        ep = getattr(self.agent, "episodes_trained", 0)
+        ep = self.agent.episodes_trained
         path = interrupted_dir / f"interrupted_episode_{ep}_{ts}{ext}"
 
         self.agent.save_model(str(path), ep)
@@ -119,8 +115,9 @@ class Trainer:
             for ep in range(episodes):
                 try:
                     self.agent.add_episode_count()
-                    epsilon = getattr(self.agent, "epsilon", None)
-                    eps_info = f" | ε {epsilon:.3f}" if epsilon is not None else ""
+                    # Epsilon selalu ada pada agent (Q atau DQN inherit dari Q)
+                    epsilon = self.agent.epsilon
+                    eps_info = f" | ε {epsilon:.3f}"
                     self.logger.info(f"\nEpisode {ep + 1}/{episodes}{eps_info}")
                     self.logger.info(
                         f"Total episodes trained: {self.agent.episodes_trained}"
@@ -156,7 +153,7 @@ class Trainer:
                         try:
                             act = self.agent.get_action(obs)
                             nxt, rew, term, info = self.env.step(act)
-                            self.agent.update_q_table(obs, act, rew, nxt)
+                            self.agent.update(obs, act, rew, nxt)
                             total += rew
                             obs = nxt
 
@@ -200,6 +197,9 @@ class Trainer:
                             # Wait before retry
                             time.sleep(5)
                             continue
+
+                        self.logger.info("=" * 110)
+                        self.logger.info("")
 
                     self.logger.info(
                         f"Episode {ep + 1} completed. Total reward: {total}"

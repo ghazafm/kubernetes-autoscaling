@@ -24,6 +24,8 @@ class Q:
         self.agent_type = "Q"
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
+        # Epsilon: probabilitas eksplorasi awal
+        # Contoh: epsilon_start=0.1 -> 10% pilih acak
         self.epsilon = epsilon_start
         self.epsilon_min = epsilon_min
         self.epsilon_decay = epsilon_decay
@@ -102,15 +104,17 @@ class Q:
             self.q_table[state_key] = np.zeros(self.n_actions)
 
         # Choose action based on epsilon-greedy
+        # Eksplorasi vs Eksploitasi
+        # Jika random < epsilon -> eksplorasi (pilih acak)
         if np.random.rand() < self.epsilon:
             action = np.random.randint(0, self.n_actions)
         else:
             action = np.argmax(self.q_table[state_key])
 
-        # REMOVED: Epsilon decay moved to update_q_table() to avoid double decay
+        # REMOVED: Epsilon decay moved to update() to avoid double decay
         return action
 
-    def update_q_table(
+    def update(
         self, observation: dict, action: int, reward: float, next_observation: dict
     ):
         """Update Q-table using Q-learning algorithm"""
@@ -131,6 +135,8 @@ class Q:
             - self.q_table[state_key][action]
         )
         if self.epsilon > self.epsilon_min:
+            # Decay epsilon agar seiring waktu agent lebih mengeksploitasi
+            # Contoh: epsilon=0.1, epsilon_decay=0.99 -> epsilon->0.099
             self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
     # Q(S,A)←Q(S,A)+α(R+γQ(S′,A′)−Q(S,A))  # noqa: RUF003
