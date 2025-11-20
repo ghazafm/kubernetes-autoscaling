@@ -9,19 +9,14 @@ from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
 
-# NOTE:
-# This module no longer reads tuning values from environment variables.
-# Tuning/safety parameters (max_up_step, max_down_step, etc.) are accepted
-# as constructor arguments to `KubernetesEnv` so callers (for example
-# `agent/train.py`) can centralize env parsing and pass the values in.
-
 
 class KubernetesEnv:
     def __init__(  # noqa: PLR0913, PLR0915
         self,
         min_replicas: int = 1,
         max_replicas: int = 50,
-        iteration: int | float = 100,  # int for training, float("inf") for production
+        # int untuk training, float('inf') untuk inferencing
+        iteration: int | float = 100,
         namespace: str = "default",
         deployment_name: str = "default",
         min_cpu: float = 20,
@@ -55,8 +50,8 @@ class KubernetesEnv:
         error_block_threshold_pct: float = 1.0,
         ewma_alpha: float = 0.3,
         stability_penalty: float = 0.05,
+        blocked_penalty: float = 0.05,
     ) -> None:
-        # Ensure a usable logger is always present
         self.logger: logging.Logger = (
             logger if logger is not None else logging.getLogger(__name__)
         )
@@ -91,18 +86,19 @@ class KubernetesEnv:
         self.max_scaling_retries = max_scaling_retries
 
         # Safety / stability parameters (passed from caller)
-        self.max_up_step: int = int(max_up_step)
-        self.max_down_step: int = int(max_down_step)
-        self.min_down_confirmations: int = int(min_down_confirmations)
-        self.cooldown_up_secs: int = int(cooldown_up_secs)
-        self.cooldown_down_secs: int = int(cooldown_down_secs)
-        # Threshold (in percent) above which error rate will block downscales.
-        self.error_block_threshold_pct: float = float(error_block_threshold_pct)
-        self.ewma_alpha: float = float(ewma_alpha)
-        self.stability_penalty: float = float(stability_penalty)
+        self.max_up_step: int = max_up_step
+        self.max_down_step: int = max_down_step
+        self.min_down_confirmations: int = min_down_confirmations
+        self.cooldown_up_secs: int = cooldown_up_secs
+        self.cooldown_down_secs: int = cooldown_down_secs
+        # Threshold (in percent) diatas batasan error rate akan memblokir downscale.
+        self.error_block_threshold_pct: float = error_block_threshold_pct
+        self.ewma_alpha: float = ewma_alpha
+        self.stability_penalty: float = stability_penalty
+        # Penalti diterapkan ketika downscale yang dicoba diblokir oleh pemeriksaan
+        self.blocked_penalty: float = blocked_penalty
 
-        # Validation / safety clamps
-        # EWMA_ALPHA should be in [0.0, 1.0]
+        # EWMA_ALPHA [0.0, 1.0]
         if self.ewma_alpha < 0.0:
             self.logger.warning(f"ewma_alpha {self.ewma_alpha} < 0.0, clamping to 0.0")
             self.ewma_alpha = 0.0
@@ -110,7 +106,6 @@ class KubernetesEnv:
             self.logger.warning(f"ewma_alpha {self.ewma_alpha} > 1.0, clamping to 1.0")
             self.ewma_alpha = 1.0
 
-        # Ensure sensible integer bounds
         if self.max_up_step < 1:
             self.logger.warning(f"max_up_step {self.max_up_step} < 1, setting to 1")
             self.max_up_step = 1
@@ -132,6 +127,13 @@ class KubernetesEnv:
         self.smoothed_cpu: float = 0.0
         self.smoothed_memory: float = 0.0
         self.smoothed_error_rate: float = 0.0
+
+        # Apakah mau downscale?
+        self._intended_downscale: bool = False
+
+        # Observability
+        self._downscale_blocked: bool = False
+        self._blocked_penalty_applied: float = 0.0
 
         # Replica bookkeeping: ensure attributes exist and have sensible defaults
         # min_replicas is already an int from the constructor signature,
@@ -429,6 +431,19 @@ class KubernetesEnv:
         if stability_penalty and self._last_applied_delta != 0:
             reward -= stability_penalty
 
+        # Menerapkan blocked penalty jika downscale yang diinginkan
+        self._downscale_blocked = False
+        self._blocked_penalty_applied = 0.0
+        if self._intended_downscale and self._last_applied_delta == 0:
+            self._downscale_blocked = True
+            self._blocked_penalty_applied = float(self.blocked_penalty)
+            reward -= self._blocked_penalty_applied
+            # Warning ketika scaledown di block
+            self.logger.warning(
+                "Downscale action blocked: applying blocked_penalty="
+                f"{self._blocked_penalty_applied:.3f}"
+            )
+
         # memastikikan reward dalam batasan
         return float(max(min(reward, 1.0), -1.0))
 
@@ -689,6 +704,13 @@ class KubernetesEnv:
         current_replicas = self.replica
         self.replica_state_old = self.replica_state
 
+        target: int = (
+            self.min_replicas + round((action / 99.0) * self.range_replicas)
+            if self.range_replicas > 0
+            else self.min_replicas
+        )
+        intended_downscale = target < current_replicas
+
         final_replicas, applied_delta = self._percent_action_to_safe_replicas(
             action, current_replicas
         )
@@ -704,11 +726,15 @@ class KubernetesEnv:
 
         # menyimpan delta yang diterapkan untuk perhitungan reward
         self._last_applied_delta = applied_delta
+        # expose agent intent for the reward calculation (use computed boolean)
+        self._intended_downscale = intended_downscale
+        # Reset per-step blocked flags before computing reward
+        self._downscale_blocked = False
+        self._blocked_penalty_applied = 0.0
         reward = self._calculate_reward()
 
         self.iteration -= 1
         terminated = bool(self.iteration <= 0)
-
         observation = self._get_observation()
 
         # Memperbarui metrik sebelumnya untuk perhitungan delta di langkah berikutnya
@@ -733,6 +759,8 @@ class KubernetesEnv:
             "request_rate": self.request_rate,
             "error_rate": self.error_rate,
             "rps_per_pod": rps_per_pod,
+            "downscale_blocked": 1 if self._downscale_blocked else 0,
+            "blocked_penalty": self._blocked_penalty_applied,
         }
         self.influxdb.write_point(
             measurement="autoscaling_metrics",

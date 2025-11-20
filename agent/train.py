@@ -113,6 +113,7 @@ if __name__ == "__main__":
         error_block_threshold_pct=_env_float("ERROR_BLOCK_THRESHOLD_PCT", 1.0),
         ewma_alpha=_env_float("EWMA_ALPHA", 0.3),
         stability_penalty=_env_float("STABILITY_PENALTY", 0.05),
+        blocked_penalty=_env_float("BLOCKED_PENALTY", 0.05),
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()
