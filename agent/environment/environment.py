@@ -1,5 +1,6 @@
 import logging
 import time
+from enum import Enum
 from math import copysign
 from typing import Optional
 
@@ -8,6 +9,13 @@ from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
+
+
+class DownscaleBlockReason(Enum):
+    NONE = "none"
+    METRICS = "metrics"
+    PENDING_CONFIRMATION = "pending_confirmation"
+    COOLDOWN = "cooldown"
 
 
 class KubernetesEnv:
@@ -134,10 +142,9 @@ class KubernetesEnv:
         # Observability
         self._downscale_blocked: bool = False
         self._blocked_penalty_applied: float = 0.0
+        self._downscale_blocked_reason: DownscaleBlockReason = DownscaleBlockReason.NONE
+        self._downscale_blocked_reason_details: Optional[str] = None
 
-        # Replica bookkeeping: ensure attributes exist and have sensible defaults
-        # min_replicas is already an int from the constructor signature,
-        # no need to cast again.
         self.replica: int = self.min_replicas
         self.replica_state: int = self.min_replicas
         self.replica_state_old: int = self.min_replicas
@@ -341,6 +348,29 @@ class KubernetesEnv:
             f"Proceeding with current replica state to avoid blocking training."
         )
 
+    def _calculate_blocked_penalty(self) -> float:
+        # Menerapkan blocked penalty jika downscale yang diinginkan
+        penalty = 0.0
+        self._downscale_blocked = False
+        self._blocked_penalty_applied = 0.0
+        if self._intended_downscale and self._last_applied_delta == 0:
+            self._downscale_blocked = True
+            reason = self._downscale_blocked_reason
+            if reason == DownscaleBlockReason.PENDING_CONFIRMATION:
+                self.logger.info(
+                    "Downscale deferred for confirmation — no blocked_penalty applied"
+                )
+            else:
+                self._blocked_penalty_applied = float(self.blocked_penalty)
+                penalty += self._blocked_penalty_applied
+                # Warning ketika scaledown di block
+                self.logger.warning(
+                    "Downscale action blocked: applying blocked_penalty="
+                    f"{self._blocked_penalty_applied:.3f}"
+                )
+
+        return penalty
+
     def _calculate_reward(self) -> float:
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
         response_time_percentage = min(response_time_percentage, 1000.0)
@@ -431,18 +461,7 @@ class KubernetesEnv:
         if stability_penalty and self._last_applied_delta != 0:
             reward -= stability_penalty
 
-        # Menerapkan blocked penalty jika downscale yang diinginkan
-        self._downscale_blocked = False
-        self._blocked_penalty_applied = 0.0
-        if self._intended_downscale and self._last_applied_delta == 0:
-            self._downscale_blocked = True
-            self._blocked_penalty_applied = float(self.blocked_penalty)
-            reward -= self._blocked_penalty_applied
-            # Warning ketika scaledown di block
-            self.logger.warning(
-                "Downscale action blocked: applying blocked_penalty="
-                f"{self._blocked_penalty_applied:.3f}"
-            )
+        reward -= self._calculate_blocked_penalty()
 
         # memastikikan reward dalam batasan
         return float(max(min(reward, 1.0), -1.0))
@@ -468,6 +487,9 @@ class KubernetesEnv:
                 f"No scaling needed: action {action_percent} -> target {target}, "
                 f"current {current_replicas}"
             )
+            # Explicitly mark as no block
+            self._downscale_blocked_reason = DownscaleBlockReason.NONE
+            self._downscale_blocked_reason_details = None
             return current_replicas, 0
 
         #  menentukan maksium step kebawah atau keatas
@@ -504,6 +526,11 @@ class KubernetesEnv:
                     f"CPU={cpu:.1f} (max {self.max_cpu}), MEM={memory:.1f} "
                     f"(max {self.max_memory}), ERR={error_rate:.2f}"
                 )
+                # Use a single string reason (not a tuple) for consistent checks
+                self._downscale_blocked_reason = DownscaleBlockReason.METRICS
+                self._downscale_blocked_reason_details = (
+                    f"RT={rt:.1f},CPU={cpu:.1f},MEM={memory:.1f},ERR={error_rate:.2f}"
+                )
                 return current_replicas, 0
 
             # Menahan downscale hingga agen RL meminta beberapa kali berturut-turut
@@ -514,6 +541,12 @@ class KubernetesEnv:
                     self.logger.info(
                         f"Downscale candidate (count "
                         f"{self._pending_down_count}/{min_confirm}) - not applied yet"
+                    )
+                    self._downscale_blocked_reason = (
+                        DownscaleBlockReason.PENDING_CONFIRMATION
+                    )
+                    self._downscale_blocked_reason_details = (
+                        f"{self._pending_down_count}/{min_confirm}"
                     )
                     return current_replicas, 0
         else:
@@ -532,6 +565,10 @@ class KubernetesEnv:
             self.logger.info(
                 f"Downscale suppressed due to cooldown "
                 f"({now - last_down_time:.0f}s<{cooldown_down}s)"
+            )
+            self._downscale_blocked_reason = DownscaleBlockReason.COOLDOWN
+            self._downscale_blocked_reason_details = (
+                f"{int(now - last_down_time)}/{cooldown_down}s"
             )
             return current_replicas, 0
         if (not is_downscale) and (now - last_up_time) < cooldown_up:
@@ -555,6 +592,9 @@ class KubernetesEnv:
             self._last_scale_down_time = now
         else:
             self._last_scale_up_time = now
+
+        self._downscale_blocked_reason = DownscaleBlockReason.NONE
+        self._downscale_blocked_reason_details = None
 
         # debug log
         self.logger.info(
@@ -760,6 +800,10 @@ class KubernetesEnv:
             "error_rate": self.error_rate,
             "rps_per_pod": rps_per_pod,
             "downscale_blocked": 1 if self._downscale_blocked else 0,
+            "downscale_blocked_reason": self._downscale_blocked_reason.value,
+            "downscale_blocked_reason_details": (
+                self._downscale_blocked_reason_details or ""
+            ),
             "blocked_penalty": self._blocked_penalty_applied,
         }
         self.influxdb.write_point(
