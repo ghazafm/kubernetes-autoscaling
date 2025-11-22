@@ -210,9 +210,9 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     if not verbose:
         return
 
-    # Pull metrics with sane defaults
-    cpu = float(observation.get("cpu_usage", 0.0))  # %
-    mem = float(observation.get("memory_usage", 0.0))  # %
+    # Pull metrics with sane defaults (cpu/mem are relative clipped percents 0..100)
+    cpu = float(observation.get("cpu_usage", 0.0))  # % (relative)
+    mem = float(observation.get("memory_usage", 0.0))  # % (relative)
     rt_percentage = float(observation.get("response_time", 0.0))  # percentage (0-100)
     replica_pct = float(observation.get("current_replica_pct", 0.0))  # % of range
     act = observation.get("last_action", 0)  # 0-99
@@ -231,6 +231,12 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     rps_per_pod = float(observation.get("rps_per_pod", 0.0))  # RPS per pod
     rps_delta = float(observation.get("rps_delta", 0.0))  # Change in RPS/pod
     error_rate = float(observation.get("error_rate", 0.0))  # Error % (0-10%)
+
+    # NEW: Relative violation indicators (0..1) and in-band booleans
+    cpu_dist = float(observation.get("cpu_dist", 0.0))
+    memory_dist = float(observation.get("memory_dist", 0.0))
+    cpu_in_band = bool(observation.get("cpu_in_band", 0.0))
+    memory_in_band = bool(observation.get("memory_in_band", 0.0))
 
     # Bars and colors
     cpu_col = _color(cpu, warn=70, crit=90)  # higher is worse
@@ -263,6 +269,10 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
     act_str = f"ACT {int(act):3d}"
 
+    # Prepare band status strings (human friendly)
+    cpu_band_status = "IN" if cpu_in_band else f"OUT ({cpu_dist * 100:.0f}% off)"
+    mem_band_status = "IN" if memory_in_band else f"OUT ({memory_dist * 100:.0f}% off)"
+
     if qmax is not None and best_idx is not None:
         q_str = f"Qmax {qmax:+.3f}"
         best_s = f"Best {best_idx:3d}"
@@ -278,10 +288,19 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
         logger.info(
             f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | {replica_str}"
         )
+        # Small human-friendly band status on the next line
+        logger.info(
+            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | ",
+            f"MEM band: {mem_band_status}",
+        )
     else:
         logger.info(
             f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
             f"{replica_str} | {act_str} | {q_str} | {best_s}"
+        )
+        logger.info(
+            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | ",
+            f"MEM band: {mem_band_status}",
         )
 
     # === LINE 2: Deltas, Stability, Direction ===
@@ -358,7 +377,12 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     err_bar = _bar(min(error_rate * 10.0, 100.0), width=10)
     err_str = f"{err_col}{err_symbol}ERR {error_rate:5.2f}% {err_bar}{RESET}"
 
-    logger.info(f"{' ' * len(hdr)}| {rps_str} | {rps_d_str} | {err_str}")
+    # Also print the band severity inline for quick diagnosis
+    band_info = (
+        f"CPU band={'IN' if cpu_in_band else 'OUT'}({cpu_dist:.2f}) "
+        f"MEM band={'IN' if memory_in_band else 'OUT'}({memory_dist:.2f})"
+    )
+    logger.info(f"{' ' * len(hdr)}| {rps_str} | {rps_d_str} | {err_str} | {band_info}")
 
     # === DEBUG: Q-values ===
     if q_vals is None:
