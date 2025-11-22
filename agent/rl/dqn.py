@@ -52,10 +52,11 @@ class DQN(Q):
         self.buffer_size = buffer_size
         self.target_update_freq = target_update_freq
         self.grad_clip_norm = grad_clip_norm
-        # State: [cpu%, mem%, rt%, replica%, action%,
+        # State: [cpu_rel%, mem_rel%, rt%, replica%, action%,
         #         cpu_Δ, mem_Δ, rt_Δ, time_in_state, scaling_direction,
-        #         rps_per_pod, rps_Δ, error_rate]
-        self._state_dim = 13
+        #         rps_per_pod, rps_Δ, error_rate,
+        #         cpu_dist, memory_dist, cpu_in_band, memory_in_band]
+        self._state_dim = 17
 
         self.policy_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
         self.target_net = QNetwork(self._state_dim, self.n_actions).to(self.device)
@@ -120,6 +121,12 @@ class DQN(Q):
         error_rate = observation.get("error_rate", 0.0) / 10.0
         error_rate = np.clip(error_rate, 0.0, 1.0)
 
+        # New features emitted by the environment
+        cpu_dist = np.clip(observation.get("cpu_dist", 0.0), 0.0, 1.0)
+        memory_dist = np.clip(observation.get("memory_dist", 0.0), 0.0, 1.0)
+        cpu_in_band = np.clip(observation.get("cpu_in_band", 0.0), 0.0, 1.0)
+        memory_in_band = np.clip(observation.get("memory_in_band", 0.0), 0.0, 1.0)
+
         return np.array(
             [
                 cpu,
@@ -135,6 +142,10 @@ class DQN(Q):
                 rps_per_pod,
                 rps_delta,
                 error_rate,
+                cpu_dist,
+                memory_dist,
+                cpu_in_band,
+                memory_in_band,
             ],
             dtype=np.float32,
         )

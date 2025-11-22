@@ -10,6 +10,10 @@ from kubernetes.client.exceptions import ApiException
 from prometheus_api_client import PrometheusConnect
 from utils import get_metrics, wait_for_pods_ready
 
+EPSILON = 1e-6
+MAX_CPU_PERCENTAGE = 100.0
+MAX_MEMORY_PERCENTAGE = 100.0
+
 
 class DownscaleBlockReason(Enum):
     NONE = "none"
@@ -159,18 +163,21 @@ class KubernetesEnv:
         self.observation_space = {
             "cpu_usage": (0, 100.0),
             "memory_usage": (0, 100.0),
-            "response_time": (0, 1000.0),  # FIXED: Allow RT up to 1000% (10x violation)
+            "response_time": (0, 1000.0),
             "current_replica_pct": (0, 100.0),
             "last_action": (0, 99),
             "cpu_delta": (-100.0, 100.0),
             "memory_delta": (-100.0, 100.0),
-            "rt_delta": (-1000.0, 1000.0),  # FIXED: Match RT range
+            "rt_delta": (-1000.0, 1000.0),
             "time_in_state": (0, 1.0),
-            "scaling_direction": (0, 1.0),  # 0=down, 0.5=same, 1=up
-            # NEW: Load indicators (scale-independent)
-            "rps_per_pod": (0, 100.0),  # Requests per second per pod
-            "rps_delta": (-100.0, 100.0),  # Change in RPS per pod
-            "error_rate": (0, 100.0),  # Error percentage (0-100%)
+            "scaling_direction": (0, 1.0),
+            "rps_per_pod": (0, 100.0),
+            "rps_delta": (-100.0, 100.0),
+            "error_rate": (0, 100.0),
+            "cpu_dist": (0.0, 1.0),
+            "memory_dist": (0.0, 1.0),
+            "cpu_in_band": (0.0, 1.0),
+            "memory_in_band": (0.0, 1.0),
         }
 
         # Track last known good metrics for fallback during timeout
@@ -371,26 +378,43 @@ class KubernetesEnv:
 
         return penalty
 
+    def _cpu_mem_penalty(
+        self, value: float, low: float, high: float, min_tol_pct: float = 0.01
+    ) -> float:
+        """Compute a distance-based penalty for CPU or memory.
+
+        - If value is inside [low, high] => penalty 0.0
+        - Outside the band: compute distance normalized by the band width
+          (with a small tolerance) and map it quadratically into [0.0, 1.0].
+        This makes small deviations lightly penalized and large deviations
+        strongly penalized, but keeps the value numerically stable.
+        """
+        # Inside the allowed band => no penalty
+        if low <= value <= high:
+            return 0.0
+
+        # Distance outside the band
+        distance = low - value if value < low else value - high
+
+        bandwidth = max(high - low, EPSILON)
+        min_tol = max(min_tol_pct * bandwidth, EPSILON)
+
+        normalized = distance / (bandwidth + min_tol)
+        # Quadratic mapping gives a softer start and stronger penalty for
+        # larger violations while still clamping to [0,1].
+        penalty = min(1.0, normalized * normalized)
+        return float(penalty)
+
     def _calculate_reward(self) -> float:
         response_time_percentage = (self.response_time / self.max_response_time) * 100.0
         response_time_percentage = min(response_time_percentage, 1000.0)
 
-        # Logika dasar cpu dan memory penalty
-        # Penalti dihitung berdasarkan seberapa jauh metrik berada di luar
-        # batas yang ditentukan (min/max). Penalti dinormalisasi ke rentang 0..1
-        if self.cpu_usage < self.min_cpu:
-            cpu_pen = (self.min_cpu - self.cpu_usage) / 100.0
-        elif self.cpu_usage > self.max_cpu:
-            cpu_pen = (self.cpu_usage - self.max_cpu) / 100.0
-        else:
-            cpu_pen = 0.0
-
-        if self.memory_usage < self.min_memory:
-            mem_pen = (self.min_memory - self.memory_usage) / 100.0
-        elif self.memory_usage > self.max_memory:
-            mem_pen = (self.memory_usage - self.max_memory) / 100.0
-        else:
-            mem_pen = 0.0
+        # CPU / Memory penalties: use distance-based penalty so the
+        # same policy generalizes across different min/max resource bands.
+        cpu_pen = self._cpu_mem_penalty(self.cpu_usage, self.min_cpu, self.max_cpu)
+        mem_pen = self._cpu_mem_penalty(
+            self.memory_usage, self.min_memory, self.max_memory
+        )
 
         # Response time thresholds (persentase dari max_response_time)
         RESPONSE_TIME_HIGH_THRESHOLD = 80.0
@@ -423,11 +447,7 @@ class KubernetesEnv:
 
         # Menghitung biaya berdasarkan jumlah replica yang digunakan
         # Membuat model cenderung meminimalkan jumlah replica untuk efisiensi biaya
-        cost_pen = (
-            (self.replica_state - self.min_replicas) / self.range_replicas
-            if self.range_replicas > 0
-            else 0.0
-        )
+        cost_pen = self.last_action / 100.0  # Normalisasi ke [0.0, 1.0]
 
         # Menghitung total penalty dengan bobot masing-masing komponen
         weighted_resp_pen = self.response_time_weight * resp_pen
@@ -656,7 +676,7 @@ class KubernetesEnv:
                 f"Pods are not ready, {ready_replicas}/{desired_replicas} ready"
             )
 
-    def _get_observation(self) -> dict[str, float]:
+    def _get_observation(self) -> dict[str, float]:  # noqa: PLR0912
         # Menambahkan variabel untuk menghitung EWMA setiap metrik (berfungsi sebagai
         # parameter check pada saat downscale)
         # contoh 0.3 * 4000 + 0.7 * 3500 = 3650 (perubahan lebih halus)
@@ -715,20 +735,72 @@ class KubernetesEnv:
         # Menghitung delta (perubahan) RPS (perubahan beban per pod)
         rps_delta = rps_per_pod - self.prev_rps_per_pod
 
+        # Menghitung persentase relatif CPU dan Memori dalam band yang ditentukan
+        # Dengan ini, agen menjadi independen terhadap skala absolut
+        # dari sumber daya yang dialokasikan.
+
+        # cpu_bandwith adalah lebar band CPU yang diizinkan
+        # EPSILON digunakan untuk mencegah pembagian dengan nol
+        cpu_bandwidth = max(self.max_cpu - self.min_cpu, EPSILON)
+
+        # raw_rel_cpu adalah persentase relatif CPU sebelum dibatasi
+        # raw relative cpu
+        raw_rel_cpu = (self.cpu_usage - self.min_cpu) / cpu_bandwidth
+
+        # rel_cpu_pct adalah persentase relatif CPU dalam skala 0..100
+        rel_cpu_pct = raw_rel_cpu * 100.0
+
+        # rel_cpu_pct_clipped adalah persentase relatif CPU yang dibatasi
+        # membatasi rel_cpu_pct ke [0.0, 100.0]
+        rel_cpu_pct_clipped = min(max(rel_cpu_pct, 0.0), 100.0)
+
+        # cpu_in_band adalah indikator apakah CPU berada dalam band yang diizinkan
+        cpu_in_band = 1.0 if (0.0 <= rel_cpu_pct <= MAX_CPU_PERCENTAGE) else 0.0
+
+        # cpu_dist adalah jarak dari band (0.0 = in band, 1.0 = jauh dari band)
+        if cpu_in_band:
+            cpu_dist = 0.0
+        else:
+            # Menghitung jarak persentase dari band
+            if rel_cpu_pct < 0.0:
+                dist_pct = abs(rel_cpu_pct - 0.0)
+            else:
+                dist_pct = abs(rel_cpu_pct - 100.0)
+            cpu_dist = min(1.0, dist_pct / 100.0)
+
+        mem_bandwidth = max(self.max_memory - self.min_memory, EPSILON)
+        raw_rel_mem = (self.memory_usage - self.min_memory) / mem_bandwidth
+        rel_mem_pct = raw_rel_mem * 100.0
+        rel_mem_pct_clipped = min(max(rel_mem_pct, 0.0), 100.0)
+        memory_in_band = 1.0 if (0.0 <= rel_mem_pct <= MAX_MEMORY_PERCENTAGE) else 0.0
+        if memory_in_band:
+            memory_dist = 0.0
+        else:
+            if rel_mem_pct < 0.0:
+                dist_pct = abs(rel_mem_pct - 0.0)
+            else:
+                dist_pct = abs(rel_mem_pct - 100.0)
+            memory_dist = min(1.0, dist_pct / 100.0)
+
         return {
-            "cpu_usage": self.cpu_usage,
-            "memory_usage": self.memory_usage,
-            "response_time": response_time_percentage,
-            "current_replica_pct": current_replica_percentage,
-            "last_action": self.last_action,
-            "cpu_delta": cpu_delta,
-            "memory_delta": memory_delta,
-            "rt_delta": rt_delta,
-            "time_in_state": time_in_state,
-            "scaling_direction": scaling_direction,
-            "rps_per_pod": rps_per_pod,
-            "rps_delta": rps_delta,
-            "error_rate": self.error_rate,
+            # CPU dan memori relatif dalam persentase 0..100
+            "cpu_usage": rel_cpu_pct_clipped,  # 1
+            "memory_usage": rel_mem_pct_clipped,  # 2
+            "response_time": response_time_percentage,  # 3
+            "current_replica_pct": current_replica_percentage,  # 4
+            "last_action": self.last_action,  # 5
+            "cpu_delta": cpu_delta,  # 6
+            "memory_delta": memory_delta,  # 7
+            "rt_delta": rt_delta,  # 8
+            "time_in_state": time_in_state,  # 9
+            "scaling_direction": scaling_direction,  # 10
+            "rps_per_pod": rps_per_pod,  # 11
+            "rps_delta": rps_delta,  # 12
+            "error_rate": self.error_rate,  # 13
+            "cpu_dist": cpu_dist,  # 14
+            "memory_dist": memory_dist,  # 15
+            "cpu_in_band": cpu_in_band,  # 16
+            "memory_in_band": memory_in_band,  # 17
         }
 
     def step(self, action: int) -> tuple[dict[str, float], float, bool, dict]:
