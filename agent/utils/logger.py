@@ -269,10 +269,6 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
     replica_str = f"{CYAN}REP {replica_pct:6.1f}% {replica_bar}{RESET}"
     act_str = f"ACT {int(act):3d}"
 
-    # Prepare band status strings (human friendly)
-    cpu_band_status = "IN" if cpu_in_band else f"OUT ({cpu_dist * 100:.0f}% off)"
-    mem_band_status = "IN" if memory_in_band else f"OUT ({memory_dist * 100:.0f}% off)"
-
     if qmax is not None and best_idx is not None:
         q_str = f"Qmax {qmax:+.3f}"
         best_s = f"Best {best_idx:3d}"
@@ -288,17 +284,10 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
         logger.info(
             f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | {replica_str}"
         )
-        # Small human-friendly band status on the next line
-        logger.info(
-            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | MEM band: {mem_band_status}"  # noqa: E501
-        )
     else:
         logger.info(
             f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
             f"{replica_str} | {act_str} | {q_str} | {best_s}"
-        )
-        logger.info(
-            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | MEM band: {mem_band_status}"  # noqa: E501
         )
 
     # === LINE 2: Deltas, Stability, Direction ===
