@@ -104,7 +104,7 @@ def _metrics_query(
     )
 
 
-def _metrics_result(
+def _metrics_result(  # noqa: PLR0912, PLR0915
     cpu_limits_results: list,
     memory_limits_results: list,
     cpu_usage_results: list,
@@ -128,14 +128,36 @@ def _metrics_result(
         if pod_name:
             memory_limits_by_pod[pod_name] = float(result["value"][1])
 
+    # Fallbacks: if some pods miss limits, reuse a conservative percentile
+    fallback_cpu_limit = None
+    fallback_mem_limit = None
+    if cpu_limits_by_pod:
+        fallback_cpu_limit = float(np.percentile(list(cpu_limits_by_pod.values()), 90))
+    if memory_limits_by_pod:
+        fallback_mem_limit = float(
+            np.percentile(list(memory_limits_by_pod.values()), 90)
+        )
+
     for result in cpu_usage_results:
         pod_name = result["metric"].get("pod")
-        if not pod_name or pod_name not in cpu_limits_by_pod:
-            logger.warning(f"Skipping pod {pod_name}: CPU limit missing")
+        if not pod_name:
+            logger.warning("Skipping pod with no name in CPU metrics")
             continue
 
+        limit_cores = cpu_limits_by_pod.get(pod_name)
+        if limit_cores is None or limit_cores <= 0:
+            if fallback_cpu_limit:
+                limit_cores = fallback_cpu_limit
+                logger.warning(
+                    f"CPU limit missing for pod {pod_name}; ",
+                    f"using fallback {fallback_cpu_limit}",
+                )
+            else:
+                logger.warning(f"Skipping pod {pod_name}: CPU limit missing")
+                continue
+
         rate_cores = float(result["value"][1])  # cores
-        limit_cores = float(cpu_limits_by_pod[pod_name])  # cores
+        limit_cores = float(limit_cores)  # cores
 
         if limit_cores <= 0:
             logger.warning(f"CPU limit not set or zero for pod {pod_name}")
@@ -151,16 +173,24 @@ def _metrics_result(
 
     for result in memory_usage_results:
         pod_name = result["metric"].get("pod")
-        if (
-            not pod_name
-            or pod_name not in memory_limits_by_pod
-            or pod_name not in pod_names
-        ):
-            logger.warning(f"Skipping pod {pod_name}: Memory limit missing")
+        if not pod_name:
+            logger.warning("Skipping pod with no name in memory metrics")
             continue
 
+        limit_bytes = memory_limits_by_pod.get(pod_name)
+        if limit_bytes is None or limit_bytes <= 0:
+            if fallback_mem_limit:
+                limit_bytes = fallback_mem_limit
+                logger.warning(
+                    f"Memory limit missing for pod {pod_name}; ",
+                    f"using fallback {fallback_mem_limit}",
+                )
+            else:
+                logger.warning(f"Skipping pod {pod_name}: Memory limit missing")
+                continue
+
         used_bytes = float(result["value"][1])
-        limit_bytes = float(memory_limits_by_pod[pod_name])
+        limit_bytes = float(limit_bytes)
         if limit_bytes <= 0:
             logger.warning(f"Memory limit not set or zero for pod {pod_name}")
             continue
