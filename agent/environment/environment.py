@@ -677,7 +677,7 @@ class KubernetesEnv:
                 f"Pods are not ready, {ready_replicas}/{desired_replicas} ready"
             )
 
-    def _get_observation(self) -> dict[str, float]:  # noqa: PLR0912
+    def _get_observation(self) -> dict[str, float]:
         # Menambahkan variabel untuk menghitung EWMA setiap metrik (berfungsi sebagai
         # parameter check pada saat downscale)
         # contoh 0.3 * 4000 + 0.7 * 3500 = 3650 (perubahan lebih halus)
@@ -755,33 +755,45 @@ class KubernetesEnv:
         # membatasi rel_cpu_pct ke [0.0, 100.0]
         rel_cpu_pct_clipped = min(max(rel_cpu_pct, 0.0), 100.0)
 
-        # cpu_in_band adalah indikator apakah CPU berada dalam band yang diizinkan
-        cpu_in_band = 1.0 if (0.0 <= rel_cpu_pct <= MAX_CPU_PERCENTAGE) else 0.0
-
-        # cpu_dist adalah jarak dari band (0.0 = in band, 1.0 = jauh dari band)
-        if cpu_in_band:
-            cpu_dist = 0.0
-        else:
-            # Menghitung jarak persentase dari band
-            if rel_cpu_pct < 0.0:
-                dist_pct = abs(rel_cpu_pct - 0.0)
-            else:
-                dist_pct = abs(rel_cpu_pct - 100.0)
-            cpu_dist = min(1.0, dist_pct / 100.0)
-
         mem_bandwidth = max(self.max_memory - self.min_memory, EPSILON)
         raw_rel_mem = (self.memory_usage - self.min_memory) / mem_bandwidth
         rel_mem_pct = raw_rel_mem * 100.0
         rel_mem_pct_clipped = min(max(rel_mem_pct, 0.0), 100.0)
-        memory_in_band = 1.0 if (0.0 <= rel_mem_pct <= MAX_MEMORY_PERCENTAGE) else 0.0
+
+        # Menghitung jarak CPU dan Memori dari band yang diizinkan
+        # penjelasan: kita gunakan metrik jarak relatif terhadap tepi (edge-relative)
+        # - Jika nilai berada di dalam band [min, max] -> in_band=1, dist=0
+        # - Jika nilai < min -> dist = (min - value) / min
+        #   Contoh: min=10, value=5 -> (10-5)/10 = 0.5
+        #            min=20, value=5 -> (20-5)/20 = 0.75
+        # - Jika nilai > max -> dist = (value - max) / (100 - max)
+        #   Contoh: max=90, value=95 -> (95-90)/(100-90) = 5/10 = 0.5
+        # Penjelasan tambahan: pembagi di-normalisasi ke rentang absolut (0..100)
+        # sehingga deviasi absolut terhadap tepi memberikan nilai dist yang
+        # konsisten antar konfigurasi band yang berbeda.
+        cpu_in_band = 1.0 if (self.min_cpu <= self.cpu_usage <= self.max_cpu) else 0.0
+        memory_in_band = (
+            1.0 if (self.min_memory <= self.memory_usage <= self.max_memory) else 0.0
+        )
+        # CPU distance
+        if cpu_in_band:
+            cpu_dist = 0.0
+        elif self.cpu_usage < self.min_cpu:
+            denom = max(self.min_cpu, EPSILON)
+            cpu_dist = min(1.0, (self.min_cpu - self.cpu_usage) / denom)
+        else:
+            denom = max(100.0 - self.max_cpu, EPSILON)
+            cpu_dist = min(1.0, (self.cpu_usage - self.max_cpu) / denom)
+
+        # Memory distance (same logic)
         if memory_in_band:
             memory_dist = 0.0
+        elif self.memory_usage < self.min_memory:
+            denom = max(self.min_memory, EPSILON)
+            memory_dist = min(1.0, (self.min_memory - self.memory_usage) / denom)
         else:
-            if rel_mem_pct < 0.0:
-                dist_pct = abs(rel_mem_pct - 0.0)
-            else:
-                dist_pct = abs(rel_mem_pct - 100.0)
-            memory_dist = min(1.0, dist_pct / 100.0)
+            denom = max(100.0 - self.max_memory, EPSILON)
+            memory_dist = min(1.0, (self.memory_usage - self.max_memory) / denom)
 
         return {
             # CPU dan memori relatif dalam persentase 0..100
@@ -934,4 +946,5 @@ class KubernetesEnv:
         self.prev_replica = self.replica
 
         # last_action is already set to 0 above
+        return self._get_observation()
         return self._get_observation()
