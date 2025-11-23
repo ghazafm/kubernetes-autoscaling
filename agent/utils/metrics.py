@@ -10,27 +10,42 @@ def _metrics_query(
     namespace: str,
     deployment_name: str,
     interval: int = 15,
+    desired_replicas: int | None = None,
 ) -> tuple[str, str, str, str, str]:
-    cpu_query = f"""
-        (
-            sum by (pod) (
-                rate(container_cpu_usage_seconds_total{{
-                    namespace="{namespace}",
-                    pod=~"{deployment_name}-.*",
-                    container!="",
-                    container!="POD"
-                }}[{interval}s])
-            )
-        ) OR (
-            count by (pod) (
-                container_cpu_usage_seconds_total{{
-                    namespace="{namespace}",
-                    pod=~"{deployment_name}-.*",
-                    container!="",
-                    container!="POD"
-                }}
-            ) * 0
+    """
+    Build pod-scoped queries and cap to the youngest desired pods.
+
+    We use topk on pod start time to keep only the newest N pods (desired replicas),
+    so older pods that are still Ready after a scale-down do not contribute.
+    """
+    # Default to a reasonable cap if desired_replicas is None
+    pod_window = max(1, desired_replicas or 50)
+
+    pod_filter = f"""
+        topk({pod_window},
+          kube_pod_start_time{{
+            namespace="{namespace}",
+            pod=~"{deployment_name}-.*"
+          }}
+          * on(pod) group_left()
+            (kube_pod_status_ready{{
+                namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
+                condition="true"
+            }} == 1)
         )
+    """
+
+    cpu_query = f"""
+        sum by (pod) (
+            rate(container_cpu_usage_seconds_total{{
+                namespace="{namespace}",
+                pod=~"{deployment_name}-.*",
+                container!="",
+                container!="POD"
+            }}[{interval}s])
+        )
+        * on(pod) group_left() {pod_filter}
         """
 
     memory_query = f"""
@@ -42,6 +57,7 @@ def _metrics_query(
                 container!="POD"
             }}
         )
+        * on(pod) group_left() {pod_filter}
         """
 
     cpu_limits_query = f"""
@@ -53,6 +69,7 @@ def _metrics_query(
                 unit="core"
             }}
         )
+        * on(pod) group_left() {pod_filter}
         """
 
     # Query for memory limits
@@ -65,6 +82,7 @@ def _metrics_query(
                 unit="byte"
             }}
         )
+        * on(pod) group_left() {pod_filter}
         """
 
     # Query for total request rate (RPS)
@@ -414,7 +432,12 @@ def get_metrics(  # noqa: PLR0912, PLR0915
             cpu_limits_query,
             memory_limits_query,
             rps_query,
-        ) = _metrics_query(namespace, deployment_name, interval=interval)
+        ) = _metrics_query(
+            namespace,
+            deployment_name,
+            interval=interval,
+            desired_replicas=actual_replicas,
+        )
         logger.debug("Metrics queries prepared, querying Prometheus...")
         logger.debug(f"CPU Query: {cpu_query}")
         logger.debug(f"Memory Query: {memory_query}")

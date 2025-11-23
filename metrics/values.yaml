@@ -821,7 +821,7 @@ kubeControllerManager:
     enabled: true
     https: null
     insecureSkipVerify: null
-    interval: ""
+    interval: "3s"
     jobLabel: jobLabel
     labelLimit: 0
     labelNameLengthLimit: 0
@@ -975,7 +975,7 @@ kubelet:
     attachMetadata:
       node: false
     cAdvisor: true
-    cAdvisorInterval: 3s
+    cAdvisorInterval: "3s"
     cAdvisorMetricRelabelings:
     - action: drop
       regex: container_cpu_(cfs_throttled_seconds_total|load_average_10s|system_seconds_total|user_seconds_total)
@@ -1211,7 +1211,7 @@ prometheus:
     scrapeFailureLogFile: ""
     scrapeInterval: "3s"
     scrapeProtocols: []
-    scrapeTimeout: "3s"
+    scrapeTimeout: "2s"
     secrets: []
     securityContext:
       fsGroup: 2000

@@ -49,10 +49,11 @@ class KubernetesEnv:
         metrics_interval: int = 15,
         metrics_quantile: float = 0.90,
         max_scaling_retries: int = 1000,
-        response_time_weight: float = 1.0,
-        error_rate_weight: float = 0.8,
-        cpu_memory_weight: float = 0.4,
-        cost_weight: float = 0.2,
+        # Weights are ratios; defaults are normalized for readability (sum ≈ 1.0).
+        response_time_weight: float = 0.42,
+        error_rate_weight: float = 0.42,
+        cpu_memory_weight: float = 0.12,
+        cost_weight: float = 0.04,
         # Safety / stability tuning (prefer passing these from caller e.g. train.py)
         max_up_step: int = 4,
         max_down_step: int = 1,

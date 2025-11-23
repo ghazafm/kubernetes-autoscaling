@@ -35,11 +35,11 @@ export default function () {
   sleep(1);
 
   // Test CPU-intensive endpoint with varying iterations
-  const iterations = Math.floor(Math.random() * 2000000) + 500000; // Random between 500k and 2.5M
+  const iterations = Math.floor(Math.random() * 1500000) + 500000; // 500k–2.0M (stays below MAX_CPU_ITERATIONS)
   const cpuRes = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`);
   cpuDuration.add(cpuRes.timings.duration);
   
-  check(cpuRes, {
+  const cpuOk = check(cpuRes, {
     'cpu api status is 200': (r) => r.status === 200,
     'cpu api has success status': (r) => {
       try {
@@ -49,7 +49,8 @@ export default function () {
         return false;
       }
     },
-  }) || errorRate.add(1);
+  });
+  errorRate.add(cpuOk ? 0 : 1);
   
   sleep(2);
 
@@ -58,7 +59,7 @@ export default function () {
   const memRes = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`);
   memoryDuration.add(memRes.timings.duration);
   
-  check(memRes, {
+  const memOk = check(memRes, {
     'memory api status is 200': (r) => r.status === 200,
     'memory api has success status': (r) => {
       try {
@@ -68,7 +69,8 @@ export default function () {
         return false;
       }
     },
-  }) || errorRate.add(1);
+  });
+  errorRate.add(memOk ? 0 : 1);
   
   sleep(1);
 }

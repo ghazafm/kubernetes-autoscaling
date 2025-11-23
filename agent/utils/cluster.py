@@ -3,7 +3,7 @@ from logging import Logger
 
 from prometheus_api_client import PrometheusConnect
 
-READY_RESULT_MIN_LENGTH = 2
+READY_RESULT_MIN_LENGTH = 1
 
 
 def wait_for_pods_ready(
@@ -58,7 +58,8 @@ def wait_for_pods_ready(
                 time.sleep(1)
                 continue
 
-            desired_value = str(desired_result[1])
+            # custom_query returns a list of vectors; take the first sample's value
+            desired_value = str(desired_result[0]["value"][1])
             if desired_value in {"NaN", ""}:
                 logger.debug(
                     "wait_for_pods_ready: Prometheus returned NaN for desired replicas"
@@ -87,7 +88,7 @@ def wait_for_pods_ready(
                 )
                 ready_replicas = 0
             else:
-                ready_value = str(ready_result[1])
+                ready_value = str(ready_result[0]["value"][1])
                 if ready_value in {"NaN", ""}:
                     logger.debug(
                         "wait_for_pods_ready: Prometheus returned NaN for "

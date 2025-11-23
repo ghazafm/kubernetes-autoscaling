@@ -87,3 +87,4 @@ kubeconfig
 .cache/
 *.env
 *.txt
+AGENTS.md

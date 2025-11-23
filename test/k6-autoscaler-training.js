@@ -359,7 +359,7 @@ export default function () {
 
       cpuDuration.add(res.timings.duration);
 
-      check(res, {
+      const cpuOk = check(res, {
         'cpu api status is 200': (r) => r.status === 200,
         'cpu api completed': (r) => {
           try {
@@ -370,7 +370,8 @@ export default function () {
           }
         },
         'cpu api response time acceptable': (r) => r.timings.duration < 10000,
-      }) || errorRate.add(1);
+      });
+      errorRate.add(cpuOk ? 0 : 1);
       break;
 
     case 'memory':
@@ -382,7 +383,7 @@ export default function () {
 
       memoryDuration.add(res.timings.duration);
 
-      check(res, {
+      const memOk = check(res, {
         'memory api status is 200': (r) => r.status === 200,
         'memory api completed': (r) => {
           try {
@@ -393,7 +394,8 @@ export default function () {
           }
         },
         'memory api response time acceptable': (r) => r.timings.duration < 8000,
-      }) || errorRate.add(1);
+      });
+      errorRate.add(memOk ? 0 : 1);
       break;
 
     case 'basic':
@@ -404,10 +406,11 @@ export default function () {
 
       basicDuration.add(res.timings.duration);
 
-      check(res, {
+      const basicOk = check(res, {
         'basic api status is 200': (r) => r.status === 200,
         'basic api response time acceptable': (r) => r.timings.duration < 2000,
-      }) || errorRate.add(1);
+      });
+      errorRate.add(basicOk ? 0 : 1);
       break;
   }
 
