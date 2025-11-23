@@ -290,8 +290,7 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
         )
         # Small human-friendly band status on the next line
         logger.info(
-            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | ",
-            f"MEM band: {mem_band_status}",
+            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | MEM band: {mem_band_status}"  # noqa: E501
         )
     else:
         logger.info(
@@ -299,8 +298,7 @@ def log_verbose_details(  # noqa: PLR0912, PLR0915
             f"{replica_str} | {act_str} | {q_str} | {best_s}"
         )
         logger.info(
-            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | ",
-            f"MEM band: {mem_band_status}",
+            f"{' ' * len(hdr)}| CPU band: {cpu_band_status} | MEM band: {mem_band_status}"  # noqa: E501
         )
 
     # === LINE 2: Deltas, Stability, Direction ===
