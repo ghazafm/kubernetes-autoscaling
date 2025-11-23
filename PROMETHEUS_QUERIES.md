@@ -7,64 +7,89 @@ This document contains all Prometheus queries used by your RL autoscaler agent f
 ```
 Prometheus URL: http://10.34.4.150:30080/monitoring
 Namespace: default
-Deployment: flask-app
-Metrics Interval: 35s
-Quantile: 0.90 (90th percentile)
+
 ```
 
-## 📊 Core Metrics Queries
 
-### 1. **CPU Usage (Rate)**
-
-Measures CPU usage rate per pod over the last 35 seconds. Uses OR logic to include both active and idle pods:
+The agent constructs a pod-scoped filter (called `pod_filter`) to cap results to the newest N ready pods. The full `pod_filter` expression the code appends is:
 
 ```promql
-(
-  sum by (pod) (
-    rate(container_cpu_usage_seconds_total{
+topk({pod_window},
+  kube_pod_start_time{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }
+  * on(pod) group_left()
+    (kube_pod_status_ready{
       namespace="default",
       pod=~"flask-app-.*",
-      container!="POD"
-    }[35s])
-  )
-) OR (
-  count by (pod) (
-    container_cpu_usage_seconds_total{
-      namespace="default",
-      pod=~"flask-app-.*",
-      container!="POD"
-    }
-  ) * 0
+      condition="true"
+    } == 1)
 )
 ```
 
-**What it returns**: CPU usage in cores per pod (e.g., 0.204 = 204m). Idle pods return 0.
+When you paste full queries into Prometheus UI, expand `{pod_window}` and `{interval}` to concrete numbers (e.g. `5` and `15s`). Below are the full copy/paste-ready queries that include the `pod_filter` inline.
 
-**Why OR logic?** The `rate()` function only returns values for pods with CPU activity changes. Idle pods would be missing from results. The OR clause adds idle pods with 0 CPU usage, ensuring all pods are included.
+### 1) CPU usage per pod (rate)
+Used in `metrics._metrics_query` (interval is parameterised):
+
+```promql
+sum by (pod) (
+  rate(container_cpu_usage_seconds_total{
+    namespace="default",
+    pod=~"flask-app-.*",
+    container!="",
+    container!="POD"
+  }[{interval}s])
+)
+* on(pod) group_left() topk({pod_window},
+  kube_pod_start_time{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }
+  * on(pod) group_left()
+    (kube_pod_status_ready{
+      namespace="default",
+      pod=~"flask-app-.*",
+      condition="true"
+    } == 1)
+)
+```
+
+What it returns: CPU usage in cores per pod. The agent expects one entry per ready pod.
 
 ---
 
-### 2. **Memory Usage (Working Set)**
-
-Measures current memory usage per pod:
+### 2) Memory usage per pod (working set)
 
 ```promql
 sum by (pod) (
   container_memory_working_set_bytes{
     namespace="default",
     pod=~"flask-app-.*",
+    container!="",
     container!="POD"
   }
 )
+* on(pod) group_left() topk({pod_window},
+  kube_pod_start_time{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }
+  * on(pod) group_left()
+    (kube_pod_status_ready{
+      namespace="default",
+      pod=~"flask-app-.*",
+      condition="true"
+    } == 1)
+)
 ```
 
-**What it returns**: Memory usage in bytes per pod (e.g., 25165824 = 24Mi)
+What it returns: Memory used (working set) in bytes per pod.
 
 ---
 
-### 3. **CPU Limits**
-
-Gets CPU resource limits per pod:
+### 3) CPU limits per pod
 
 ```promql
 sum by (pod) (
@@ -75,15 +100,25 @@ sum by (pod) (
     unit="core"
   }
 )
+* on(pod) group_left() topk({pod_window},
+  kube_pod_start_time{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }
+  * on(pod) group_left()
+    (kube_pod_status_ready{
+      namespace="default",
+      pod=~"flask-app-.*",
+      condition="true"
+    } == 1)
+)
 ```
 
-**What it returns**: CPU limit in cores (e.g., 0.5 = 500m)
+What it returns: CPU limit in cores per pod.
 
 ---
 
-### 4. **Memory Limits**
-
-Gets memory resource limits per pod:
+### 4) Memory limits per pod
 
 ```promql
 sum by (pod) (
@@ -94,236 +129,158 @@ sum by (pod) (
     unit="byte"
   }
 )
+* on(pod) group_left() topk({pod_window},
+  kube_pod_start_time{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }
+  * on(pod) group_left()
+    (kube_pod_status_ready{
+      namespace="default",
+      pod=~"flask-app-.*",
+      condition="true"
+    } == 1)
+)
 ```
 
-**What it returns**: Memory limit in bytes (e.g., 536870912 = 512Mi)
+What it returns: Memory limit in bytes per pod.
 
 ---
 
-### 5. **Response Time (90th Percentile)**
-
-Your Flask app exposes metrics with the `path` label (changed from `endpoint` to avoid Prometheus label conflicts):
+### 5) Request rate (RPS)
 
 ```promql
-1000 *
-histogram_quantile(
-  0.90,
+sum(
+  rate(http_requests_total{
+    namespace="default",
+    pod=~"flask-app-.*"
+  }[{interval}s])
+)
+```
+
+The agent uses this scalar value as the current RPS. For breakdowns use `sum by (path)` or `sum by (pod)`.
+
+---
+
+### 6) Response time (quantile) — per endpoint
+Used in `metrics._get_response_time`. The agent queries each `(path, method)` configured in `METRICS_ENDPOINTS_METHOD` and multiplies by 1000 to return milliseconds:
+
+```promql
+1000 * histogram_quantile(
+  {quantile},
   sum by (le) (
     rate(http_request_duration_seconds_bucket{
       namespace="default",
       pod=~"flask-app-.*",
       method="GET",
       path="/api/cpu"
-    }[35s])
+    }[{interval}s])
   )
 )
 ```
 
-**What it returns**: 90th percentile response time in milliseconds
-
-**Note**: The label is `path` (not `endpoint` or `exported_endpoint`) to avoid Prometheus renaming conflicts.
+The code will average the finite response-time values across configured endpoints. Important: the instrumentation exposes `path` and `method` labels; the agent relies on `path` (not `endpoint`).
 
 ---
 
-## 🎯 Calculated Metrics
+### 7) Deployment desired and ready replicas (used in `wait_for_pods_ready`)
 
-Your RL agent calculates these from the raw metrics:
+q_desired (desired replicas):
 
-### CPU Usage Percentage
-```python
-cpu_percentage = (cpu_usage_cores / cpu_limit_cores) * 100
-```
-
-Example:
-- CPU Usage: 0.204 cores (204m)
-- CPU Limit: 0.5 cores (500m)
-- **Result: 40.8%**
-
-### Memory Usage Percentage
-```python
-memory_percentage = (memory_used_bytes / memory_limit_bytes) * 100
-```
-
-Example:
-- Memory Used: 50331648 bytes (48Mi)
-- Memory Limit: 536870912 bytes (512Mi)
-- **Result: 9.4%**
-
----
-
-## 🚀 Quick Test Queries (Prometheus UI)
-
-### 1. **Current Pod Count**
 ```promql
-count(kube_pod_info{
-  namespace="default",
-  pod=~"flask-app-.*",
-  created_by_kind="ReplicaSet"
-})
-```
-
-### 2. **Average CPU Usage Across All Pods**
-```promql
-avg(
-  sum by (pod) (
-    rate(container_cpu_usage_seconds_total{
+scalar(
+  sum(
+    kube_deployment_spec_replicas{
       namespace="default",
-      pod=~"flask-app-.*",
-      container!="POD"
-    }[1m])
+      deployment="flask-app"
+    }
   )
-) * 100 / 0.5
-```
-*(Divide by 0.5 because your CPU limit is 500m)*
-
-### 3. **Average Memory Usage Across All Pods**
-```promql
-avg(
-  container_memory_working_set_bytes{
-    namespace="default",
-    pod=~"flask-app-.*",
-    container!="POD"
-  }
-) / 1024 / 1024
-```
-*(Result in MiB)*
-
-### 4. **Request Rate (Total RPS)**
-```promql
-sum(
-  rate(http_requests_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }[1m])
 )
 ```
 
-### 5. **Request Rate by Path**
-```promql
-sum by (path) (
-  rate(http_requests_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }[1m])
-)
-```
+q_ready (ready replicas - matches pods to ReplicaSet -> Deployment owner):
 
-### 6. **95th Percentile Response Time (All Endpoints)**
 ```promql
-histogram_quantile(0.95,
-  sum by (le) (
-    rate(http_request_duration_seconds_bucket{
-      namespace="default",
-      pod=~"flask-app-.*"
-    }[1m])
+scalar(
+  sum(
+    (kube_pod_status_ready{namespace="default", condition="true"} == 1)
+    and on(pod) (
+      label_replace(
+        kube_pod_owner{namespace="default", owner_kind="ReplicaSet"},
+        "replicaset", "$1", "owner_name", "(.*)"
+      )
+      * on(namespace, replicaset) group_left(owner_name)
+        kube_replicaset_owner{
+          namespace="default", owner_kind="Deployment", owner_name="flask-app"
+        }
+    )
   )
-) * 1000
-```
-*(Result in milliseconds)*
-
-### 7. **Error Rate**
-```promql
-sum(
-  rate(http_requests_total{
-    namespace="default",
-    pod=~"flask-app-.*",
-    http_status=~"5.."
-  }[1m])
-) / sum(
-  rate(http_requests_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }[1m])
-) * 100
-```
-*(Result as percentage)*
-
-### 8. **Pods by Status**
-```promql
-count by (phase) (
-  kube_pod_status_phase{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }
 )
 ```
 
-### 9. **Container Restarts**
-```promql
-sum by (pod) (
-  kube_pod_container_status_restarts_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }
-)
-```
-
-### 10. **Network I/O**
-```promql
-# Network receive rate
-sum by (pod) (
-  rate(container_network_receive_bytes_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }[1m])
-) / 1024 / 1024
-
-# Network transmit rate
-sum by (pod) (
-  rate(container_network_transmit_bytes_total{
-    namespace="default",
-    pod=~"flask-app-.*"
-  }[1m])
-) / 1024 / 1024
-```
-*(Result in MiB/s)*
+The agent extracts the scalar as an integer (see `_extract_scalar_value` in `agent/utils/cluster.py`).
 
 ---
 
-## 📈 Grafana Dashboard Queries
+## How the agent handles missing/stale data
 
-### Panel 1: Pod Count Over Time
+- The metric scraping loop in `_scrape_metrics` retries for a short timeout until the number of returned entries matches the expected replicas; otherwise it falls back to last-known values or conservative defaults.
+- Percentiles and fallbacks: when limits are missing, the code uses a percentile fallback (90th) across known limits; if no historical data exist, it returns conservative high values to force scale-up.
+
+## Quick test queries
+
+- Current pod count:
+
 ```promql
-count(kube_pod_info{namespace="default", pod=~"flask-app-.*"})
+count(kube_pod_info{namespace="default", pod=~"flask-app-.*", created_by_kind="ReplicaSet"})
 ```
 
-### Panel 2: CPU Usage % (Per Pod)
+- Average CPU usage across pods (cores):
+
 ```promql
-sum by (pod) (
-  rate(container_cpu_usage_seconds_total{
-    namespace="default",
-    pod=~"flask-app-.*",
-    container!="POD"
-  }[1m])
-) / on(pod) group_left()
-sum by (pod) (
-  kube_pod_container_resource_limits{
-    namespace="default",
-    pod=~"flask-app-.*",
-    resource="cpu"
-  }
-) * 100
+avg(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default", pod=~"flask-app-.*", container!="", container!="POD"}[1m])))
 ```
 
-### Panel 3: Memory Usage % (Per Pod)
+- Total RPS (1m window):
+
 ```promql
-sum by (pod) (
-  container_memory_working_set_bytes{
-    namespace="default",
-    pod=~"flask-app-.*",
-    container!="POD"
-  }
-) / on(pod) group_left()
-sum by (pod) (
-  kube_pod_container_resource_limits{
-    namespace="default",
-    pod=~"flask-app-.*",
-    resource="memory"
-  }
-) * 100
+sum(rate(http_requests_total{namespace="default", pod=~"flask-app-.*"}[1m]))
 ```
 
-### Panel 4: Request Rate & Response Time (Combined)
+- 95th percentile response time (ms):
+
+```promql
+histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="default", pod=~"flask-app-.*"}[1m]))) * 1000
+```
+
+## Troubleshooting hints
+
+- If a per-pod query returns fewer entries than expected, the agent will retry; check `container` label presence and `pod` naming pattern.
+- If response time queries are empty, verify `http_request_duration_seconds_bucket` exists and that labels include `path` and `method`:
+
+```promql
+http_request_duration_seconds_bucket{namespace="default", pod=~"flask-app-.*"}
+```
+
+If instrumentation uses different labels, update the code or the instrumentation accordingly.
+
+## Example: test from Python (same approach agent uses)
+
+```python
+from prometheus_api_client import PrometheusConnect
+
+prom = PrometheusConnect(url="http://10.34.4.150:30080/monitoring", disable_ssl=True)
+print(prom.check_prometheus_connection())
+
+q = 'sum(rate(http_requests_total{namespace="default", pod=~"flask-app-.*"}[1m]))'
+print(prom.custom_query(q))
+```
+
+---
+
+If you want, I can now scan the repository for any other hard-coded PromQL expressions and add them here, or run the queries against your Prometheus and paste current results.
+
+Updated to match the exact expressions generated in `agent/utils/metrics.py` and `agent/utils/cluster.py`.
 ```promql
 # Left Y-axis: Request Rate
 sum(rate(http_requests_total{namespace="default", pod=~"flask-app-.*"}[1m]))
