@@ -158,6 +158,11 @@ class KubernetesEnv:
                 f"max_down_step <= 0 -> full-range scaling ({self.range_replicas})"
             )
             self.max_down_step = max(1, self.range_replicas)
+
+        self.logger.info(
+            f"max_up_step set to {self.max_up_step}, "
+            f"max_down_step set to {self.max_down_step}"
+        )
         self.cooldown_up_secs = max(self.cooldown_up_secs, 0)
         self.cooldown_down_secs = max(self.cooldown_down_secs, 0)
 
