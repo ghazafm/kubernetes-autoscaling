@@ -20,7 +20,17 @@ load_dotenv()
 
 def _env_int(key: str, default=None):
     v = os.getenv(key)
-    return int(v) if v is not None else default
+    if v is None:
+        return default
+    if isinstance(v, str) and v.lower() in ("inf", "infinity"):
+        return float("inf")
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return int(float(v))
+        except Exception:
+            return default
 
 
 def _env_float(key: str, default=None):

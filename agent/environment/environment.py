@@ -119,12 +119,45 @@ class KubernetesEnv:
             self.logger.warning(f"ewma_alpha {self.ewma_alpha} > 1.0, clamping to 1.0")
             self.ewma_alpha = 1.0
 
-        if self.max_up_step < 1:
-            self.logger.warning(f"max_up_step {self.max_up_step} < 1, setting to 1")
-            self.max_up_step = 1
-        if self.max_down_step < 1:
-            self.logger.warning(f"max_down_step {self.max_down_step} < 1, setting to 1")
-            self.max_down_step = 1
+        # Memastikan max_up_step dan max_down_step valid
+        try:
+            self.max_up_step = int(self.max_up_step)
+        except Exception:
+            try:
+                if float(self.max_up_step) == float("inf"):
+                    self.max_up_step = self.range_replicas
+                else:
+                    self.max_up_step = int(float(self.max_up_step))
+            except Exception:
+                self.logger.warning(
+                    "max_up_step not parsable; defaulting to full range"
+                )
+                self.max_up_step = self.range_replicas
+
+        try:
+            self.max_down_step = int(self.max_down_step)
+        except Exception:
+            try:
+                if float(self.max_down_step) == float("inf"):
+                    self.max_down_step = self.range_replicas
+                else:
+                    self.max_down_step = int(float(self.max_down_step))
+            except Exception:
+                self.logger.warning(
+                    "max_down_step not parsable; defaulting to full range"
+                )
+                self.max_down_step = self.range_replicas
+
+        if self.max_up_step <= 0:
+            self.logger.info(
+                f"max_up_step <= 0 -> full-range scaling ({self.range_replicas})"
+            )
+            self.max_up_step = max(1, self.range_replicas)
+        if self.max_down_step <= 0:
+            self.logger.info(
+                f"max_down_step <= 0 -> full-range scaling ({self.range_replicas})"
+            )
+            self.max_down_step = max(1, self.range_replicas)
         self.cooldown_up_secs = max(self.cooldown_up_secs, 0)
         self.cooldown_down_secs = max(self.cooldown_down_secs, 0)
 
