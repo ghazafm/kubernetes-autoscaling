@@ -111,16 +111,6 @@ class KubernetesEnv:
         # Penalti diterapkan ketika downscale yang dicoba diblokir oleh pemeriksaan
         self.blocked_penalty: float = blocked_penalty
 
-        self.logger.info("Weights:")
-        self.logger.info(f"  response_time_weight: {self.response_time_weight}")
-        self.logger.info(f"  error_rate_weight: {self.error_rate_weight}")
-        self.logger.info(f"  cpu_memory_weight: {self.cpu_memory_weight}")
-        self.logger.info(f"  cost_weight: {self.cost_weight}")
-
-        self.logger.info("Penalties:")
-        self.logger.info(f"  stability_penalty: {self.stability_penalty}")
-        self.logger.info(f"  blocked_penalty: {self.blocked_penalty}")
-
         # EWMA_ALPHA [0.0, 1.0]
         if self.ewma_alpha < 0.0:
             self.logger.warning(f"ewma_alpha {self.ewma_alpha} < 0.0, clamping to 0.0")
@@ -208,6 +198,16 @@ class KubernetesEnv:
         self.error_rate_weight = error_rate_weight
         self.cpu_memory_weight = cpu_memory_weight
         self.cost_weight = cost_weight
+
+        self.logger.info("Weights:")
+        self.logger.info(f"  response_time_weight: {self.response_time_weight}")
+        self.logger.info(f"  error_rate_weight: {self.error_rate_weight}")
+        self.logger.info(f"  cpu_memory_weight: {self.cpu_memory_weight}")
+        self.logger.info(f"  cost_weight: {self.cost_weight}")
+
+        self.logger.info("Penalties:")
+        self.logger.info(f"  stability_penalty: {self.stability_penalty}")
+        self.logger.info(f"  blocked_penalty: {self.blocked_penalty}")
 
         self.observation_space = {
             "cpu_usage": (0, 100.0),
