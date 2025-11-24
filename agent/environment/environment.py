@@ -111,6 +111,16 @@ class KubernetesEnv:
         # Penalti diterapkan ketika downscale yang dicoba diblokir oleh pemeriksaan
         self.blocked_penalty: float = blocked_penalty
 
+        self.logger.info("Weights:")
+        self.logger.info(f"  response_time_weight: {self.response_time_weight}")
+        self.logger.info(f"  error_rate_weight: {self.error_rate_weight}")
+        self.logger.info(f"  cpu_memory_weight: {self.cpu_memory_weight}")
+        self.logger.info(f"  cost_weight: {self.cost_weight}")
+
+        self.logger.info("Penalties:")
+        self.logger.info(f"  stability_penalty: {self.stability_penalty}")
+        self.logger.info(f"  blocked_penalty: {self.blocked_penalty}")
+
         # EWMA_ALPHA [0.0, 1.0]
         if self.ewma_alpha < 0.0:
             self.logger.warning(f"ewma_alpha {self.ewma_alpha} < 0.0, clamping to 0.0")
@@ -237,10 +247,34 @@ class KubernetesEnv:
         self.logger.info("Initialized KubernetesEnv environment")
         # Log a subset of configuration to avoid dumping large objects
         conf = {
-            "min_replicas": self.min_replicas,
-            "max_replicas": self.max_replicas,
             "namespace": self.namespace,
             "deployment_name": self.deployment_name,
+            "min_replicas": self.min_replicas,
+            "max_replicas": self.max_replicas,
+            "range_replicas": self.range_replicas,
+            "iteration": self.iteration,
+            "min_cpu": self.min_cpu,
+            "min_memory": self.min_memory,
+            "max_cpu": self.max_cpu,
+            "max_memory": self.max_memory,
+            "max_up_step": self.max_up_step,
+            "max_down_step": self.max_down_step,
+            "cooldown_up_secs": self.cooldown_up_secs,
+            "cooldown_down_secs": self.cooldown_down_secs,
+            "error_block_threshold_pct": self.error_block_threshold_pct,
+            "ewma_alpha": self.ewma_alpha,
+            "stability_penalty": self.stability_penalty,
+            "blocked_penalty": self.blocked_penalty,
+            "response_time_weight": self.response_time_weight,
+            "verbose": self.verbose,
+            "timeout": self.timeout,
+            "wait_time": self.wait_time,
+            "influxdb": bool(self.influxdb),
+            "prometheus_url": prometheus_url,
+            "metrics_endpoints_method": self.metrics_endpoints_method,
+            "metrics_interval": self.metrics_interval,
+            "metrics_quantile": self.metrics_quantile,
+            "max_scaling_retries": self.max_scaling_retries,
         }
         self.logger.info(f"Environment configuration: {conf}")
 
