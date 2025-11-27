@@ -172,11 +172,11 @@ case "$TEST_FILE" in
         echo -e "${YELLOW}Running ALL autoscaler training tests...${NC}"
 
         # Calculate estimated duration
-        local base_duration=150  # ~2.5 hours in minutes (spike + training + edge + weekly)
-        local multiplier=${DURATION_MULTIPLIER:-1}
-        local cycles=${CYCLE_COUNT:-1}
-        local total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
-        local total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
+        base_duration=150  # ~2.5 hours in minutes (spike + training + edge + weekly)
+        multiplier=${DURATION_MULTIPLIER:-1}
+        cycles=${CYCLE_COUNT:-1}
+        total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
+        total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
 
         if (( $(echo "$total_hours < 1" | bc -l) )); then
             echo -e "${YELLOW}This will take approximately ${total_minutes} minutes${NC}\n"
@@ -227,18 +227,18 @@ case "$TEST_FILE" in
         echo -e "${YELLOW}Running FULL test suite...${NC}"
 
         # Calculate estimated duration
-        local base_duration=180  # ~3 hours in minutes (all tests including general)
-        local multiplier=${DURATION_MULTIPLIER:-1}
-        local cycles=${CYCLE_COUNT:-1}
-        local total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
-        local total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
+        base_duration=180  # ~3 hours in minutes (all tests including general)
+        multiplier=${DURATION_MULTIPLIER:-1}
+        cycles=${CYCLE_COUNT:-1}
+        total_minutes=$(echo "$base_duration * $multiplier * $cycles" | bc)
+        total_hours=$(echo "scale=1; $total_minutes / 60" | bc)
 
         if (( $(echo "$total_hours < 1" | bc -l) )); then
             echo -e "${YELLOW}This will take approximately ${total_minutes} minutes${NC}\n"
         elif (( $(echo "$total_hours < 24" | bc -l) )); then
             echo -e "${YELLOW}This will take approximately ${total_hours} hours${NC}\n"
         else
-            local total_days=$(echo "scale=1; $total_hours / 24" | bc)
+            total_days=$(echo "scale=1; $total_hours / 24" | bc)
             echo -e "${YELLOW}This will take approximately ${total_days} days${NC}\n"
         fi
 
