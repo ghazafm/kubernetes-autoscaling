@@ -20,6 +20,21 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 export default function () {
   const endpoint = Math.random() > 0.5 ? 'cpu' : 'memory';
@@ -28,14 +43,15 @@ export default function () {
   if (endpoint === 'cpu') {
     // Keep CPU load within safe range for 500m limit and MAX_CPU_ITERATIONS=2.5M
     const iterations = Math.floor(Math.random() * 400000) + 200000; // 200k-600k
-    url = `${BASE_URL}/api/cpu?iterations=${iterations}`;
+    const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
+    url = `${BASE_URL}/api/cpu?iterations=${safeIterations}`;
   } else {
     // FIXED: Max 70 MB to account for concurrent requests (was 50-200 MB!)
     const sizeMb = Math.floor(Math.random() * 50) + 20; // 20-70 MB
     url = `${BASE_URL}/api/memory?size_mb=${sizeMb}`;
   }
 
-  const res = http.get(url);
+  const res = safeGet(url, { tags: { name: (url.includes('/api/cpu') ? 'cpu' : 'memory'), request_type: (url.includes('/api/cpu') ? 'cpu' : 'memory') }, timeout: '20s' });
 
   const ok = check(res, {
     'spike test status is 200': (r) => r.status === 200,

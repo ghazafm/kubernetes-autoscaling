@@ -42,6 +42,21 @@ export const options = {
 
 // Base URL - Update this to match your service endpoint
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 export default function () {
   const currentStage = getCurrentStage(__ITER, __VU);
@@ -52,7 +67,8 @@ export default function () {
   if (requestType < 0.4) {
     // 40% CPU-intensive requests
     const iterations = Math.floor(Math.random() * 2000000) + 1000000; // 1M to 3M iterations
-    const cpuRes = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`);
+    const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
+    const cpuRes = safeGet(`${BASE_URL}/api/cpu?iterations=${safeIterations}`, { tags: { name: 'cpu', request_type: 'cpu' }, timeout: '20s' });
     cpuDuration.add(cpuRes.timings.duration);
 
     check(cpuRes, {
@@ -70,7 +86,7 @@ export default function () {
   } else if (requestType < 0.7) {
     // 30% Memory-intensive requests
     const sizeMb = Math.floor(Math.random() * 40) + 30; // 30MB to 70MB
-    const memRes = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`);
+    const memRes = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, { tags: { name: 'memory', request_type: 'memory' }, timeout: '20s' });
     memoryDuration.add(memRes.timings.duration);
 
     check(memRes, {

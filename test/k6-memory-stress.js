@@ -22,12 +22,30 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 export default function () {
   // Safe memory allocation - account for concurrency (2-3 simultaneous requests)
   // Max safe: 140 MB ÷ 2 = 70 MB per request
   const sizeMb = Math.floor(Math.random() * 50) + 20; // 20MB to 70MB (safe for concurrency)
-  const memRes = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`);
+  const memRes = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+    tags: { name: 'memory', request_type: 'memory' },
+    timeout: '20s',
+  });
   memoryDuration.add(memRes.timings.duration);
 
   check(memRes, {

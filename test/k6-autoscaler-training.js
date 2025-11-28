@@ -157,6 +157,21 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 // Request type distribution that mimics real-world application usage
 const REQUEST_PATTERNS = {
@@ -351,9 +366,9 @@ export default function () {
 
   switch(requestType) {
     case 'cpu':
-      const iterations = getCpuIterations(phase);
-      res = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
-        tags: { request_type: 'cpu', load_phase: phase },
+      const iterations = Math.min(getCpuIterations(phase), MAX_CPU_ITERATIONS);
+      res = safeGet(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
+        tags: { name: 'cpu', request_type: 'cpu', load_phase: phase },
         timeout: '30s', // Prevent hanging requests
       });
 
@@ -376,8 +391,8 @@ export default function () {
 
     case 'memory':
       const sizeMb = getMemorySize(phase);
-      res = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
-        tags: { request_type: 'memory', load_phase: phase },
+      res = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+        tags: { name: 'memory', request_type: 'memory', load_phase: phase },
         timeout: '20s',
       });
 
@@ -399,8 +414,8 @@ export default function () {
       break;
 
     case 'basic':
-      res = http.get(`${BASE_URL}/api`, {
-        tags: { request_type: 'basic', load_phase: phase },
+      res = safeGet(`${BASE_URL}/api`, {
+        tags: { name: 'basic', request_type: 'basic', load_phase: phase },
         timeout: '5s',
       });
 

@@ -1,5 +1,5 @@
-import http from 'k6/http';
 import { check, sleep } from 'k6';
+import http from 'k6/http';
 import { Rate, Trend } from 'k6/metrics';
 
 // Custom metrics
@@ -24,21 +24,37 @@ export const options = {
 
 // Base URL - Update this to match your service endpoint
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 export default function () {
   // Test the basic /api endpoint
-  const basicRes = http.get(`${BASE_URL}/api`);
+  const basicRes = safeGet(`${BASE_URL}/api`, { tags: { name: 'basic', request_type: 'basic' }, timeout: '5s' });
   check(basicRes, {
     'basic api status is 200': (r) => r.status === 200,
   }) || errorRate.add(1);
-  
+
   sleep(1);
 
   // Test CPU-intensive endpoint with varying iterations
   const iterations = Math.floor(Math.random() * 1500000) + 500000; // 500k–2.0M (stays below MAX_CPU_ITERATIONS)
-  const cpuRes = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`);
+  const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
+  const cpuRes = safeGet(`${BASE_URL}/api/cpu?iterations=${safeIterations}`, { tags: { name: 'cpu', request_type: 'cpu' }, timeout: '20s' });
   cpuDuration.add(cpuRes.timings.duration);
-  
+
   const cpuOk = check(cpuRes, {
     'cpu api status is 200': (r) => r.status === 200,
     'cpu api has success status': (r) => {
@@ -51,14 +67,14 @@ export default function () {
     },
   });
   errorRate.add(cpuOk ? 0 : 1);
-  
+
   sleep(2);
 
   // Test memory-intensive endpoint with varying memory sizes
   const sizeMb = Math.floor(Math.random() * 40) + 30; // Random between 30MB and 70MB (safe range)
-  const memRes = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`);
+  const memRes = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, { tags: { name: 'memory', request_type: 'memory' }, timeout: '20s' });
   memoryDuration.add(memRes.timings.duration);
-  
+
   const memOk = check(memRes, {
     'memory api status is 200': (r) => r.status === 200,
     'memory api has success status': (r) => {
@@ -71,7 +87,7 @@ export default function () {
     },
   });
   errorRate.add(memOk ? 0 : 1);
-  
+
   sleep(1);
 }
 
@@ -85,33 +101,33 @@ export function handleSummary(data) {
 function textSummary(data, options = {}) {
   const indent = options.indent || '';
   const enableColors = options.enableColors || false;
-  
+
   let summary = '\n' + indent + '✓ Test completed\n\n';
-  
+
   // Requests summary
   summary += indent + 'Requests:\n';
   summary += indent + `  Total: ${data.metrics.http_reqs?.values.count || 0}\n`;
-  summary += indent + `  Failed: ${data.metrics.http_req_failed?.values.rate ? 
+  summary += indent + `  Failed: ${data.metrics.http_req_failed?.values.rate ?
     (data.metrics.http_req_failed.values.rate * 100).toFixed(2) : 0}%\n`;
-  
+
   // Duration summary
   summary += indent + '\nResponse Time:\n';
   summary += indent + `  Average: ${data.metrics.http_req_duration?.values.avg?.toFixed(2) || 0}ms\n`;
   summary += indent + `  95th percentile: ${data.metrics.http_req_duration?.values['p(95)']?.toFixed(2) || 0}ms\n`;
   summary += indent + `  Max: ${data.metrics.http_req_duration?.values.max?.toFixed(2) || 0}ms\n`;
-  
+
   // Custom metrics
   if (data.metrics.cpu_request_duration) {
     summary += indent + '\nCPU Endpoint:\n';
     summary += indent + `  Average: ${data.metrics.cpu_request_duration.values.avg?.toFixed(2) || 0}ms\n`;
     summary += indent + `  95th percentile: ${data.metrics.cpu_request_duration.values['p(95)']?.toFixed(2) || 0}ms\n`;
   }
-  
+
   if (data.metrics.memory_request_duration) {
     summary += indent + '\nMemory Endpoint:\n';
     summary += indent + `  Average: ${data.metrics.memory_request_duration.values.avg?.toFixed(2) || 0}ms\n`;
     summary += indent + `  95th percentile: ${data.metrics.memory_request_duration.values['p(95)']?.toFixed(2) || 0}ms\n`;
   }
-  
+
   return summary;
 }

@@ -162,6 +162,22 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+const MAX_MEMORY_MB = parseInt(__ENV.MAX_MEMORY_MB || '140');
+
+function safeGet(url, params, maxRetries = 2) {
+  let attempt = 0;
+  while (attempt <= maxRetries) {
+    try {
+      const r = http.get(url, params);
+      return r;
+    } catch (err) {
+      attempt += 1;
+      sleep(0.1 * attempt);
+      if (attempt > maxRetries) throw err;
+    }
+  }
+}
 
 // Simulate time of day and day of week
 let iterationCounter = 0;
@@ -332,8 +348,9 @@ export default function () {
   };
 
   if (requestType === 'cpu') {
-    const iterations = getRequestParams('cpu', pattern.intensity);
-    res = http.get(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
+    let iterations = getRequestParams('cpu', pattern.intensity);
+    iterations = Math.min(iterations, MAX_CPU_ITERATIONS);
+    res = safeGet(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
       tags: tags,
       timeout: '35s',
     });
@@ -353,8 +370,10 @@ export default function () {
     }) || errorRate.add(1);
 
   } else if (requestType === 'memory') {
-    const sizeMb = getRequestParams('memory', pattern.intensity);
-    res = http.get(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+    let sizeMb = getRequestParams('memory', pattern.intensity);
+    // Cap memory to configured safe max and account for concurrency
+    sizeMb = Math.min(sizeMb, Math.max(1, Math.floor(MAX_MEMORY_MB / 2)));
+    res = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
       tags: tags,
       timeout: '25s',
     });
@@ -374,7 +393,7 @@ export default function () {
     }) || errorRate.add(1);
 
   } else {
-    res = http.get(`${BASE_URL}/api`, {
+    res = safeGet(`${BASE_URL}/api`, {
       tags: tags,
       timeout: '8s',
     });

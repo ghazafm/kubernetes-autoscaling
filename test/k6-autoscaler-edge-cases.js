@@ -20,6 +20,8 @@ const edgeCaseCounter = new Counter('edge_case_counter');
 
 const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
 const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
+// Allow k6 to respect the app's configured CPU cap if provided
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
 
 // Helper function to scale duration
 function scaleDuration(minutes) {
@@ -207,7 +209,8 @@ function getWorkloadParams(type, intensity) {
         params = { iterations: 2000000 + Math.floor(Math.random() * 1500000) };
         break;
       case 'maximum':
-        params = { iterations: 3500000 + Math.floor(Math.random() * 1500000) };
+        // Cap to MAX_CPU_ITERATIONS (provided via environment/config)
+        params = { iterations: Math.max(0, MAX_CPU_ITERATIONS - Math.floor(Math.random() * 200000)) };
         break;
       default:
         params = { iterations: 1500000 };
@@ -250,13 +253,34 @@ export default function () {
 
   let res;
 
+  // Helper to retry transient network errors (connect refused / timeouts)
+  function safeGet(url, params, maxRetries = 2) {
+    let attempt = 0;
+    while (attempt <= maxRetries) {
+      try {
+        const r = http.get(url, params);
+        return r;
+      } catch (err) {
+        attempt += 1;
+        // small backoff
+        sleep(0.1 * attempt);
+        if (attempt > maxRetries) {
+          // rethrow to allow the caller to record the error
+          throw err;
+        }
+      }
+    }
+  }
+
   if (workload.type === 'cpu') {
     const params = getWorkloadParams('cpu', workload.intensity);
-    res = http.get(`${BASE_URL}/api/cpu?iterations=${params.iterations}`, {
+    // Use a stable name tag to avoid URL-based high-cardinality in k6 metrics
+    res = safeGet(`${BASE_URL}/api/cpu?iterations=${params.iterations}`, {
       tags: {
+        name: 'cpu',
         request_type: 'cpu',
         scenario: scenario,
-        intensity: workload.intensity
+        intensity: workload.intensity,
       },
       timeout: '40s',
     });
@@ -277,11 +301,14 @@ export default function () {
 
   } else if (workload.type === 'memory') {
     const params = getWorkloadParams('memory', workload.intensity);
-    res = http.get(`${BASE_URL}/api/memory?size_mb=${params.size_mb}`, {
+    // Add a stable "name" tag to avoid high-cardinality series caused by
+    // many distinct query parameter combinations being used as metric tags.
+    res = safeGet(`${BASE_URL}/api/memory?size_mb=${params.size_mb}`, {
       tags: {
+        name: 'memory',
         request_type: 'memory',
         scenario: scenario,
-        intensity: workload.intensity
+        intensity: workload.intensity,
       },
       timeout: '30s',
     });
@@ -302,11 +329,12 @@ export default function () {
 
   } else {
     // Basic request
-    res = http.get(`${BASE_URL}/api`, {
+    res = safeGet(`${BASE_URL}/api`, {
       tags: {
+        name: 'basic',
         request_type: 'basic',
         scenario: scenario,
-        intensity: workload.intensity
+        intensity: workload.intensity,
       },
       timeout: '10s',
     });
