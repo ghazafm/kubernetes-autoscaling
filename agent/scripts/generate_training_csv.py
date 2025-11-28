@@ -124,54 +124,75 @@ def _env_reward(
     cpu_memory_weight: float = 0.5,
     cost_weight: float = 0.3,
 ) -> float:
-    # follow KubernetesEnv._calculate_reward() exactly
+    # Mirror environment._calculate_reward() from KubernetesEnv
+    def _cpu_mem_penalty(
+        value: float, low: float, high: float, min_tol_pct: float = 0.01
+    ) -> float:
+        # Inside the allowed band => no penalty
+        if low <= value <= high:
+            return 0.0
+
+        # Distance outside the band
+        distance = low - value if value < low else value - high
+
+        bandwidth = max(high - low, 1e-6)
+        min_tol = max(min_tol_pct * bandwidth, 1e-6)
+
+        normalized = distance / (bandwidth + min_tol)
+        penalty = min(1.0, normalized * normalized)
+        return float(penalty)
+
     range_replicas = max(1, max_replicas - min_replicas)
     response_time_percentage = (resp / max_response_time) * 100.0
+    response_time_percentage = min(response_time_percentage, 1000.0)
 
-    if cpu < min_cpu:
-        cpu_pen = (min_cpu - cpu) / min_cpu
-    elif cpu > max_cpu:
-        cpu_pen = (cpu - max_cpu) / (100 - max_cpu)
-    else:
-        cpu_pen = 0.0
+    cpu_pen = _cpu_mem_penalty(cpu, min_cpu, max_cpu)
+    mem_pen = _cpu_mem_penalty(mem, min_memory, max_memory)
 
-    if mem < min_memory:
-        mem_pen = (min_memory - mem) / min_memory
-    elif mem > max_memory:
-        mem_pen = (mem - max_memory) / (100 - max_memory)
-    else:
-        mem_pen = 0.0
-
-    # Response time penalty - match environment.py exactly
     RESPONSE_TIME_HIGH_THRESHOLD = 80.0
     RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
+    MAX_RESPONSE_PENALTY = 2.0
 
-    if response_time_percentage < RESPONSE_TIME_HIGH_THRESHOLD:
+    if response_time_percentage <= RESPONSE_TIME_HIGH_THRESHOLD:
         resp_pen = 0.0
-    elif response_time_percentage < RESPONSE_TIME_VIOLATION_THRESHOLD:
-        resp_pen = 0.2 * ((response_time_percentage - 80.0) / 20.0)
-    else:
-        overage = (response_time_percentage - 100.0) / 100.0
-        resp_pen = min(
-            response_time_weight,
-            response_time_weight * (1.0 - (1.0 / (1.0 + overage))),
-        )
-
-    # Error rate penalty - match environment.py exactly
-    ERROR_RATE_THRESHOLD = 1.0
-    if error_rate > ERROR_RATE_THRESHOLD:
-        error_pen = min(
-            (error_rate / 10.0) * error_rate_weight,
-            error_rate_weight,
+    elif response_time_percentage <= RESPONSE_TIME_VIOLATION_THRESHOLD:
+        resp_pen = (response_time_percentage - RESPONSE_TIME_HIGH_THRESHOLD) / (
+            RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
         )
     else:
-        error_pen = 0.0
+        over = (
+            response_time_percentage - RESPONSE_TIME_VIOLATION_THRESHOLD
+        ) / RESPONSE_TIME_VIOLATION_THRESHOLD
+        resp_pen = 1.0 + over
 
-    cpu_mem_pen = cpu_memory_weight * (cpu_pen + mem_pen)
+    resp_pen = max(0.0, min(resp_pen, MAX_RESPONSE_PENALTY))
 
-    cost_pen = cost_weight * (replica_state - min_replicas) / range_replicas
+    ERROR_RATE_MAX = 100.0
+    error_pen = min(max(error_rate, 0.0) / ERROR_RATE_MAX, 1.0)
 
-    reward = 1.0 - resp_pen - cpu_mem_pen - cost_pen - error_pen
+    weighted_resp_pen = response_time_weight * resp_pen
+    weighted_error_pen = error_rate_weight * error_pen
+    weighted_cpu_mem_pen = cpu_memory_weight * (cpu_pen + mem_pen)
+    # cost_pen uses last action percent; caller should pass replica_state as last_action (0-99)
+    weighted_cost_pen = cost_weight * (replica_state / 100.0)
+
+    total_penalty = (
+        weighted_resp_pen
+        + weighted_error_pen
+        + weighted_cpu_mem_pen
+        + weighted_cost_pen
+    )
+
+    max_possible_penalty = (
+        response_time_weight + error_rate_weight + cpu_memory_weight * 2.0 + cost_weight
+    )
+
+    normalized_penalty = min(total_penalty / max_possible_penalty, 1.0)
+
+    reward = 1.0 - 2.0 * normalized_penalty
+
+    # Stability penalty: if this step had an applied scaling delta, callers can subtract
+    # stability_penalty externally. Generator will subtract it when action caused replica change.
     return float(max(min(reward, 1.0), -1.0))
 
 

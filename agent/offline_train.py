@@ -136,6 +136,7 @@ def train(
     max_steps: Optional[int] = None,
     shuffle: bool = True,
     episode_length: Optional[int] = None,
+    recompute_reward: bool = False,
 ) -> None:
     start_time = time.time()
     logger = logger or make_logger()
@@ -329,6 +330,137 @@ def train(
                 nxt = {}
             nxt["terminated"] = done_bool
 
+            # Optionally recompute reward using canonical environment logic so
+            # offline training matches online semantics exactly. This will use
+            # observation fields and next_state to infer whether a scaling was
+            # actually applied (used to apply stability penalty).
+            if recompute_reward or os.getenv("RECOMPUTE_REWARD", "False").lower() in (
+                "1",
+                "true",
+                "t",
+                "yes",
+            ):
+                try:
+                    # Extract fields required for reward computation
+                    cpu_val_r = float(obs.get("cpu_usage", 0.0))
+                    mem_val_r = float(obs.get("memory_usage", 0.0))
+                    # response_time stored as percent in CSV; convert back to ms
+                    max_rt = float(os.getenv("MAX_RESPONSE_TIME", "100.0"))
+                    resp_pct = float(obs.get("response_time", 0.0))
+                    resp_val_r = resp_pct / 100.0 * max_rt
+
+                    # last_action stored in `replica` column as 0-99
+                    last_action_pct = int(obs.get("last_action", obs.get("replica", 0)))
+
+                    # next state's last_action is stored under nxt['last_action']
+                    next_last_action = nxt.get("last_action")
+                    try:
+                        next_action_int = int(next_last_action)
+                    except Exception:
+                        try:
+                            next_action_int = int(float(next_last_action))
+                        except Exception:
+                            next_action_int = 0
+
+                    # error rate is present in observation or next state
+                    error_rate_val = float(obs.get("error_rate", 0.0))
+
+                    # Load weights and config from env or defaults to match generator
+                    response_time_weight = _getenv_float("RESPONSE_TIME_WEIGHT", 1.5)
+                    error_rate_weight = _getenv_float("ERROR_RATE_WEIGHT", 1.0)
+                    cpu_memory_weight = _getenv_float("CPU_MEMORY_WEIGHT", 0.5)
+                    cost_weight = _getenv_float("COST_WEIGHT", 0.3)
+
+                    # replicate the environment reward calculation
+                    def _cpu_mem_penalty(
+                        value: float, low: float, high: float, min_tol_pct: float = 0.01
+                    ) -> float:
+                        if low <= value <= high:
+                            return 0.0
+                        distance = low - value if value < low else value - high
+                        bandwidth = max(high - low, 1e-6)
+                        min_tol = max(min_tol_pct * bandwidth, 1e-6)
+                        normalized = distance / (bandwidth + min_tol)
+                        return float(min(1.0, normalized * normalized))
+
+                    min_cpu = _getenv_float("MIN_CPU", 20.0)
+                    max_cpu = _getenv_float("MAX_CPU", 90.0)
+                    min_memory = _getenv_float("MIN_MEMORY", 20.0)
+                    max_memory = _getenv_float("MAX_MEMORY", 90.0)
+
+                    cpu_pen_r = _cpu_mem_penalty(cpu_val_r, min_cpu, max_cpu)
+                    mem_pen_r = _cpu_mem_penalty(mem_val_r, min_memory, max_memory)
+
+                    response_time_percentage = min(
+                        (resp_val_r / max_rt) * 100.0, 1000.0
+                    )
+                    RESPONSE_TIME_HIGH_THRESHOLD = 80.0
+                    RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
+
+                    if response_time_percentage <= RESPONSE_TIME_HIGH_THRESHOLD:
+                        resp_pen_r = 0.0
+                    elif response_time_percentage <= RESPONSE_TIME_VIOLATION_THRESHOLD:
+                        resp_pen_r = (
+                            response_time_percentage - RESPONSE_TIME_HIGH_THRESHOLD
+                        ) / (
+                            RESPONSE_TIME_VIOLATION_THRESHOLD
+                            - RESPONSE_TIME_HIGH_THRESHOLD
+                        )
+                    else:
+                        over = (
+                            response_time_percentage - RESPONSE_TIME_VIOLATION_THRESHOLD
+                        ) / RESPONSE_TIME_VIOLATION_THRESHOLD
+                        resp_pen_r = 1.0 + over
+
+                    resp_pen_r = max(0.0, min(resp_pen_r, 2.0))
+
+                    error_pen_r = min(max(error_rate_val, 0.0) / 100.0, 1.0)
+
+                    weighted_resp_pen = response_time_weight * resp_pen_r
+                    weighted_error_pen = error_rate_weight * error_pen_r
+                    weighted_cpu_mem_pen = cpu_memory_weight * (cpu_pen_r + mem_pen_r)
+                    weighted_cost_pen = cost_weight * (last_action_pct / 100.0)
+
+                    total_penalty = (
+                        weighted_resp_pen
+                        + weighted_error_pen
+                        + weighted_cpu_mem_pen
+                        + weighted_cost_pen
+                    )
+                    max_possible_penalty = (
+                        response_time_weight
+                        + error_rate_weight
+                        + cpu_memory_weight * 2.0
+                        + cost_weight
+                    )
+                    normalized_penalty = min(total_penalty / max_possible_penalty, 1.0)
+                    recomputed_reward = 1.0 - 2.0 * normalized_penalty
+
+                    # Apply stability penalty if scaling was actually applied (next_action != last_action)
+                    try:
+                        stability_penalty = (
+                            _getenv_float("STABILITY_PENALTY", 0.05) or 0.0
+                        )
+                    except Exception:
+                        stability_penalty = 0.0
+                    if next_action_int - last_action_pct != 0:
+                        recomputed_reward -= stability_penalty
+
+                    # Apply blocked penalty if present in CSV (some generators may include it)
+                    try:
+                        blocked_pen = float(data.get("blocked_penalty", 0.0))
+                    except Exception:
+                        blocked_pen = 0.0
+
+                    reward = float(max(min(recomputed_reward, 1.0), -1.0)) - blocked_pen
+                except Exception:
+                    # Fall back to provided reward on any failure
+                    try:
+                        reward = float(reward)
+                    except Exception:
+                        reward = 0.0
+
+            # Now update the agent using either the original CSV reward or the recomputed one
             agent.update(obs, action, reward, nxt)
 
             obs = next_obs
@@ -411,6 +543,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable data shuffling between episodes",
     )
+    p.add_argument(
+        "--recompute-reward",
+        action="store_true",
+        help="Recompute reward from observations using canonical environment logic",
+    )
     p.add_argument("--debug", action="store_true", help="Enable debug logging")
     return p.parse_args()
 
@@ -427,4 +564,5 @@ if __name__ == "__main__":
         save_every=args.save_every,
         episode_length=args.episode_length,
         shuffle=not args.no_shuffle,
+        recompute_reward=args.recompute_reward,
     )
