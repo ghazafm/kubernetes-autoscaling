@@ -317,10 +317,26 @@ def build_row(
         max_response_time=max_response_time,
     )
 
+    # Compute in-band distances and booleans to mimic `KubernetesEnv` observation
+    def _dist_to_band(value: float, lo: float, hi: float) -> float:
+        """Normalized distance outside [lo, hi] into 0..1. 0 if inside band."""
+        if lo <= value <= hi:
+            return 0.0
+        bandwidth = max(hi - lo, 1e-6)
+        if value < lo:
+            return min(1.0, (lo - value) / bandwidth)
+        return min(1.0, (value - hi) / bandwidth)
+
+    cpu_dist = _dist_to_band(next_cpu, min_cpu, max_cpu)
+    memory_dist = _dist_to_band(next_mem, min_memory, max_memory)
+    cpu_in_band = 1.0 if (min_cpu <= next_cpu <= max_cpu) else 0.0
+    memory_in_band = 1.0 if (min_memory <= next_mem <= max_memory) else 0.0
+
     next_state = {
         "cpu_usage": round(float(next_cpu), 2),
         "memory_usage": round(float(next_mem), 2),
-        "response_time": round((float(next_resp) / max_response_time) * 100.0, 2),
+        # Store raw response time (ms) to match KubernetesEnv observation_space
+        "response_time": round(float(next_resp), 2),
         "current_replica_pct": round(next_replica_pct, 2),
         "last_action": int(next_action),
         "cpu_delta": round(cpu_delta, 2),
@@ -328,9 +344,14 @@ def build_row(
         "rt_delta": round(rt_delta, 2),
         "time_in_state": round(time_in_state, 4),
         "scaling_direction": scaling_direction,
-        "rps_per_pod": round(next_rps_per_pod, 2),  # NEW
-        "rps_delta": round(rps_delta, 2),  # NEW
-        "error_rate": round(next_error_rate, 2),  # NEW
+        "rps_per_pod": round(next_rps_per_pod, 2),
+        "rps_delta": round(rps_delta, 2),
+        "error_rate": round(next_error_rate, 2),
+        # In-band/dist indicators to match environment.observation_space
+        "cpu_dist": round(cpu_dist, 4),
+        "memory_dist": round(memory_dist, 4),
+        "cpu_in_band": cpu_in_band,
+        "memory_in_band": memory_in_band,
     }
 
     # Map current replica count to discrete last_action (0-99) so offline
@@ -342,7 +363,8 @@ def build_row(
     return {
         "cpu_usage": f"{cpu_pct:.2f}",
         "memory_usage": f"{mem_pct:.2f}",
-        "response_time": f"{resp_pct:.2f}",
+        # Store raw response time (ms) to match KubernetesEnv observation_space
+        "response_time": f"{float(resp):.2f}",
         "current_replica_pct": f"{current_replica_pct:.2f}",
         # `replica` column intentionally stores the agent-facing last_action (0-99)
         "replica": str(int(last_action_for_current)),
@@ -357,6 +379,11 @@ def build_row(
         "rps_per_pod": f"{current_rps_per_pod:.2f}",
         "rps_delta": f"{rps_delta:.2f}",
         "error_rate": f"{current_error_rate:.2f}",
+        # In-band/dist indicators to match environment
+        "cpu_dist": f"{cpu_dist:.4f}",
+        "memory_dist": f"{memory_dist:.4f}",
+        "cpu_in_band": f"{int(cpu_in_band)}",
+        "memory_in_band": f"{int(memory_in_band)}",
         "action_pct": f"{desired_pct:.4f}",
         "action": str(int(action)),
         "reward": f"{reward:.4f}",

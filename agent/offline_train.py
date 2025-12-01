@@ -7,9 +7,17 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
+from gymnasium import Env, spaces
 from rl import DQN, Q
+
+try:
+    # import stable-baselines3 DQN but keep name separate to avoid collision
+    from stable_baselines3 import DQN as SB3_DQN
+except Exception:  # pragma: no cover - optional dependency
+    SB3_DQN = None
 
 load_dotenv()
 
@@ -125,7 +133,114 @@ def load_or_make_df(path: str | None, logger: logging.Logger) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def train(
+class OfflineDatasetEnv(Env):
+    """A minimal Gymnasium environment that plays back transitions from a
+    pandas DataFrame. This is intended for offline training with Stable-Baselines3
+    where the environment returns prerecorded observations, rewards and done
+    flags from a CSV. Agent actions do not influence transitions (offline data).
+
+    Observations are converted to a fixed 13-d numpy array in the order used
+    throughout this repo.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        episode_length: Optional[int] = None,
+        shuffle: bool = False,
+    ):
+        super().__init__()
+        self.df = df.reset_index(drop=True)
+        self.episode_length = episode_length or len(self.df)
+        self.shuffle = shuffle
+        # observation shape: 13 features
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32
+        )
+
+        self.action_space = spaces.Discrete(3)
+        self._idx = 0
+
+    @staticmethod
+    def _row_to_obs(row: pd.Series) -> np.ndarray:
+        # consistent ordering of features
+        keys = [
+            "cpu_usage",
+            "memory_usage",
+            "response_time",
+            "current_replica_pct",
+            "last_action",
+            "cpu_delta",
+            "memory_delta",
+            "rt_delta",
+            "time_in_state",
+            "scaling_direction",
+            "rps_per_pod",
+            "rps_delta",
+            "error_rate",
+            "error_rate",
+            "cpu_dist",
+            "memory_dist",
+            "cpu_in_band",
+            "memory_in_band",
+        ]
+        vals = []
+        for k in keys:
+            try:
+                v = row.get(k, 0.0)
+                # Some CSVs store numbers as strings
+                vals.append(float(v) if v is not None else 0.0)
+            except Exception:
+                vals.append(0.0)
+        return np.array(vals, dtype=np.float32)
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
+        if seed is not None:
+            np.random.seed(seed)
+        if self.shuffle:
+            # choose a random start index so episodes sample different slices
+            max_start = max(1, len(self.df) - self.episode_length)
+            self._idx = int(np.random.randint(0, max_start))
+        else:
+            self._idx = 0
+        row = self.df.iloc[self._idx]
+        obs = self._row_to_obs(row)
+        info = {}
+        return obs, info
+
+    def step(self, action):
+        # return current row's reward and next observation
+        row = self.df.iloc[self._idx]
+        try:
+            reward = float(row.get("reward", 0.0))
+        except Exception:
+            reward = 0.0
+        done_flag = row.get("done", False)
+        if isinstance(done_flag, str):
+            terminated = done_flag.strip().lower() in ("true", "1", "t", "yes")
+        else:
+            terminated = bool(done_flag)
+
+        # advance index for next observation
+        self._idx += 1
+        truncated = False
+        if self._idx >= len(self.df) or (
+            self.episode_length and self._idx >= self.episode_length
+        ):
+            terminated = True
+
+        if self._idx < len(self.df):
+            next_row = self.df.iloc[self._idx]
+            obs = self._row_to_obs(next_row)
+        else:
+            # return last observation if out of range
+            obs = np.zeros((13,), dtype=np.float32)
+
+        info = {}
+        return obs, float(reward), bool(terminated), bool(truncated), info
+
+
+def train(  # noqa: PLR0912, PLR0915
     data_path: str | None,
     episodes: int = 100,
     save_dir: str | Path = "Model",
@@ -175,6 +290,29 @@ def train(
             created_at=start_time,
             logger=logger,
         )
+    elif choose_algorithm in ("SB3", "SB3_DQN", "STABLE"):
+        # Use Stable-Baselines3 DQN on an offline playback environment
+        if SB3_DQN is None:
+            raise RuntimeError(
+                "stable-baselines3 is not installed; install it to use SB3 algorithm"
+            )
+        logger.info("Using Stable-Baselines3 DQN (offline playback)")
+        env = OfflineDatasetEnv(df, episode_length=episode_length, shuffle=shuffle)
+        total_timesteps = int(episodes * episode_length)
+        # ensure save directories exist for SB3 artifacts
+        sd = Path(save_dir)
+        sd.mkdir(parents=True, exist_ok=True)
+        (sd / "checkpoint").mkdir(parents=True, exist_ok=True)
+        final_dir_sb3 = sd / "final"
+        final_dir_sb3.mkdir(parents=True, exist_ok=True)
+
+        tb_log = str(sd / "tb_logs")
+        model = SB3_DQN("MlpPolicy", env, verbose=1, tensorboard_log=tb_log)
+        logger.info(f"Starting SB3.learn for {total_timesteps} timesteps")
+        model.learn(total_timesteps=total_timesteps)
+        model.save(str(final_dir_sb3 / "sb3_dqn_final"))
+        logger.info("SB3 training complete; saved final model")
+        return
     else:
         raise ValueError(f"Unsupported algorithm: {choose_algorithm}")
 
@@ -436,7 +574,6 @@ def train(
                     normalized_penalty = min(total_penalty / max_possible_penalty, 1.0)
                     recomputed_reward = 1.0 - 2.0 * normalized_penalty
 
-                    # Apply stability penalty if scaling was actually applied (next_action != last_action)
                     try:
                         stability_penalty = (
                             _getenv_float("STABILITY_PENALTY", 0.05) or 0.0
@@ -446,7 +583,6 @@ def train(
                     if next_action_int - last_action_pct != 0:
                         recomputed_reward -= stability_penalty
 
-                    # Apply blocked penalty if present in CSV (some generators may include it)
                     try:
                         blocked_pen = float(data.get("blocked_penalty", 0.0))
                     except Exception:
@@ -460,7 +596,6 @@ def train(
                     except Exception:
                         reward = 0.0
 
-            # Now update the agent using either the original CSV reward or the recomputed one
             agent.update(obs, action, reward, nxt)
 
             obs = next_obs
@@ -549,12 +684,21 @@ def parse_args() -> argparse.Namespace:
         help="Recompute reward from observations using canonical environment logic",
     )
     p.add_argument("--debug", action="store_true", help="Enable debug logging")
+    p.add_argument(
+        "--algorithm",
+        type=str,
+        default=os.getenv("ALGORITHM", "Q"),
+        help="Algorithm to use: Q, DQN, SB3",
+    )
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     log = make_logger(logging.DEBUG if args.debug else logging.INFO)
+    # allow CLI to override algorithm selection used in train()
+    if getattr(args, "algorithm", None):
+        os.environ["ALGORITHM"] = args.algorithm
     train(
         data_path=args.data_path,
         episodes=args.episodes,

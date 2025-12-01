@@ -88,3 +88,5 @@ kubeconfig
 *.env
 *.txt
 AGENTS.md
+*.env.train
+*.env.test

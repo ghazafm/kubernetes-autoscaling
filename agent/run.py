@@ -13,6 +13,31 @@ from utils import (
     setup_logger,
 )
 
+
+def _env_int(key: str, default=None):
+    v = os.getenv(key)
+    if v is None:
+        return default
+    if isinstance(v, str) and v.lower() in ("inf", "infinity"):
+        return float("inf")
+    try:
+        return int(v)
+    except ValueError:
+        try:
+            return int(float(v))
+        except Exception:
+            return default
+
+
+def _env_float(key: str, default=None):
+    v = os.getenv(key)
+    return float(v) if v is not None else default
+
+
+def _env_bool(key: str, default=False):
+    return ast.literal_eval(os.getenv(key, str(default)))
+
+
 load_dotenv()
 
 if __name__ == "__main__":
@@ -37,9 +62,9 @@ if __name__ == "__main__":
         metrics_endpoints_method = [["/", "GET"], ["/docs", "GET"]]
 
     env = KubernetesEnv(
-        min_replicas=int(os.getenv("MIN_REPLICAS", "1")),
-        max_replicas=int(os.getenv("MAX_REPLICAS", "12")),
-        iteration=float("inf"),
+        min_replicas=_env_int("MIN_REPLICAS", 1),
+        max_replicas=_env_int("MAX_REPLICAS", 12),
+        iteration=_env_int("ITERATION", 10),
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME", "ecom-api"),
         min_cpu=int(os.getenv("MIN_CPU", "10")),
@@ -54,13 +79,23 @@ if __name__ == "__main__":
         influxdb=Influxdb,
         prometheus_url=os.getenv("PROMETHEUS_URL", "http://localhost:1234/prom"),
         metrics_endpoints_method=metrics_endpoints_method,
-        metrics_interval=int(os.getenv("METRICS_INTERVAL", "15")),
-        metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.90")),
-        max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES", "1000")),
-        response_time_weight=float(os.getenv("RESPONSE_TIME_WEIGHT", "1.0")),
-        error_rate_weight=float(os.getenv("ERROR_RATE_WEIGHT", "1.0")),
-        cpu_memory_weight=float(os.getenv("CPU_MEMORY_WEIGHT", "0.5")),
-        cost_weight=float(os.getenv("COST_WEIGHT", "0.3")),
+        metrics_interval=_env_int("METRICS_INTERVAL", 15),
+        metrics_quantile=_env_float("METRICS_QUANTILE", 0.90),
+        max_scaling_retries=_env_int("MAX_SCALING_RETRIES", 1000),
+        response_time_weight=_env_float("RESPONSE_TIME_WEIGHT", 1.0),
+        error_rate_weight=_env_float("ERROR_RATE_WEIGHT", 1.0),
+        cpu_memory_weight=_env_float("CPU_MEMORY_WEIGHT", 0.5),
+        cost_weight=_env_float("COST_WEIGHT", 0.3),
+        # Pass safety/tuning parameters into the environment (use env vars when present)
+        max_up_step=_env_int("MAX_UP_STEP", 4),
+        max_down_step=_env_int("MAX_DOWN_STEP", 1),
+        min_down_confirmations=_env_int("MIN_DOWN_CONFIRMATIONS", 2),
+        cooldown_up_secs=_env_int("COOLDOWN_UP_SECS", 60),
+        cooldown_down_secs=_env_int("COOLDOWN_DOWN_SECS", 240),
+        error_block_threshold_pct=_env_float("ERROR_BLOCK_THRESHOLD_PCT", 1.0),
+        ewma_alpha=_env_float("EWMA_ALPHA", 0.3),
+        stability_penalty=_env_float("STABILITY_PENALTY", 0.05),
+        blocked_penalty=_env_float("BLOCKED_PENALTY", 0.05),
     )
 
     choose_algorithm = os.getenv("ALGORITHM", "Q").upper()

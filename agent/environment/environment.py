@@ -1019,4 +1019,3 @@ class KubernetesEnv:
 
         # last_action is already set to 0 above
         return self._get_observation()
-        return self._get_observation()

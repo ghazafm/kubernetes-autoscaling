@@ -29,7 +29,7 @@ ENV APP_HOST=0.0.0.0 \
 # - Conservative (low memory): --env GUNICORN_WORKERS=2 --env GUNICORN_THREADS=2
 # - Balanced (default): 3 workers, 4 threads (can handle ~12 concurrent requests)
 # - Aggressive (high memory): --env GUNICORN_WORKERS=4 --env GUNICORN_THREADS=6
-CMD gunicorn \
+CMD gunicorn --preload \
     -w ${GUNICORN_WORKERS} \
     -k gthread \
     --threads ${GUNICORN_THREADS} \

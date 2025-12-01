@@ -12,11 +12,32 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Load environment variables
-if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+# Optional: support a test env file when caller passes --test as first arg
+# Usage: ./run-k6.sh --test training
+TEST_ENV_FILE=""
+if [ "$1" = "--test" ]; then
+    TEST_ENV_FILE=".env.test"
+    # shift so the next positional argument is the test name
+    shift
+fi
+
+# Load environment variables (test env has priority when --test used)
+if [ -n "$TEST_ENV_FILE" ]; then
+    if [ -f "$TEST_ENV_FILE" ]; then
+        # shellcheck disable=SC2046
+        export $(grep -v '^#' "$TEST_ENV_FILE" | xargs)
+        echo -e "${GREEN}Loaded test env from ${TEST_ENV_FILE}${NC}"
+    else
+        echo -e "${RED}Error: Test env file ${TEST_ENV_FILE} not found!${NC}"
+        exit 1
+    fi
 else
-    echo -e "${YELLOW}Warning: .env file not found. Using defaults.${NC}"
+    if [ -f .env ]; then
+        # shellcheck disable=SC2046
+        export $(grep -v '^#' .env | xargs)
+    else
+        echo -e "${YELLOW}Warning: .env file not found. Using defaults.${NC}"
+    fi
 fi
 
 # Set default BASE_URL if not set
@@ -54,8 +75,37 @@ run_test() {
         return 1
     fi
 
-    # Build k6 command with optional env vars
-    local k6_cmd="k6 run --env BASE_URL=\"$BASE_URL\""
+    # Helper: find free k6 REST API port starting from a base (default 6565)
+    find_free_k6_port() {
+        local start_port=${1:-6565}
+        local port=$start_port
+        # avoid infinite loop: limit search to +100 ports
+        local max_port=$((start_port + 100))
+        while lsof -nP -iTCP:${port} -sTCP:LISTEN >/dev/null 2>&1; do
+            port=$((port + 1))
+            if [ "$port" -gt "$max_port" ]; then
+                # give up and return start_port
+                break
+            fi
+        done
+        echo $port
+    }
+
+    # Build k6 command with optional env vars. We expose the k6 REST API on a free port
+    # so multiple parallel runs can coexist. Starting port is taken from K6_API_PORT (env)
+    # or defaults to 6565.
+    local start_api_port=${K6_API_PORT:-6565}
+    local chosen_port
+    chosen_port=$(find_free_k6_port "$start_api_port")
+    local k6_address="localhost:${chosen_port}"
+    if [ "$chosen_port" != "$start_api_port" ]; then
+        echo -e "${YELLOW}Note: port ${start_api_port} in use, using k6 REST API address ${k6_address}${NC}"
+    else
+        echo -e "${BLUE}k6 REST API address: ${k6_address}${NC}"
+    fi
+
+    # place the --address flag before the subcommand 'run' so it's applied to k6 itself
+    local k6_cmd="k6 --address \"${k6_address}\" run --env BASE_URL=\"$BASE_URL\""
 
     if [ -n "$DURATION_MULTIPLIER" ]; then
         k6_cmd="$k6_cmd --env DURATION_MULTIPLIER=\"$DURATION_MULTIPLIER\""
