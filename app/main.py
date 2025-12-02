@@ -14,9 +14,9 @@ METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
 APP_HOST = os.environ.get("APP_HOST", "127.0.0.1")
 APP_PORT = int(os.environ.get("APP_PORT", "5000"))
 DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
-DEFAULT_SLEEP_TIME = float(os.environ.get("DEFAULT_SLEEP_TIME", "0.3"))
+DEFAULT_SLEEP_TIME = float(os.environ.get("DEFAULT_SLEEP_TIME", "0.1"))
 MAX_MEMORY_MB = int(os.environ.get("MAX_MEMORY_MB", "100"))
-MAX_CPU_ITERATIONS = int(os.environ.get("MAX_CPU_ITERATIONS", "2000000"))
+MAX_CPU_ITERATIONS = int(os.environ.get("MAX_CPU_ITERATIONS", "500000"))
 
 # Enable RL autoscaling metrics
 enable_metrics(app, port=METRICS_PORT)

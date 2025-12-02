@@ -13,7 +13,8 @@ data:
   DEBUG: "false"
 
   # Performance tuning
-  DEFAULT_SLEEP_TIME: "0.3"
+  # 100ms baseline latency - predictable for RL training
+  DEFAULT_SLEEP_TIME: "0.1"
 
   # Memory configuration (optimized for 512Mi container limit)
   # Formula: (512 - 220 overhead) / 2 concurrent = 146 MB per request
@@ -21,10 +22,10 @@ data:
   MAX_MEMORY_MB: "140"
 
   # CPU configuration (optimized for 500m CPU limit)
-  # Formula: Conservative limit to prevent timeouts under concurrent load
-  # 2.5M iterations ≈ 5-10s CPU time, safe under throttling
+  # 500k iterations ≈ 200-500ms CPU time under throttling
+  # Reduced from 2.5M to prevent 3-4 second response times
   # With 3-5 concurrent requests, container reaches 70-95% CPU usage
-  MAX_CPU_ITERATIONS: "2500000"
+  MAX_CPU_ITERATIONS: "500000"
 
   # Add more configuration as needed
   # LOG_LEVEL: "INFO"
