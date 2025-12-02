@@ -1,6 +1,6 @@
 import ast
 import os
-import time
+from datetime import datetime
 from pathlib import Path
 
 from database import InfluxDB
@@ -17,7 +17,7 @@ from utils import setup_logger
 load_dotenv()
 
 if __name__ == "__main__":
-    start_time = int(time.time())
+    now = datetime.now().strftime("%Y-%m-%d-%H-%M")
     logger, log_dir = setup_logger(
         "kubernetes_agent", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
     )
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     total_timesteps = num_episodes * iteration
 
     note = os.getenv("NOTE", "default")
-    model_dir = Path(f"model/{start_time}_{note}")
+    model_dir = Path(f"model/{now}_{note}")
     model_dir.mkdir(parents=True, exist_ok=True)
 
     model = DQN(

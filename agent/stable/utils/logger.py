@@ -11,18 +11,6 @@ def setup_logger(
     log_to_file: bool = True,
     log_dir: str = "logs",
 ) -> Logger:
-    """
-    Configure a logger with console and optional file output.
-
-    Args:
-        service_name (str): Name of the service (used for the log file name)
-        log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        log_to_file (bool): Whether to log to a file
-        log_dir (str): Directory to store log files
-
-    Returns:
-        logging.Logger: Configured logger instance
-    """
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
     logger = logging.getLogger(service_name)
