@@ -1,3 +1,4 @@
+import ast
 import os
 import time
 from pathlib import Path
@@ -28,6 +29,7 @@ if __name__ == "__main__":
         org=os.getenv("INFLUXDB_ORG", "my-org"),
         bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
     )
+    metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
 
     # Environment configuration
     iteration = int(os.getenv("ITERATION"))
@@ -47,7 +49,7 @@ if __name__ == "__main__":
         logger=logger,
         influxdb=influxdb,
         prometheus_url=os.getenv("PROMETHEUS_URL"),
-        metrics_endpoints_method=[("/", "GET"), ("/docs", "GET")],
+        metrics_endpoints_method=metrics_endpoints_method,
         metrics_interval=int(os.getenv("METRICS_INTERVAL")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE")),
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES")),
