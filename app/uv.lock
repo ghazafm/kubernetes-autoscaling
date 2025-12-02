@@ -30,14 +30,14 @@ wheels = [
 
 [[package]]
 name = "click"
-version = "8.3.0"
+version = "8.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/46/61/de6cd827efad202d7057d93e0fed9294b96952e188f7384832791c7b2254/click-8.3.0.tar.gz", hash = "sha256:e7b8232224eba16f4ebe410c25ced9f7875cb5f3263ffc93cc3e8da705e229c4", size = 276943, upload-time = "2025-09-18T17:32:23.696Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3d/fa/656b739db8587d7b5dfa22e22ed02566950fbfbcdc20311993483657a5c0/click-8.3.1.tar.gz", hash = "sha256:12ff4785d337a1bb490bb7e9c2b1ee5da3112e94a8622f26a6c77f5d2fc6842a", size = 295065, upload-time = "2025-11-15T20:45:42.706Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/db/d3/9dcc0f5797f070ec8edf30fbadfb200e71d9db6b84d211e3b2085a7589a0/click-8.3.0-py3-none-any.whl", hash = "sha256:9b9f285302c6e3064f4330c05f05b81945b2a39544279343e6e7c5f27a9baddc", size = 107295, upload-time = "2025-09-18T17:32:22.42Z" },
+    { url = "https://files.pythonhosted.org/packages/98/78/01c019cdb5d6498122777c1a43056ebb3ebfeef2076d9d026bfe15583b2b/click-8.3.1-py3-none-any.whl", hash = "sha256:981153a64e25f12d547d3426c367a4857371575ee7ad18df2a6183ab0545b2a6", size = 108274, upload-time = "2025-11-15T20:45:41.139Z" },
 ]
 
 [[package]]
@@ -182,24 +182,24 @@ wheels = [
 
 [[package]]
 name = "rl-autoscale"
-version = "1.0.3"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "prometheus-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/52/cc1a1a80f6564e57da52266a8fd2aba1a98a107bc51e7ce0caa95bcf438d/rl_autoscale-1.0.3.tar.gz", hash = "sha256:9aa9d523cb446bf8cdd7394c4b82196a33b8250fd161d16b3993da4084ae0b3a", size = 15732, upload-time = "2025-11-07T16:06:02.4Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/34/a410370ea9a5995127b9090ffa4d33308fac2ff8b047352372d414a10cdf/rl_autoscale-1.1.0.tar.gz", hash = "sha256:8bcdc9e81561ac1ac0e15bfa6cb1bf4827655762e2da7514eb90a23394db2fb3", size = 18223, upload-time = "2025-12-02T13:12:39.78Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/21/a7f817901ba6b233d79ce95f399848ac416e130424fba221ccfd5e97527d/rl_autoscale-1.0.3-py3-none-any.whl", hash = "sha256:dccacac965bfc4ebc2a7bc66a79a50a593aa0eccfe2d095d55f834c3b803ea1d", size = 11993, upload-time = "2025-11-07T16:06:01.25Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/dc/8287194866d92cc6f231de4ef70014a1ff344675b4780ab1cd8e990fb455/rl_autoscale-1.1.0-py3-none-any.whl", hash = "sha256:de65c59429e7bb389553ce820848f361e7c632e049d09f66572e766c8761f0c9", size = 14342, upload-time = "2025-12-02T13:12:38.263Z" },
 ]
 
 [[package]]
 name = "werkzeug"
-version = "3.1.3"
+version = "3.1.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markupsafe" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/69/83029f1f6300c5fb2471d621ab06f6ec6b3324685a2ce0f9777fd4a8b71e/werkzeug-3.1.3.tar.gz", hash = "sha256:60723ce945c19328679790e3282cc758aa4a6040e4bb330f53d30fa546d44746", size = 806925, upload-time = "2024-11-08T15:52:18.093Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/45/ea/b0f8eeb287f8df9066e56e831c7824ac6bab645dd6c7a8f4b2d767944f9b/werkzeug-3.1.4.tar.gz", hash = "sha256:cd3cd98b1b92dc3b7b3995038826c68097dcb16f9baa63abe35f20eafeb9fe5e", size = 864687, upload-time = "2025-11-29T02:15:22.841Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/24/ab44c871b0f07f491e5d2ad12c9bd7358e527510618cb1b803a88e986db1/werkzeug-3.1.3-py3-none-any.whl", hash = "sha256:54b78bf3716d19a65be4fceccc0d1d7b89e608834989dfae50ea87564639213e", size = 224498, upload-time = "2024-11-08T15:52:16.132Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/f9/9e082990c2585c744734f85bec79b5dae5df9c974ffee58fe421652c8e91/werkzeug-3.1.4-py3-none-any.whl", hash = "sha256:2ad50fb9ed09cc3af22c54698351027ace879a0b60a3b5edf5730b2f7d876905", size = 224960, upload-time = "2025-11-29T02:15:21.13Z" },
 ]
