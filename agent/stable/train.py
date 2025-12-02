@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 from database import InfluxDB
+from dotenv import load_dotenv
 from environment import KubernetesEnv
 from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import (
@@ -11,6 +12,8 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from utils import setup_logger
+
+load_dotenv()
 
 if __name__ == "__main__":
     start_time = int(time.time())
