@@ -213,22 +213,26 @@ class KubernetesEnv(Env):
         return 1.0 - total_penalty
 
     def calculate_distance(self, cpu: float, memory: float) -> tuple[float, float]:
-        cpu_distance = (
-            (self.min_cpu - cpu) if cpu < self.min_cpu else (cpu - self.max_cpu)
-        )
         cpu_bandwidth = self.max_cpu - self.min_cpu
-        cpu_normalized = cpu_distance / cpu_bandwidth
-        cpu_distance = cpu_normalized
+
+        if cpu < self.min_cpu:
+            cpu_distance = (cpu - self.min_cpu) / cpu_bandwidth
+        elif cpu > self.max_cpu:
+            cpu_distance = (cpu - self.max_cpu) / cpu_bandwidth
+        else:
+            cpu_distance = 0.0
+
         cpu_relative = (cpu - self.min_cpu) / cpu_bandwidth
 
-        memory_distance = (
-            (self.min_memory - memory)
-            if memory < self.min_memory
-            else (memory - self.max_memory)
-        )
         memory_bandwidth = self.max_memory - self.min_memory
-        memory_normalized = memory_distance / memory_bandwidth
-        memory_distance = memory_normalized
+
+        if memory < self.min_memory:
+            memory_distance = (memory - self.min_memory) / memory_bandwidth
+        elif memory > self.max_memory:
+            memory_distance = (memory - self.max_memory) / memory_bandwidth
+        else:
+            memory_distance = 0.0
+
         memory_relative = (memory - self.min_memory) / memory_bandwidth
 
         return cpu_relative, memory_relative, cpu_distance, memory_distance
