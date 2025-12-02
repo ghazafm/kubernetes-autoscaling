@@ -6,32 +6,15 @@ def _metrics_query(
     namespace: str,
     deployment_name: str,
     interval: int = 15,
-    desired_replicas: int | None = None,
     quantile: float = 0.90,
     endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
 ) -> tuple[str, str, str, str, str]:
-    """
-    Build pod-scoped queries and cap to the youngest desired pods.
-
-    We use topk on pod start time to keep only the newest N pods (desired replicas),
-    so older pods that are still Ready after a scale-down do not contribute.
-    """
-    # Default to a reasonable cap if desired_replicas is None
-    pod_window = max(1, desired_replicas or 50)
-
-    pod_filter = f"""
-        topk({pod_window},
-          kube_pod_start_time{{
+    ready_filter = f"""
+        kube_pod_status_ready{{
             namespace="{namespace}",
-            pod=~"{deployment_name}-.*"
-          }}
-          * on(pod) group_left()
-            (kube_pod_status_ready{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                condition="true"
-            }} == 1)
-        )
+            pod=~"{deployment_name}-.*",
+            condition="true"
+        }} == 1
     """
 
     cpu_query = f"""
@@ -43,7 +26,7 @@ def _metrics_query(
                 container!="POD"
             }}[{interval}s])
         )
-        * on(pod) group_left() {pod_filter}
+        * on(pod) group_left() ({ready_filter})
         """
 
     memory_query = f"""
@@ -55,7 +38,7 @@ def _metrics_query(
                 container!="POD"
             }}
         )
-        * on(pod) group_left() {pod_filter}
+        * on(pod) group_left() ({ready_filter})
         """
 
     cpu_limits_query = f"""
@@ -67,10 +50,9 @@ def _metrics_query(
                 unit="core"
             }}
         )
-        * on(pod) group_left() {pod_filter}
+        * on(pod) group_left() ({ready_filter})
         """
 
-    # Query for memory limits
     memory_limits_query = f"""
         sum by (pod) (
             kube_pod_container_resource_limits{{
@@ -80,7 +62,7 @@ def _metrics_query(
                 unit="byte"
             }}
         )
-        * on(pod) group_left() {pod_filter}
+        * on(pod) group_left() ({ready_filter})
         """
 
     response_time_query = []
@@ -188,7 +170,6 @@ def get_metrics(
         namespace,
         deployment_name,
         interval=interval,
-        desired_replicas=replica,
         quantile=quantile,
         endpoints_method=endpoints_method,
     )
