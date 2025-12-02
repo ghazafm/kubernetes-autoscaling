@@ -65,7 +65,7 @@ class InfluxDB:
                 point = point.time(timestamp)
 
             self.write_api.write(bucket=self.bucket, org=self.org, record=point)
-            self.logger.info(
+            self.logger.debug(
                 "Data written: %s | tags=%s | fields=%s", measurement, tags, fields
             )
 
