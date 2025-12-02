@@ -133,6 +133,8 @@ class KubernetesEnv(Env):
                 fields={**info},
             )
 
+        self.render()
+
         return self.observations, reward, terminated, truncated, info
 
     def scale(self, replica: int) -> None:
@@ -372,5 +374,7 @@ class KubernetesEnv(Env):
             "cpu_distance": cpu_distance,
             "memory_distance": memory_distance,
         }
+
+        self.render()
 
         return self.observations, info
