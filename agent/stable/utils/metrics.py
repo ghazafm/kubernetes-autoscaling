@@ -151,8 +151,9 @@ def process_metrics(
         memory_percentage = (usage_bytes / limit) * 100
         memory_percentages.append(memory_percentage)
 
-    # Handle empty arrays to avoid nan from np.mean
     response_time = np.mean(response_times) if response_times else 0.0
+    if np.isnan(response_time):
+        response_time = 0.0
     response_time_percentage = (response_time / max_response_time) * 100.0
     response_time_percentage = min(response_time_percentage, 1000.0)
 
