@@ -79,8 +79,7 @@ class TransitionLogger:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        self.filepath = self.log_dir / f"{prefix}_{timestamp}.csv"
+        self.filepath = self.log_dir / f"{prefix}.csv"
 
         self.episode = 0
         self.step = 0

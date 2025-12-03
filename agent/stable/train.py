@@ -59,7 +59,7 @@ if __name__ == "__main__":
         weight_cost=float(os.getenv("WEIGHT_COST")),
         render_mode="human",
         csv_log_dir=csv_log_dir,
-        csv_log_prefix=f"train_{now}_{note}",
+        csv_log_prefix=f"{now}_{note}",
     )
 
     eval_env = KubernetesEnv(
