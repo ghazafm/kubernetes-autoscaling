@@ -157,7 +157,7 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
-const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;
