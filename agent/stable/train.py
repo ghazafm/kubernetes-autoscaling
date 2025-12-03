@@ -88,33 +88,64 @@ if __name__ == "__main__":
     # Training configuration
     BASE_EPISODES = 10
     num_episodes = int(os.getenv("EPISODE", BASE_EPISODES))
-    total_timesteps = num_episodes * iteration
 
     note = os.getenv("NOTE", "default")
-    model_dir = Path(f"model/{now}_{note}")
-    model_dir.mkdir(parents=True, exist_ok=True)
+    resume_path = os.getenv("RESUME_PATH", "")
 
-    model = DQN(
-        policy="MlpPolicy",
-        env=env,
-        policy_kwargs={"net_arch": [256, 256, 128]},
-        learning_rate=1e-4,
-        gamma=0.99,
-        buffer_size=100_000,
-        learning_starts=iteration * 3,
-        batch_size=256,
-        train_freq=1,
-        gradient_steps=1,
-        target_update_interval=iteration,
-        exploration_fraction=0.4,
-        exploration_initial_eps=1.0,
-        exploration_final_eps=0.1,
-        max_grad_norm=1,
-        verbose=1,
-        tensorboard_log=log_dir,
-        seed=42,
-        device="auto",
-    )
+    if resume_path:
+        resume_model_path = Path(resume_path)
+        if not resume_model_path.exists():
+            raise FileNotFoundError(f"Resume model not found: {resume_path}")
+
+        model_dir = resume_model_path.parent.parent / f"resume_{now}_{note}"
+        logger.info(f"Resuming training from: {resume_path}")
+
+        model = DQN.load(
+            resume_path,
+            env=env,
+            tensorboard_log=log_dir,
+            device="auto",
+        )
+        model.exploration_fraction = 0.4
+        model.exploration_initial_eps = 1.0
+        model.exploration_final_eps = 0.1
+
+        current_timesteps = model.num_timesteps
+        logger.info(f"Loaded model at timestep: {current_timesteps}")
+        logger.info(f"Current exploration_rate: {model.exploration_rate:.3f}")
+
+        additional_timesteps = num_episodes * iteration
+        total_timesteps = current_timesteps + additional_timesteps
+
+        logger.info(f"Will train for {additional_timesteps} additional steps")
+        logger.info(f"Total timesteps target: {total_timesteps}")
+
+    else:
+        model_dir = Path(f"model/{now}_{note}")
+        model_dir.mkdir(parents=True, exist_ok=True)
+        total_timesteps = num_episodes * iteration
+
+        model = DQN(
+            policy="MlpPolicy",
+            env=env,
+            policy_kwargs={"net_arch": [256, 256, 128]},
+            learning_rate=1e-4,
+            gamma=0.99,
+            buffer_size=100_000,
+            learning_starts=iteration * 3,
+            batch_size=256,
+            train_freq=1,
+            gradient_steps=1,
+            target_update_interval=iteration,
+            exploration_fraction=0.4,
+            exploration_initial_eps=1.0,
+            exploration_final_eps=0.1,
+            max_grad_norm=1,
+            verbose=1,
+            tensorboard_log=log_dir,
+            seed=42,
+            device="auto",
+        )
 
     logger.info(
         f"Starting training: {num_episodes} episodes x {iteration} steps "
@@ -146,7 +177,7 @@ if __name__ == "__main__":
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback,
-        reset_num_timesteps=True,
+        reset_num_timesteps=False,
         progress_bar=True,
         tb_log_name="DQN",
     )
