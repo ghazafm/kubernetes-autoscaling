@@ -162,7 +162,7 @@ export const options = {
 };
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
-const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 const MAX_MEMORY_MB = parseInt(__ENV.MAX_MEMORY_MB || '140');
 
 function safeGet(url, params, maxRetries = 2) {
@@ -259,20 +259,22 @@ function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
 
 function getRequestParams(type, intensity) {
   if (type === 'cpu') {
+    // All ranges capped to MAX_CPU_ITERATIONS (500000)
     const intensityMap = {
-      light: { base: 600000, variance: 300000 },
-      moderate: { base: 1400000, variance: 600000 },
-      high: { base: 2200000, variance: 800000 },
-      maximum: { base: 3000000, variance: 1200000 },
+      light: { base: 100000, variance: 100000 },      // 100k-200k
+      moderate: { base: 200000, variance: 150000 },   // 200k-350k
+      high: { base: 300000, variance: 150000 },       // 300k-450k
+      maximum: { base: 400000, variance: 100000 },    // 400k-500k
     };
     const params = intensityMap[intensity] || intensityMap.moderate;
     return Math.floor(params.base + Math.random() * params.variance);
   } else if (type === 'memory') {
+    // All ranges capped to 70 MB for concurrency safety (MAX_MEMORY_MB=140, ÷2 for concurrent requests)
     const intensityMap = {
-      light: { base: 20, variance: 15 },
-      moderate: { base: 40, variance: 20 },
-      high: { base: 60, variance: 25 },
-      maximum: { base: 75, variance: 25 },
+      light: { base: 15, variance: 15 },      // 15-30 MB
+      moderate: { base: 30, variance: 20 },   // 30-50 MB
+      high: { base: 45, variance: 20 },       // 45-65 MB
+      maximum: { base: 50, variance: 20 },    // 50-70 MB
     };
     const params = intensityMap[intensity] || intensityMap.moderate;
     return Math.floor(params.base + Math.random() * params.variance);

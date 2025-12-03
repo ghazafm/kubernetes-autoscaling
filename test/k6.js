@@ -24,7 +24,7 @@ export const options = {
 
 // Base URL - Update this to match your service endpoint
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
-const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;
@@ -50,7 +50,8 @@ export default function () {
   sleep(1);
 
   // Test CPU-intensive endpoint with varying iterations
-  const iterations = Math.floor(Math.random() * 1500000) + 500000; // 500k–2.0M (stays below MAX_CPU_ITERATIONS)
+  // Range: 100k-500k iterations (aligned with MAX_CPU_ITERATIONS=500000)
+  const iterations = Math.floor(Math.random() * 400000) + 100000; // 100k–500k iterations
   const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
   const cpuRes = safeGet(`${BASE_URL}/api/cpu?iterations=${safeIterations}`, { tags: { name: 'cpu', request_type: 'cpu' }, timeout: '20s' });
   cpuDuration.add(cpuRes.timings.duration);

@@ -21,7 +21,7 @@ const edgeCaseCounter = new Counter('edge_case_counter');
 const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
 const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 // Allow k6 to respect the app's configured CPU cap if provided
-const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '2500000');
+const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 // Helper function to scale duration
 function scaleDuration(minutes) {
@@ -192,28 +192,29 @@ function getWorkloadParams(type, intensity) {
   let params;
 
   if (type === 'cpu') {
+    // All ranges capped to MAX_CPU_ITERATIONS (500000)
     switch(intensity) {
       case 'minimal':
-        params = { iterations: 300000 + Math.floor(Math.random() * 200000) };
+        params = { iterations: 50000 + Math.floor(Math.random() * 50000) };  // 50k-100k
         break;
       case 'light':
-        params = { iterations: 800000 + Math.floor(Math.random() * 400000) };
+        params = { iterations: 100000 + Math.floor(Math.random() * 100000) }; // 100k-200k
         break;
       case 'moderate':
-        params = { iterations: 1500000 + Math.floor(Math.random() * 500000) };
+        params = { iterations: 200000 + Math.floor(Math.random() * 150000) }; // 200k-350k
         break;
       case 'high':
-        params = { iterations: 2500000 + Math.floor(Math.random() * 1000000) };
+        params = { iterations: 300000 + Math.floor(Math.random() * 150000) }; // 300k-450k
         break;
       case 'burst':
-        params = { iterations: 2000000 + Math.floor(Math.random() * 1500000) };
+        params = { iterations: 350000 + Math.floor(Math.random() * 100000) }; // 350k-450k
         break;
       case 'maximum':
         // Cap to MAX_CPU_ITERATIONS (provided via environment/config)
-        params = { iterations: Math.max(0, MAX_CPU_ITERATIONS - Math.floor(Math.random() * 200000)) };
+        params = { iterations: Math.min(400000 + Math.floor(Math.random() * 100000), MAX_CPU_ITERATIONS) }; // 400k-500k
         break;
       default:
-        params = { iterations: 1500000 };
+        params = { iterations: 250000 };
     }
   } else if (type === 'memory') {
     // FIXED: Reduced all values to max 70 MB for concurrency safety
