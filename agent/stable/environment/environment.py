@@ -166,7 +166,6 @@ class KubernetesEnv(Env):
             namespace=self.namespace,
             deployment_name=self.deployment_name,
             interval=self.metrics_interval,
-            replica=replica,
             max_response_time=self.max_response_time,
             quantile=self.metrics_quantile,
             endpoints_method=self.metrics_endpoints_method,

@@ -68,7 +68,7 @@ def wait_for_pods_ready(
 
         if ready == desired and desired > 0:
             time.sleep(wait_time)
-            return True, int(desired), int(ready)
+            return True, int(desired), int(ready), time.time() - start_time
         logger.debug(f"Waiting for pods to be ready: {ready}/{desired}")
         time.sleep(1)
     time.sleep(wait_time)
@@ -77,4 +77,4 @@ def wait_for_pods_ready(
         desired = 0.0
     if np.isnan(ready):
         ready = 0.0
-    return False, int(desired), int(ready)
+    return False, int(desired), int(ready), time.time() - start_time

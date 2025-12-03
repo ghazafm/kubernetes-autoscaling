@@ -18,51 +18,59 @@ def _metrics_query(
     """
 
     cpu_query = f"""
-        sum by (pod) (
-            rate(container_cpu_usage_seconds_total{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                container!="",
-                container!="POD"
-            }}[{interval}s])
+        quantile({quantile},
+            sum by (pod) (
+                rate(container_cpu_usage_seconds_total{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    container!="",
+                    container!="POD"
+                }}[{interval}s])
+            )
+            * on(pod) group_left() ({ready_filter})
         )
-        * on(pod) group_left() ({ready_filter})
         """
 
     memory_query = f"""
-        sum by (pod) (
-            container_memory_working_set_bytes{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                container!="",
-                container!="POD"
-            }}
+        quantile({quantile},
+            sum by (pod) (
+                container_memory_working_set_bytes{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    container!="",
+                    container!="POD"
+                }}
+            )
+            * on(pod) group_left() ({ready_filter})
         )
-        * on(pod) group_left() ({ready_filter})
         """
 
     cpu_limits_query = f"""
-        sum by (pod) (
-            kube_pod_container_resource_limits{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                resource="cpu",
-                unit="core"
-            }}
+        quantile({quantile},
+            sum by (pod) (
+                kube_pod_container_resource_limits{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    resource="cpu",
+                    unit="core"
+                }}
+            )
+            * on(pod) group_left() ({ready_filter})
         )
-        * on(pod) group_left() ({ready_filter})
         """
 
     memory_limits_query = f"""
-        sum by (pod) (
-            kube_pod_container_resource_limits{{
-                namespace="{namespace}",
-                pod=~"{deployment_name}-.*",
-                resource="memory",
-                unit="byte"
-            }}
+        quantile({quantile},
+            sum by (pod) (
+                kube_pod_container_resource_limits{{
+                    namespace="{namespace}",
+                    pod=~"{deployment_name}-.*",
+                    resource="memory",
+                    unit="byte"
+                }}
+            )
+            * on(pod) group_left() ({ready_filter})
         )
-        * on(pod) group_left() ({ready_filter})
         """
 
     response_time_query = []
@@ -98,40 +106,21 @@ def process_metrics(
     response_times,
     max_response_time,
 ):
-    cpu_percentages = []
-    memory_percentages = []
+    # Extract scalar values from quantile queries
+    cpu_value = float(cpu_usage[0]["value"][1]) if cpu_usage else 0.0
+    memory_value = float(memory_usage[0]["value"][1]) if memory_usage else 0.0
+    cpu_limit = float(cpu_limits[0]["value"][1]) if cpu_limits else 0.0
+    memory_limit = float(memory_limits[0]["value"][1]) if memory_limits else 0.0
 
-    cpu_limits_by_pod = {}
-    memory_limits_by_pod = {}
-    for item in cpu_limits:
-        pod = item["metric"].get("pod")
-        if pod:
-            limit = float(item["value"][1])
-            cpu_limits_by_pod[pod] = limit
+    # Handle NaN
+    if np.isnan(cpu_value):
+        cpu_value = 0.0
+    if np.isnan(memory_value):
+        memory_value = 0.0
 
-    for item in memory_limits:
-        pod = item["metric"].get("pod")
-        if pod:
-            limit = float(item["value"][1])
-            memory_limits_by_pod[pod] = limit
-
-    for result in cpu_usage:
-        pod_name = result["metric"].get("pod")
-        limit = cpu_limits_by_pod.get(pod_name)
-        if limit is None or limit == 0:
-            continue  # Skip pods without limits
-        rate_cores = float(result["value"][1])
-        cpu_percentage = (rate_cores / limit) * 100
-        cpu_percentages.append(cpu_percentage)
-
-    for result in memory_usage:
-        pod_name = result["metric"].get("pod")
-        limit = memory_limits_by_pod.get(pod_name)
-        if limit is None or limit == 0:
-            continue  # Skip pods without limits
-        usage_bytes = float(result["value"][1])
-        memory_percentage = (usage_bytes / limit) * 100
-        memory_percentages.append(memory_percentage)
+    # Calculate percentages
+    cpu_percentage = (cpu_value / cpu_limit * 100) if cpu_limit > 0 else 0.0
+    memory_percentage = (memory_value / memory_limit * 100) if memory_limit > 0 else 0.0
 
     response_time = np.mean(response_times) if response_times else 0.0
     if np.isnan(response_time):
@@ -139,13 +128,9 @@ def process_metrics(
     response_time_percentage = (response_time / max_response_time) * 100.0
     response_time_percentage = min(response_time_percentage, 1000.0)
 
-    # Return 0.0 for empty arrays instead of nan
-    cpu_mean = float(np.mean(cpu_percentages)) if cpu_percentages else 0.0
-    memory_mean = float(np.mean(memory_percentages)) if memory_percentages else 0.0
-
     return (
-        cpu_mean,
-        memory_mean,
+        cpu_percentage,
+        memory_percentage,
         response_time_percentage,
     )
 
@@ -155,10 +140,9 @@ def get_metrics(
     namespace: str,
     deployment_name: str,
     interval: int,
-    replica: int,
     max_response_time: float,
-    quantile: float = 0.90,
-    endpoints_method: list[tuple[str, str]] = (("/", "GET"), ("/docs", "GET")),
+    quantile: float,
+    endpoints_method: list[tuple[str, str]],
 ):
     (
         cpu_query,
@@ -173,6 +157,7 @@ def get_metrics(
         quantile=quantile,
         endpoints_method=endpoints_method,
     )
+
     cpu_usage_results = prometheus.custom_query(cpu_query)
     memory_usage_results = prometheus.custom_query(memory_query)
     cpu_limits_results = prometheus.custom_query(cpu_limits_query)

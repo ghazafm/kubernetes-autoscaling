@@ -10,7 +10,8 @@ This document contains all Prometheus queries used by the **stable** RL autoscal
 | **Namespace** | `default` |
 | **Deployment** | `flask-app` |
 | **Metrics Interval** | `40s` |
-| **Quantile** | `0.90` |
+| **Quantile** | `0.90` (P90) |
+| **Wait Time** | `40s` |
 | **Endpoints Monitored** | `/api/cpu`, `/api/memory` |
 
 ---
@@ -27,107 +28,117 @@ kube_pod_status_ready{
 } == 1
 ```
 
-### 1) CPU Usage per Pod (rate in cores)
+### 1) CPU Usage P90 (scalar in cores)
 
-Returns CPU usage in **cores** per ready pod.
+Returns the **90th percentile** CPU usage across all ready pods as a single scalar value.
 
 ```promql
-sum by (pod) (
-    rate(container_cpu_usage_seconds_total{
-        namespace="default",
-        pod=~"flask-app-.*",
-        container!="",
-        container!="POD"
-    }[40s])
-)
-* on(pod) group_left() (
-    kube_pod_status_ready{
-        namespace="default",
-        pod=~"flask-app-.*",
-        condition="true"
-    } == 1
+quantile(0.90,
+    sum by (pod) (
+        rate(container_cpu_usage_seconds_total{
+            namespace="default",
+            pod=~"flask-app-.*",
+            container!="",
+            container!="POD"
+        }[40s])
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 )
 ```
 
-**Expected output**: `0.05` to `0.5` cores per pod under load.
+**Expected output**: `0.05` to `0.4` cores (scalar value).
+
+**Why P90**: Catches high-load pods early without overreacting to outliers.
 
 ---
 
-### 2) Memory Usage per Pod (working set in bytes)
+### 2) Memory Usage P90 (scalar in bytes)
 
-Returns memory used (working set) in **bytes** per ready pod.
+Returns the **90th percentile** memory usage across all ready pods.
 
 ```promql
-sum by (pod) (
-    container_memory_working_set_bytes{
-        namespace="default",
-        pod=~"flask-app-.*",
-        container!="",
-        container!="POD"
-    }
-)
-* on(pod) group_left() (
-    kube_pod_status_ready{
-        namespace="default",
-        pod=~"flask-app-.*",
-        condition="true"
-    } == 1
+quantile(0.90,
+    sum by (pod) (
+        container_memory_working_set_bytes{
+            namespace="default",
+            pod=~"flask-app-.*",
+            container!="",
+            container!="POD"
+        }
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 )
 ```
 
-**Expected output**: `50000000` to `500000000` bytes (50-500 MB) per pod.
+**Expected output**: `50000000` to `400000000` bytes (50-400 MB) scalar.
 
 ---
 
-### 3) CPU Limits per Pod (in cores)
+### 3) CPU Limits P90 (scalar in cores)
 
-Returns CPU limit in **cores** per ready pod.
+Returns the **90th percentile** CPU limit across all ready pods.
 
 ```promql
-sum by (pod) (
-    kube_pod_container_resource_limits{
-        namespace="default",
-        pod=~"flask-app-.*",
-        resource="cpu",
-        unit="core"
-    }
-)
-* on(pod) group_left() (
-    kube_pod_status_ready{
-        namespace="default",
-        pod=~"flask-app-.*",
-        condition="true"
-    } == 1
+quantile(0.90,
+    sum by (pod) (
+        kube_pod_container_resource_limits{
+            namespace="default",
+            pod=~"flask-app-.*",
+            resource="cpu",
+            unit="core"
+        }
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 )
 ```
 
-**Expected output**: `0.5` cores (500m) per pod.
+**Expected output**: `0.5` cores (500m) - typically same for all pods.
 
 ---
 
-### 4) Memory Limits per Pod (in bytes)
+### 4) Memory Limits P90 (scalar in bytes)
 
-Returns memory limit in **bytes** per ready pod.
+Returns the **90th percentile** memory limit across all ready pods.
 
 ```promql
-sum by (pod) (
-    kube_pod_container_resource_limits{
-        namespace="default",
-        pod=~"flask-app-.*",
-        resource="memory",
-        unit="byte"
-    }
-)
-* on(pod) group_left() (
-    kube_pod_status_ready{
-        namespace="default",
-        pod=~"flask-app-.*",
-        condition="true"
-    } == 1
+quantile(0.90,
+    sum by (pod) (
+        kube_pod_container_resource_limits{
+            namespace="default",
+            pod=~"flask-app-.*",
+            resource="memory",
+            unit="byte"
+        }
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 )
 ```
 
-**Expected output**: `536870912` bytes (512 Mi) per pod.
+**Expected output**: `536870912` bytes (512 Mi) - typically same for all pods.
 
 ---
 
@@ -221,26 +232,59 @@ scalar(
 
 ## 🧮 How Metrics are Processed
 
+The agent now uses **quantile aggregation in PromQL** (not Python), returning scalar values directly.
+
 ### CPU Percentage Calculation
 
 ```python
-cpu_percentage = (cpu_usage_cores / cpu_limit_cores) * 100
+# cpu_value and cpu_limit are scalars from quantile() queries
+cpu_percentage = (cpu_value / cpu_limit) * 100
 # Example: 0.25 cores / 0.5 cores = 50%
 ```
 
 ### Memory Percentage Calculation
 
 ```python
-memory_percentage = (memory_usage_bytes / memory_limit_bytes) * 100
+# memory_value and memory_limit are scalars from quantile() queries
+memory_percentage = (memory_value / memory_limit) * 100
 # Example: 256MB / 512MB = 50%
 ```
 
 ### Response Time Percentage Calculation
 
 ```python
-response_time_percentage = (response_time_ms / MAX_RESPONSE_TIME) * 100
-# Example: 150ms / 3000ms = 5%
+# Average of P90 response times from multiple endpoints
+response_time_percentage = (avg_response_time_ms / MAX_RESPONSE_TIME) * 100
+# Example: 150ms / 2500ms = 6%
 ```
+
+---
+
+## ⏱️ Timing Configuration
+
+| Setting | Value | Rationale |
+|---------|-------|-----------|
+| **WAIT_TIME** | `40s` | Wait after pods ready before querying metrics |
+| **METRICS_INTERVAL** | `40s` | Window for `rate()` calculations |
+| **Scrape Interval** | `3s` | Prometheus scrapes flask-app every 3s |
+| **cAdvisor Update** | `~15s` | Container metrics update frequency |
+
+**Important**: `WAIT_TIME >= METRICS_INTERVAL` ensures 100% of metrics are post-scaling.
+
+With `rate(...[40s])`, all 50 pods return valid data (100% coverage).
+
+---
+
+## 🔄 Aggregation Comparison
+
+| Method | Query | Use Case |
+|--------|-------|----------|
+| `avg()` | Average across pods | General overview |
+| `quantile(0.9, ...)` | 90th percentile | **Recommended** - catches pressure early |
+| `max()` | Highest loaded pod | Detect worst-case |
+| `min()` | Lowest loaded pod | Rarely useful |
+
+**Why P90**: Gives earlier warning signal than `avg()` without overreacting to single-pod spikes like `max()`.
 
 ---
 
@@ -258,7 +302,7 @@ count(kube_pod_info{namespace="default", pod=~"flask-app-.*"})
 count(kube_pod_status_ready{namespace="default", pod=~"flask-app-.*", condition="true"} == 1)
 ```
 
-### Average CPU Usage (percentage)
+### Average CPU Usage (percentage) - Alternative
 
 ```promql
 avg(
@@ -268,9 +312,9 @@ avg(
             pod=~"flask-app-.*",
             container!="",
             container!="POD"
-        }[1m])
+        }[40s])
     )
-    /
+    / on(pod)
     sum by (pod) (
         kube_pod_container_resource_limits{
             namespace="default",
@@ -279,10 +323,48 @@ avg(
             unit="core"
         }
     )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 ) * 100
 ```
 
-### Average Memory Usage (percentage)
+### P90 CPU Usage (percentage) - Used by Agent
+
+```promql
+quantile(0.90,
+    sum by (pod) (
+        rate(container_cpu_usage_seconds_total{
+            namespace="default",
+            pod=~"flask-app-.*",
+            container!="",
+            container!="POD"
+        }[40s])
+    )
+    / on(pod)
+    sum by (pod) (
+        kube_pod_container_resource_limits{
+            namespace="default",
+            pod=~"flask-app-.*",
+            resource="cpu",
+            unit="core"
+        }
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
+) * 100
+```
+
+### Average Memory Usage (percentage) - Alternative
 
 ```promql
 avg(
@@ -294,7 +376,7 @@ avg(
             container!="POD"
         }
     )
-    /
+    / on(pod)
     sum by (pod) (
         kube_pod_container_resource_limits{
             namespace="default",
@@ -303,24 +385,31 @@ avg(
             unit="byte"
         }
     )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 ) * 100
 ```
 
 ### Total Request Rate (RPS)
 
 ```promql
-sum(rate(http_requests_total{namespace="default", pod=~"flask-app-.*"}[1m]))
+sum(rate(http_requests_total{namespace="default", pod=~"flask-app-.*"}[40s]))
 ```
 
 ### 95th Percentile Response Time (ms)
 
 ```promql
-histogram_quantile(0.95, 
+histogram_quantile(0.95,
     sum by (le) (
         rate(http_request_duration_seconds_bucket{
             namespace="default",
             pod=~"flask-app-.*"
-        }[1m])
+        }[40s])
     )
 ) * 1000
 ```
@@ -332,9 +421,9 @@ histogram_quantile(0.95,
 ### Using curl
 
 ```bash
-# Test CPU usage query
+# Test CPU P90 query (scalar)
 curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
-  --data-urlencode 'query=sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default",pod=~"flask-app-.*",container!="",container!="POD"}[40s]))'
+  --data-urlencode 'query=quantile(0.90, sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default",pod=~"flask-app-.*",container!="",container!="POD"}[40s])) * on(pod) group_left() (kube_pod_status_ready{namespace="default",pod=~"flask-app-.*",condition="true"} == 1))'
 
 # Test pod count
 curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
@@ -343,6 +432,10 @@ curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
 # Test response time
 curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
   --data-urlencode 'query=1000 * histogram_quantile(0.90, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="default",pod=~"flask-app-.*",method="GET",path="/api/cpu"}[40s])))'
+
+# Check pod coverage with rate()[40s]
+curl -G 'http://10.34.4.150:30080/monitoring/api/v1/query' \
+  --data-urlencode 'query=count(sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="default",pod=~"flask-app-.*",container!="",container!="POD"}[40s])))'
 ```
 
 ### Using Python
@@ -363,31 +456,31 @@ query = 'count(kube_pod_status_ready{namespace="default",pod=~"flask-app-.*",con
 result = prom.custom_query(query)
 print(f"Ready pods: {result[0]['value'][1] if result else 'N/A'}")
 
-# Get CPU usage per pod
+# Get CPU P90 (scalar)
 query = '''
-sum by (pod) (
-    rate(container_cpu_usage_seconds_total{
-        namespace="default",
-        pod=~"flask-app-.*",
-        container!="",
-        container!="POD"
-    }[40s])
-)
-* on(pod) group_left() (
-    kube_pod_status_ready{
-        namespace="default",
-        pod=~"flask-app-.*",
-        condition="true"
-    } == 1
+quantile(0.90,
+    sum by (pod) (
+        rate(container_cpu_usage_seconds_total{
+            namespace="default",
+            pod=~"flask-app-.*",
+            container!="",
+            container!="POD"
+        }[40s])
+    )
+    * on(pod) group_left() (
+        kube_pod_status_ready{
+            namespace="default",
+            pod=~"flask-app-.*",
+            condition="true"
+        } == 1
+    )
 )
 '''
 result = prom.custom_query(query)
-for r in result:
-    pod = r['metric']['pod']
-    cpu = float(r['value'][1])
-    print(f"  {pod}: {cpu:.4f} cores")
+cpu_p90 = float(result[0]['value'][1]) if result else 0.0
+print(f"CPU P90: {cpu_p90:.4f} cores")
 
-# Get response time
+# Get response time P90
 query = '''
 1000 * histogram_quantile(0.90,
     sum by (le) (
@@ -467,11 +560,21 @@ Make sure `path` and `method` labels match your queries.
 
 ## 🔄 Key Differences from Old Queries
 
-| Aspect | Old (Broken) | New (Fixed) |
-|--------|--------------|-------------|
-| Filter | `topk() * on(pod) ...` | `ready_filter == 1` |
-| CPU value | Multiplied by timestamp | Correct cores |
-| Memory value | Multiplied by timestamp | Correct bytes |
-| Ready filter | Complex topk join | Simple equality |
+| Aspect | Old (Per-Pod) | New (Quantile) |
+|--------|---------------|----------------|
+| **Aggregation** | Python `np.mean()` | PromQL `quantile(0.9)` |
+| **Output** | Array of N pods | Single scalar |
+| **Coverage Issue** | Wait for all N pods | Returns value if any pods have data |
+| **Sensitivity** | Average (hides outliers) | P90 (catches pressure early) |
+| **Network** | N values transferred | 1 value transferred |
+| **NaN Handling** | Complex per-pod logic | Simple scalar check |
 
-The old queries multiplied metrics by Unix timestamps (1.7 billion+), causing garbage values. The new queries multiply by `1` (ready status) for correct filtering.
+### Old Query (returned N pod values):
+```promql
+sum by (pod) (rate(...)) * on(pod) group_left() (ready_filter)
+```
+
+### New Query (returns 1 scalar):
+```promql
+quantile(0.90, sum by (pod) (rate(...)) * on(pod) group_left() (ready_filter))
+```
