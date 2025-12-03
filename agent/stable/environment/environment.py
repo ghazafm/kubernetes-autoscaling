@@ -8,12 +8,10 @@ from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from kubernetes import client, config
 from prometheus_api_client import PrometheusConnect
-from utils import get_metrics, wait_for_pods_ready
+from utils import TransitionLogger, get_metrics, wait_for_pods_ready
 
 
 class KubernetesEnv(Env):
-    """Kubernetes autoscaling environment for RL training."""
-
     metadata = {"render_modes": ["human", "ansi"], "render_fps": 1}
 
     def __init__(  # noqa: PLR0913
@@ -43,8 +41,9 @@ class KubernetesEnv(Env):
             ("/memory", "GET"),
         ),
         render_mode: Optional[str] = None,
+        csv_log_dir: Optional[str] = None,
+        csv_log_prefix: str = "data",
     ):
-        # Validate render_mode
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
                 f"Invalid render_mode '{render_mode}'. "
@@ -95,10 +94,20 @@ class KubernetesEnv(Env):
         )
         self.last_reward = 0.0
 
+        self.csv_logger = TransitionLogger(
+            log_dir=csv_log_dir if csv_log_dir else "data",
+            prefix=csv_log_prefix,
+            enabled=csv_log_dir is not None,
+        )
+        if self.csv_logger.enabled and self.logger:
+            self.logger.info(f"CSV logging enabled: {self.csv_logger.get_filepath()}")
+
     def step(self, action: int):
         self.iteration -= 1
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
         replica = min(replica, self.max_replicas)
+
+        prev_obs = self.observations.copy()
 
         cpu, memory, response_time = self.scale(replica)
 
@@ -119,8 +128,8 @@ class KubernetesEnv(Env):
         )
 
         if self.iteration <= 0:
-            terminated = False  # Not a natural terminal state
-            truncated = True  # Episode ended due to time limit
+            terminated = False
+            truncated = True
         else:
             terminated = False
             truncated = False
@@ -136,6 +145,17 @@ class KubernetesEnv(Env):
             "cpu_distance": cpu_distance,
             "memory_distance": memory_distance,
         }
+
+        self.csv_logger.log_transition(
+            obs=prev_obs,
+            action=action,
+            reward=reward,
+            next_obs=self.observations,
+            terminated=terminated,
+            truncated=truncated,
+            info=info,
+        )
+
         if self.influxdb:
             self.influxdb.write_point(
                 measurement="autoscaling_metrics",
@@ -396,5 +416,7 @@ class KubernetesEnv(Env):
             "cpu_distance": cpu_distance,
             "memory_distance": memory_distance,
         }
+
+        self.csv_logger.on_reset(self.observations, info)
 
         return self.observations, info

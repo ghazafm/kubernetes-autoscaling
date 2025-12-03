@@ -31,8 +31,10 @@ if __name__ == "__main__":
     )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
 
-    # Environment configuration
     iteration = int(os.getenv("ITERATION"))
+    csv_log_dir = os.getenv("CSV_LOG_DIR", "data")
+    note = os.getenv("NOTE", "default")
+
     env = KubernetesEnv(
         min_replicas=int(os.getenv("MIN_REPLICAS")),
         max_replicas=int(os.getenv("MAX_REPLICAS")),
@@ -56,6 +58,8 @@ if __name__ == "__main__":
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME")),
         weight_cost=float(os.getenv("WEIGHT_COST")),
         render_mode="human",
+        csv_log_dir=csv_log_dir,
+        csv_log_prefix=f"train_{now}_{note}",
     )
 
     eval_env = KubernetesEnv(
@@ -81,13 +85,13 @@ if __name__ == "__main__":
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME")),
         weight_cost=float(os.getenv("WEIGHT_COST")),
         render_mode="human",
+        csv_log_dir=None,
     )
 
     # Training configuration
     BASE_EPISODES = 10
     num_episodes = int(os.getenv("EPISODE", BASE_EPISODES))
 
-    note = os.getenv("NOTE", "default")
     resume_path = os.getenv("RESUME_PATH", "")
 
     if resume_path:
@@ -184,6 +188,12 @@ if __name__ == "__main__":
     final_model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(final_model_path)
     logger.info(f"Final model saved to {final_model_path}")
+
+    # Log CSV stats
+    csv_stats = env.csv_logger.get_stats()
+    if csv_stats.get("enabled"):
+        logger.info(f"CSV transitions saved to: {csv_stats['filepath']}")
+        logger.info(f"Total transitions logged: {csv_stats['total_steps']}")
 
     env.close()
     influxdb.close()
