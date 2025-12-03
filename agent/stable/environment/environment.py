@@ -197,8 +197,8 @@ class KubernetesEnv(Env):
     def calculate_reward(
         self, action: int, response_time: float, error_rate: float
     ) -> float:
-        RESPONSE_TIME_HIGH_THRESHOLD = 80.0
-        RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
+        RESPONSE_TIME_HIGH_THRESHOLD = 50.0
+        RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
 
         if response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             response_time_penalty = 0.0
