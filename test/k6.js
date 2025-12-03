@@ -7,14 +7,24 @@ const errorRate = new Rate('errors');
 const cpuDuration = new Trend('cpu_request_duration');
 const memoryDuration = new Trend('memory_request_duration');
 
-// Test configuration
+// Dynamic load calculation based on replica capacity
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+
+// Test configuration - Dynamic VU based on MAX_REPLICAS
 export const options = {
   stages: [
-    { duration: '30s', target: 10 },  // Ramp up to 10 users
-    { duration: '1m', target: 10 },   // Stay at 10 users
-    { duration: '30s', target: 20 },  // Ramp up to 20 users
-    { duration: '1m', target: 20 },   // Stay at 20 users
-    { duration: '30s', target: 0 },   // Ramp down to 0 users
+    { duration: '30s', target: VU_WARMUP },   // Ramp up to warmup
+    { duration: '1m', target: VU_WARMUP },    // Stay at warmup
+    { duration: '30s', target: VU_LOW },      // Ramp up to low
+    { duration: '1m', target: VU_LOW },       // Stay at low
+    { duration: '30s', target: 0 },           // Ramp down to 0 users
   ],
   thresholds: {
     http_req_duration: ['p(95)<5000'], // 95% of requests should be below 5s
@@ -25,6 +35,23 @@ export const options = {
 // Base URL - Update this to match your service endpoint
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('✅ K6 BASIC TEST - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs`);
+  console.log(`   LOW:    ${VU_LOW} VUs`);
+  console.log('═══════════════════════════════════════════════════════\n');
+}
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;

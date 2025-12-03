@@ -6,14 +6,27 @@ import { Rate, Trend } from 'k6/metrics';
 const errorRate = new Rate('errors');
 const cpuDuration = new Trend('cpu_request_duration');
 
-// CPU Stress Test Configuration
+// Dynamic load calculation based on replica capacity
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+
+// CPU Stress Test Configuration - Dynamic VU based on MAX_REPLICAS
 export const options = {
   stages: [
-    { duration: '1m', target: 40 },   // Ramp up to 40 concurrent users
-    { duration: '3m', target: 40 },   // Hold at 40 users for 3 minutes
-    { duration: '1m', target: 80 },   // Spike to 80 users (aligned with 5x500m pods)
-    { duration: '2m', target: 80 },   // Hold spike
-    { duration: '1m', target: 0 },    // Ramp down
+    { duration: '1m', target: VU_MEDIUM },   // Ramp up to medium load
+    { duration: '3m', target: VU_MEDIUM },   // Hold at medium for 3 minutes
+    { duration: '1m', target: VU_PEAK },     // Spike to peak
+    { duration: '2m', target: VU_PEAK },     // Hold spike
+    { duration: '1m', target: 0 },           // Ramp down
   ],
   thresholds: {
     http_req_duration: ['p(95)<9000'], // 95% of requests should be below 9s
@@ -23,6 +36,23 @@ export const options = {
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🔥 CPU STRESS TEST - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (initial ramp)`);
+  console.log(`   PEAK:   ${VU_PEAK} VUs (spike phase)`);
+  console.log('═══════════════════════════════════════════════════════\n');
+}
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;

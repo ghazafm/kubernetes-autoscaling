@@ -8,7 +8,19 @@ const cpuDuration = new Trend('cpu_request_duration');
 const memoryDuration = new Trend('memory_request_duration');
 const requestsPerStage = new Counter('requests_per_stage');
 
-// RL Autoscaler Test Configuration
+// Dynamic load calculation based on replica capacity
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+
+// RL Autoscaler Test Configuration - Dynamic VU based on MAX_REPLICAS
 // Scenario: Low → Medium → High → Low (to test RL agent's scaling decisions)
 export const options = {
   stages: [
@@ -16,23 +28,23 @@ export const options = {
     { duration: '1m', target: 1 },
 
     // Phase 1: LOW LOAD (baseline)
-    { duration: '2m', target: 5 },    // Ramp up to 5 users
-    { duration: '3m', target: 5 },    // Hold at 5 users (LOW)
+    { duration: '2m', target: VU_WARMUP },     // Ramp up to warmup
+    { duration: '3m', target: VU_WARMUP },     // Hold at warmup (LOW)
 
     // Phase 2: MEDIUM LOAD
-    { duration: '1m', target: 15 },   // Ramp up to 15 users
-    { duration: '4m', target: 15 },   // Hold at 15 users (MEDIUM)
+    { duration: '1m', target: VU_LOW },        // Ramp up to low
+    { duration: '4m', target: VU_LOW },        // Hold at low (MEDIUM)
 
     // Phase 3: HIGH LOAD
-    { duration: '1m', target: 30 },   // Ramp up to 30 users
-    { duration: '5m', target: 30 },   // Hold at 30 users (HIGH)
+    { duration: '1m', target: VU_MEDIUM },     // Ramp up to medium
+    { duration: '5m', target: VU_MEDIUM },     // Hold at medium (HIGH)
 
     // Phase 4: BACK TO LOW (scale down test)
-    { duration: '1m', target: 5 },    // Ramp down to 5 users
-    { duration: '3m', target: 5 },    // Hold at 5 users (LOW)
+    { duration: '1m', target: VU_WARMUP },     // Ramp down to warmup
+    { duration: '3m', target: VU_WARMUP },     // Hold at warmup (LOW)
 
     // Graceful shutdown
-    { duration: '30s', target: 0 },   // Ramp down to 0
+    { duration: '30s', target: 0 },            // Ramp down to 0
   ],
   thresholds: {
     http_req_duration: ['p(95)<5000'], // 95% of requests should be below 5s
@@ -43,6 +55,26 @@ export const options = {
 // Base URL - Update this to match your service endpoint
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🤖 RL AUTOSCALER TEST - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs (LOW phase)`);
+  console.log(`   LOW:    ${VU_LOW} VUs (MEDIUM phase)`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (HIGH phase)`);
+  console.log('');
+  console.log('📈 Test Pattern: LOW → MEDIUM → HIGH → LOW');
+  console.log('═══════════════════════════════════════════════════════\n');
+}
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;
@@ -119,11 +151,10 @@ export default function () {
 }
 
 function getCurrentStage(iteration, vu) {
-  // Approximate which stage we're in based on VU count
-  // This is a rough estimation
-  if (vu <= 5) return 'LOW';
-  if (vu <= 15) return 'MEDIUM';
-  if (vu <= 30) return 'HIGH';
+  // Approximate which stage we're in based on VU count (dynamic thresholds)
+  if (vu <= VU_WARMUP) return 'LOW';
+  if (vu <= VU_LOW) return 'MEDIUM';
+  if (vu <= VU_MEDIUM) return 'HIGH';
   return 'UNKNOWN';
 }
 

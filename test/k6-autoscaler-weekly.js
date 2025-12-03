@@ -25,6 +25,25 @@ const dayOfWeekGauge = new Gauge('day_of_week');
 const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
 const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 
+// Dynamic load calculation based on replica capacity
+// This ensures k6 generates enough load to stress the full replica range
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+
+// Helper to ensure integer VU targets (k6 requires integers)
+function ensureInt(value) {
+  return Math.ceil(value);
+}
+
 // Helper function to scale duration
 function scaleDuration(minutes) {
   const totalMinutes = minutes * DURATION_MULTIPLIER;
@@ -42,102 +61,103 @@ function scaleDuration(minutes) {
 }
 
 // Base pattern (50 minutes = 1 week cycle)
+// Now uses dynamic VU targets based on MAX_REPLICAS
 const basePattern = [
   // ===== MONDAY - Week Start (Gradual Increase) =====
   // Early morning (low)
-  { duration: scaleDuration(1), target: 5 },
+  { duration: scaleDuration(1), target: VU_WARMUP },
   // Morning rush (9 AM - users logging in)
-  { duration: scaleDuration(1), target: 20 },
-  { duration: scaleDuration(1.5), target: 20 },
+  { duration: scaleDuration(1), target: VU_LOW },
+  { duration: scaleDuration(1.5), target: VU_LOW },
   // Lunch dip
-  { duration: scaleDuration(0.5), target: 12 },
-  { duration: scaleDuration(1), target: 12 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.6) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.6) },
   // Afternoon work
-  { duration: scaleDuration(0.5), target: 18 },
-  { duration: scaleDuration(1), target: 18 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.9) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.9) },
   // Evening decline
-  { duration: scaleDuration(0.5), target: 8 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.4) },
 
   // ===== TUESDAY - Regular Business Day (Consistent) =====
   // Morning
-  { duration: scaleDuration(0.5), target: 6 },
-  { duration: scaleDuration(1), target: 22 },
-  { duration: scaleDuration(1.5), target: 22 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 1.5) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.1) },
+  { duration: scaleDuration(1.5), target: ensureInt(VU_LOW * 1.1) },
   // Lunch
-  { duration: scaleDuration(0.5), target: 14 },
-  { duration: scaleDuration(1), target: 14 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.7) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.7) },
   // Afternoon (higher than Monday)
-  { duration: scaleDuration(0.5), target: 24 },
-  { duration: scaleDuration(1.5), target: 24 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 1.2) },
+  { duration: scaleDuration(1.5), target: ensureInt(VU_LOW * 1.2) },
   // Evening
-  { duration: scaleDuration(0.5), target: 10 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },
 
   // ===== WEDNESDAY - Peak Day (Highest Load) =====
   // Morning
-  { duration: scaleDuration(0.5), target: 8 },
-  { duration: scaleDuration(1), target: 28 },
-  { duration: scaleDuration(1.5), target: 28 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.4) },
+  { duration: scaleDuration(1), target: ensureInt(VU_MEDIUM * 0.9) },
+  { duration: scaleDuration(1.5), target: ensureInt(VU_MEDIUM * 0.9) },
   // Lunch (still high)
-  { duration: scaleDuration(0.5), target: 18 },
-  { duration: scaleDuration(1), target: 18 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.9) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.9) },
   // Afternoon peak + marketing campaign spike
-  { duration: scaleDuration(1), target: 35 },
-  { duration: scaleDuration(1), target: 35 },
+  { duration: scaleDuration(1), target: ensureInt(VU_MEDIUM * 1.1) },
+  { duration: scaleDuration(1), target: ensureInt(VU_MEDIUM * 1.1) },
   // Late spike (end-of-quarter deadline)
-  { duration: scaleDuration(0.5), target: 40 },
-  { duration: scaleDuration(0.5), target: 40 },
+  { duration: scaleDuration(0.5), target: VU_HIGH },
+  { duration: scaleDuration(0.5), target: VU_HIGH },
   // Evening (still elevated)
-  { duration: scaleDuration(0.5), target: 15 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.75) },
 
   // ===== THURSDAY - Post-Peak (Declining) =====
   // Morning (lower than Wednesday)
-  { duration: scaleDuration(0.5), target: 7 },
-  { duration: scaleDuration(1), target: 20 },
-  { duration: scaleDuration(1.5), target: 20 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 1.75) },
+  { duration: scaleDuration(1), target: VU_LOW },
+  { duration: scaleDuration(1.5), target: VU_LOW },
   // Lunch
-  { duration: scaleDuration(0.5), target: 13 },
-  { duration: scaleDuration(1), target: 13 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.65) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.65) },
   // Afternoon (moderate)
-  { duration: scaleDuration(1), target: 19 },
-  { duration: scaleDuration(1), target: 19 },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.95) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.95) },
   // Evening
-  { duration: scaleDuration(0.5), target: 9 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.45) },
 
   // ===== FRIDAY - Week End (Early Decline) =====
   // Morning (slow start)
-  { duration: scaleDuration(0.5), target: 5 },
-  { duration: scaleDuration(1), target: 16 },
-  { duration: scaleDuration(1), target: 16 },
+  { duration: scaleDuration(0.5), target: VU_WARMUP },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.8) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.8) },
   // Lunch (longer dip - people leaving early)
-  { duration: scaleDuration(1), target: 10 },
-  { duration: scaleDuration(1), target: 10 },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },
   // Afternoon (minimal - early finish)
-  { duration: scaleDuration(1), target: 12 },
-  { duration: scaleDuration(0.5), target: 7 },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.6) },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 1.75) },
   // Early evening drop
-  { duration: scaleDuration(0.5), target: 4 },
+  { duration: scaleDuration(0.5), target: VU_WARMUP },
 
   // ===== SATURDAY - Weekend (Low Activity) =====
   // Late start
-  { duration: scaleDuration(1), target: 3 },
-  { duration: scaleDuration(1.5), target: 3 },
+  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 0.75) },
+  { duration: scaleDuration(1.5), target: ensureInt(VU_WARMUP * 0.75) },
   // Midday (some activity)
-  { duration: scaleDuration(1), target: 8 },
-  { duration: scaleDuration(1.5), target: 8 },
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.4) },
+  { duration: scaleDuration(1.5), target: ensureInt(VU_LOW * 0.4) },
   // Evening (minimal)
-  { duration: scaleDuration(1), target: 4 },
-  { duration: scaleDuration(1), target: 4 },
+  { duration: scaleDuration(1), target: VU_WARMUP },
+  { duration: scaleDuration(1), target: VU_WARMUP },
 
   // ===== SUNDAY - Weekend (Minimal) =====
   // Very low all day
-  { duration: scaleDuration(1), target: 2 },
-  { duration: scaleDuration(2), target: 2 },
+  { duration: scaleDuration(1), target: 1 },
+  { duration: scaleDuration(2), target: 1 },
   // Slight increase (planning for Monday)
-  { duration: scaleDuration(1), target: 5 },
-  { duration: scaleDuration(1.5), target: 5 },
+  { duration: scaleDuration(1), target: VU_WARMUP },
+  { duration: scaleDuration(1.5), target: VU_WARMUP },
   // Late evening prep
-  { duration: scaleDuration(0.5), target: 3 },
-  { duration: scaleDuration(1), target: 3 },
+  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 0.75) },
+  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 0.75) },
 
   // ===== Graceful Shutdown =====
   { duration: scaleDuration(0.5), target: 0 },
@@ -164,6 +184,29 @@ export const options = {
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 const MAX_MEMORY_MB = parseInt(__ENV.MAX_MEMORY_MB || '140');
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('📅 RL AUTOSCALER WEEKLY SIMULATION - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
+  console.log(`Week Count: ${CYCLE_COUNT}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs`);
+  console.log(`   LOW:    ${VU_LOW} VUs`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs`);
+  console.log(`   HIGH:   ${VU_HIGH} VUs`);
+  console.log(`   PEAK:   ${VU_PEAK} VUs`);
+  console.log(`   SPIKE:  ${VU_SPIKE} VUs`);
+  console.log('═══════════════════════════════════════════════════════\n');
+}
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;
@@ -196,13 +239,13 @@ function getDayOfWeek() {
 }
 
 function getTimeOfDay(vu) {
-  // Estimate time of day based on VU count
-  if (vu <= 3) return 'night';
-  if (vu <= 10) return 'early_morning';
-  if (vu <= 15) return 'morning';
-  if (vu <= 25) return 'midday';
-  if (vu <= 35) return 'afternoon';
-  if (vu <= 40) return 'evening_peak';
+  // Estimate time of day based on VU count (dynamic thresholds)
+  if (vu <= VU_WARMUP * 0.75) return 'night';
+  if (vu <= VU_WARMUP * 2) return 'early_morning';
+  if (vu <= VU_LOW * 0.75) return 'morning';
+  if (vu <= VU_LOW * 1.25) return 'midday';
+  if (vu <= VU_MEDIUM) return 'afternoon';
+  if (vu <= VU_HIGH) return 'evening_peak';
   return 'late';
 }
 

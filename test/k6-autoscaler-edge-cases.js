@@ -23,6 +23,25 @@ const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 // Allow k6 to respect the app's configured CPU cap if provided
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
+// Dynamic load calculation based on replica capacity
+// This ensures k6 generates enough load to stress the full replica range
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+
+// Helper to ensure integer VU targets (k6 requires integers)
+function ensureInt(value) {
+  return Math.ceil(value);
+}
+
 // Helper function to scale duration
 function scaleDuration(minutes) {
   const totalMinutes = minutes * DURATION_MULTIPLIER;
@@ -40,75 +59,76 @@ function scaleDuration(minutes) {
 }
 
 // Base pattern (40 minutes cycle)
+// Now uses dynamic VU targets based on MAX_REPLICAS
 const basePattern = [
   // ===== SCENARIO 1: COLD START (from 0 to moderate load) =====
-  { duration: scaleDuration(0.5), target: 0 },   // Ensure cold start
-  { duration: scaleDuration(0.5), target: 15 },  // Rapid cold start ramp
-  { duration: scaleDuration(2), target: 15 },    // Sustain to test stability
+  { duration: scaleDuration(0.5), target: 0 },                         // Ensure cold start
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Rapid cold start ramp
+  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 0.5) },     // Sustain to test stability
 
   // ===== SCENARIO 2: THUNDERING HERD (extreme sudden spike) =====
-  { duration: scaleDuration(0.33), target: 3 },  // Very low baseline
-  { duration: scaleDuration(0.33), target: 80 }, // Massive instant spike
-  { duration: scaleDuration(2), target: 80 },    // Sustain extreme load
-  { duration: scaleDuration(0.5), target: 5 },   // Rapid drop (test scale-down)
+  { duration: scaleDuration(0.33), target: VU_WARMUP },                // Very low baseline
+  { duration: scaleDuration(0.33), target: VU_SPIKE },                 // Massive instant spike
+  { duration: scaleDuration(2), target: VU_SPIKE },                    // Sustain extreme load
+  { duration: scaleDuration(0.5), target: VU_WARMUP },                 // Rapid drop (test scale-down)
 
   // ===== SCENARIO 3: SAWTOOTH PATTERN (repeated spikes) =====
-  { duration: scaleDuration(0.5), target: 10 },  // Baseline
-  { duration: scaleDuration(0.5), target: 40 },  // Spike 1
-  { duration: scaleDuration(0.5), target: 10 },  // Drop
-  { duration: scaleDuration(0.5), target: 40 },  // Spike 2
-  { duration: scaleDuration(0.5), target: 10 },  // Drop
-  { duration: scaleDuration(0.5), target: 40 },  // Spike 3
-  { duration: scaleDuration(0.5), target: 10 },  // Drop
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Baseline
+  { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 1
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
+  { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 2
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
+  { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 3
+  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
 
   // ===== SCENARIO 4: SLOW LEAK (gradual sustained increase) =====
-  { duration: scaleDuration(1), target: 5 },     // Start low
-  { duration: scaleDuration(5), target: 45 },    // Very gradual increase
-  { duration: scaleDuration(2), target: 45 },    // Hold at high
+  { duration: scaleDuration(1), target: VU_WARMUP },                   // Start low
+  { duration: scaleDuration(5), target: VU_HIGH },                     // Very gradual increase
+  { duration: scaleDuration(2), target: VU_HIGH },                     // Hold at high
 
   // ===== SCENARIO 5: STAIRCASE PATTERN (discrete load levels) =====
-  { duration: scaleDuration(1), target: 8 },     // Step 1
-  { duration: scaleDuration(1), target: 16 },    // Step 2
-  { duration: scaleDuration(1), target: 24 },    // Step 3
-  { duration: scaleDuration(1), target: 32 },    // Step 4
-  { duration: scaleDuration(1), target: 40 },    // Step 5 (peak)
-  { duration: scaleDuration(1), target: 32 },    // Step down
-  { duration: scaleDuration(1), target: 24 },    // Step down
-  { duration: scaleDuration(1), target: 16 },    // Step down
-  { duration: scaleDuration(1), target: 8 },     // Step down
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },     // Step 1
+  { duration: scaleDuration(1), target: VU_LOW },                      // Step 2
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },     // Step 3
+  { duration: scaleDuration(1), target: VU_MEDIUM },                   // Step 4
+  { duration: scaleDuration(1), target: VU_HIGH },                     // Step 5 (peak)
+  { duration: scaleDuration(1), target: VU_MEDIUM },                   // Step down
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },     // Step down
+  { duration: scaleDuration(1), target: VU_LOW },                      // Step down
+  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },     // Step down
 
   // ===== SCENARIO 6: JITTER PATTERN (noisy load) =====
-  { duration: scaleDuration(0.33), target: 15 }, // Base
-  { duration: scaleDuration(0.33), target: 20 }, // Jitter up
-  { duration: scaleDuration(0.33), target: 12 }, // Jitter down
-  { duration: scaleDuration(0.33), target: 18 }, // Jitter up
-  { duration: scaleDuration(0.33), target: 14 }, // Jitter down
-  { duration: scaleDuration(0.33), target: 22 }, // Jitter up
-  { duration: scaleDuration(0.33), target: 16 }, // Jitter down
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.75) }, // Base
+  { duration: scaleDuration(0.33), target: VU_LOW },                   // Jitter up
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.6) },  // Jitter down
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.9) },  // Jitter up
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.7) },  // Jitter down
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 1.1) },  // Jitter up
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.8) },  // Jitter down
 
   // ===== SCENARIO 7: SUSTAINED MAXIMUM (endurance test) =====
-  { duration: scaleDuration(1), target: 60 },    // Ramp to maximum
-  { duration: scaleDuration(4), target: 60 },    // Sustain maximum load
+  { duration: scaleDuration(1), target: VU_PEAK },                     // Ramp to maximum
+  { duration: scaleDuration(4), target: VU_PEAK },                     // Sustain maximum load
 
   // ===== SCENARIO 8: RAPID OSCILLATION (high frequency changes) =====
-  { duration: scaleDuration(0.33), target: 10 }, // Low
-  { duration: scaleDuration(0.33), target: 30 }, // High
-  { duration: scaleDuration(0.33), target: 10 }, // Low
-  { duration: scaleDuration(0.33), target: 30 }, // High
-  { duration: scaleDuration(0.33), target: 10 }, // Low
-  { duration: scaleDuration(0.33), target: 30 }, // High
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
+  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
 
   // ===== SCENARIO 9: ASYMMETRIC RAMP (slow up, fast down) =====
-  { duration: scaleDuration(3), target: 35 },    // Slow ramp up
-  { duration: scaleDuration(0.5), target: 5 },   // Rapid drop
-  { duration: scaleDuration(1), target: 5 },     // Hold low
+  { duration: scaleDuration(3), target: ensureInt(VU_MEDIUM * 0.9) },  // Slow ramp up
+  { duration: scaleDuration(0.5), target: VU_WARMUP },                 // Rapid drop
+  { duration: scaleDuration(1), target: VU_WARMUP },                   // Hold low
 
   // ===== SCENARIO 10: DEAD ZONE (minimal load) =====
-  { duration: scaleDuration(0.5), target: 1 },   // Near zero
-  { duration: scaleDuration(2), target: 1 },     // Sustain near zero
+  { duration: scaleDuration(0.5), target: 1 },                         // Near zero
+  { duration: scaleDuration(2), target: 1 },                           // Sustain near zero
 
   // ===== FINAL: GRACEFUL SHUTDOWN =====
-  { duration: scaleDuration(0.5), target: 0 },   // Complete shutdown
+  { duration: scaleDuration(0.5), target: 0 },                         // Complete shutdown
 ];
 
 // Generate stages by repeating the pattern
@@ -130,17 +150,40 @@ export const options = {
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 
-// Determine edge case scenario based on time and VU
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🎯 RL AUTOSCALER EDGE CASES - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
+  console.log(`Cycle Count: ${CYCLE_COUNT}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs`);
+  console.log(`   LOW:    ${VU_LOW} VUs`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs`);
+  console.log(`   HIGH:   ${VU_HIGH} VUs`);
+  console.log(`   PEAK:   ${VU_PEAK} VUs`);
+  console.log(`   SPIKE:  ${VU_SPIKE} VUs`);
+  console.log('═══════════════════════════════════════════════════════\n');
+}
+
+// Determine edge case scenario based on time and VU (dynamic thresholds based on MAX_REPLICAS)
 function getEdgeCaseScenario(vu) {
   if (vu === 0 || vu === 1) return 'DEAD_ZONE';
-  if (vu >= 60) return 'EXTREME_LOAD';
-  if (vu >= 40) return 'HIGH_PRESSURE';
-  if (vu <= 5) return 'MINIMAL_LOAD';
+  if (vu >= VU_PEAK) return 'EXTREME_LOAD';
+  if (vu >= VU_HIGH) return 'HIGH_PRESSURE';
+  if (vu <= VU_WARMUP) return 'MINIMAL_LOAD';
 
   // Check for rapid changes (oscillation patterns)
   const oscillationCheck = Math.floor(__ITER / 10) % 2;
-  if (vu >= 25 && oscillationCheck === 0) return 'OSCILLATING_HIGH';
-  if (vu <= 15 && oscillationCheck === 1) return 'OSCILLATING_LOW';
+  if (vu >= VU_MEDIUM && oscillationCheck === 0) return 'OSCILLATING_HIGH';
+  if (vu <= VU_LOW && oscillationCheck === 1) return 'OSCILLATING_LOW';
 
   return 'MODERATE_EDGE';
 }

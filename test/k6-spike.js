@@ -4,14 +4,24 @@ import { Rate } from 'k6/metrics';
 
 const errorRate = new Rate('errors');
 
-// Spike Test - Sudden burst of traffic
+// Dynamic load calculation based on replica capacity
+const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
+const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
+const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
+
+// Calculate VU targets to stress pods at different capacity levels
+const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
+const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+
+// Spike Test - Sudden burst of traffic (Dynamic VU based on MAX_REPLICAS)
 export const options = {
   stages: [
-    { duration: '30s', target: 5 },    // Start with 5 users
-    { duration: '10s', target: 70 },   // Sudden spike to ~70 users (fits 5x500m)
-    { duration: '1m', target: 70 },    // Hold spike
-    { duration: '30s', target: 5 },    // Drop back down
-    { duration: '30s', target: 0 },    // Ramp down to 0
+    { duration: '30s', target: VU_WARMUP },    // Start with warmup
+    { duration: '10s', target: VU_SPIKE },     // Sudden spike to max capacity
+    { duration: '1m', target: VU_SPIKE },      // Hold spike
+    { duration: '30s', target: VU_WARMUP },    // Drop back down
+    { duration: '30s', target: 0 },            // Ramp down to 0
   ],
   thresholds: {
     http_req_duration: ['p(95)<15000'], // Allow more time during spike
@@ -21,6 +31,23 @@ export const options = {
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
+
+export function setup() {
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('⚡ SPIKE TEST - DYNAMIC LOAD');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log(`Target: ${BASE_URL}`);
+  console.log('');
+  console.log('📊 Replica Configuration:');
+  console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
+  console.log(`   MAX_REPLICAS: ${MAX_REPLICAS}`);
+  console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
+  console.log('');
+  console.log('🚀 Dynamic VU Targets:');
+  console.log(`   WARMUP: ${VU_WARMUP} VUs (baseline)`);
+  console.log(`   SPIKE:  ${VU_SPIKE} VUs (100% capacity burst)`);
+  console.log('═══════════════════════════════════════════════════════\n');
+}
 
 function safeGet(url, params, maxRetries = 2) {
   let attempt = 0;
