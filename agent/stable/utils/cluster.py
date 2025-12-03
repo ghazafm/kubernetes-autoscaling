@@ -1,6 +1,7 @@
 import logging
 import time
 
+import numpy as np
 from prometheus_api_client import PrometheusConnect
 
 
@@ -58,10 +59,22 @@ def wait_for_pods_ready(
             time.sleep(1)
             continue
 
+        if np.isnan(desired):
+            logger.debug("Desired replicas returned NaN, waiting for metrics...")
+            time.sleep(1)
+            continue
+        if np.isnan(ready):
+            ready = 0.0
+
         if ready == desired and desired > 0:
             time.sleep(wait_time)
             return True, int(desired), int(ready)
         logger.debug(f"Waiting for pods to be ready: {ready}/{desired}")
         time.sleep(1)
     time.sleep(wait_time)
+    # Final NaN check before returning
+    if np.isnan(desired):
+        desired = 0.0
+    if np.isnan(ready):
+        ready = 0.0
     return False, int(desired), int(ready)

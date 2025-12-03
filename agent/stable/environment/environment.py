@@ -153,7 +153,7 @@ class KubernetesEnv(Env):
                 self.logger.error(f"Error scaling deployment: {e}")
                 time.sleep(delay)
 
-        _, _, _ = wait_for_pods_ready(
+        wait_for_pods_ready(
             prometheus=self.prometheus,
             deployment_name=self.deployment_name,
             namespace=self.namespace,
