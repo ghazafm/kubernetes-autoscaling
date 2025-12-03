@@ -223,22 +223,22 @@ class KubernetesEnv(Env):
         err_bad = error_rate > ERROR_RATE_THRESHOLD
 
         if rt_bad or err_bad:
-            # Performance is bad — ignore cost, just fix it
             cost_weight_multiplier = 0.0
         elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             cost_weight_multiplier = 1.0
         else:
-            # RT between 50-80%: gradually reduce cost weight
             cost_weight_multiplier = 1.0 - (
                 response_time_penalty / self.max_response_penalty
             )
 
         effective_cost_penalty = cost_penalty_raw * cost_weight_multiplier
 
+        error_penalty = error_rate * 2.0
+
         total_penalty = (
             self.weight_response_time * response_time_penalty
             + self.weight_cost * effective_cost_penalty
-            + self.weight_error_rate * error_rate
+            + self.weight_error_rate * error_penalty
         )
         return 1.0 - total_penalty
 

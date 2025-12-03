@@ -190,10 +190,11 @@ def get_metrics(
     for query in response_time_query:
         response = prometheus.custom_query(query)
         if not response:
-            response_time_results.append(0.0)
             continue
 
-        response_time_results.append(float(response[0]["value"][1]))
+        value = float(response[0]["value"][1])
+        if not np.isnan(value):
+            response_time_results.append(value)
 
     (
         cpu_percentages,
