@@ -55,7 +55,6 @@ if __name__ == "__main__":
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES")),
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME")),
         weight_cost=float(os.getenv("WEIGHT_COST")),
-        weight_error_rate=float(os.getenv("WEIGHT_ERROR_RATE", "0.3")),
         render_mode="human",
     )
 
@@ -81,7 +80,6 @@ if __name__ == "__main__":
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES")),
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME")),
         weight_cost=float(os.getenv("WEIGHT_COST")),
-        weight_error_rate=float(os.getenv("WEIGHT_ERROR_RATE", "0.3")),
         render_mode="human",
     )
 
