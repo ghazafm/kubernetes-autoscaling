@@ -12,6 +12,10 @@ from utils import get_metrics, wait_for_pods_ready
 
 
 class KubernetesEnv(Env):
+    """Kubernetes autoscaling environment for RL training."""
+
+    metadata = {"render_modes": ["human", "ansi"], "render_fps": 1}
+
     def __init__(  # noqa: PLR0913
         self,
         min_replicas: int,
@@ -34,11 +38,21 @@ class KubernetesEnv(Env):
         max_scaling_retries: int,
         weight_response_time: float,
         weight_cost: float,
+        weight_error_rate: float,
         metrics_endpoints_method: list[tuple[str, str]] = (
             ("/cpu", "GET"),
             ("/memory", "GET"),
         ),
+        render_mode: Optional[str] = None,
     ):
+        # Validate render_mode
+        if render_mode is not None and render_mode not in self.metadata["render_modes"]:
+            raise ValueError(
+                f"Invalid render_mode '{render_mode}'. "
+                f"Supported modes: {self.metadata['render_modes']}"
+            )
+        self.render_mode = render_mode
+
         config.load_kube_config()
         self.api = client.AppsV1Api()
         self.namespace = namespace
@@ -55,8 +69,8 @@ class KubernetesEnv(Env):
         self.logger = logger
         self.action_space = Discrete(100)
         self.observation_space = Box(
-            low=np.array([0.0, 0.0, 0.0, -2.0, -2.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 2.0, 2.0, 3.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, 0.0, -2.0, -2.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 2.0, 2.0, 3.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
         self.iteration = iteration
@@ -74,10 +88,11 @@ class KubernetesEnv(Env):
 
         self.weight_response_time = weight_response_time
         self.weight_cost = weight_cost
-        self.max_response_penalty = 2.0 / self.weight_response_time
+        self.weight_error_rate = weight_error_rate
+        self.max_response_penalty = 3.0
 
         self.observations = np.array(
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             dtype=np.float32,
         )
         self.last_reward = 0.0
@@ -87,18 +102,21 @@ class KubernetesEnv(Env):
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
         replica = min(replica, self.max_replicas)
 
-        cpu, memory, response_time = self.scale(replica)
+        cpu, memory, response_time, error_rate = self.scale(replica)
 
         cpu_relative, memory_relative, cpu_distance, memory_distance = (
             self.calculate_distance(cpu, memory)
         )
 
-        reward = self.calculate_reward(action=action, response_time=response_time)
+        reward = self.calculate_reward(
+            action=action, response_time=response_time, error_rate=error_rate
+        )
         self.last_reward = reward
 
         self.observations = self.observation(
             action=action,
             response_time=response_time,
+            error_rate=error_rate,
             cpu_relative=cpu_relative,
             memory_relative=memory_relative,
             cpu_distance=cpu_distance,
@@ -116,6 +134,7 @@ class KubernetesEnv(Env):
             "cpu": cpu,
             "memory": memory,
             "response_time": response_time,
+            "error_rate": error_rate,
             "replicas": replica,
             "action": action,
             "cpu_relative": cpu_relative,
@@ -141,7 +160,7 @@ class KubernetesEnv(Env):
         attempt = 0
         while attempt < self.max_scaling_retries:
             attempt += 1
-            delay = min(1 * (2 ** (attempt - 1)), 10)
+            delay = min(0.5 * (2 ** (attempt - 1)), 10)
             try:
                 self.api.patch_namespaced_deployment_scale(
                     name=self.deployment_name,
@@ -150,8 +169,11 @@ class KubernetesEnv(Env):
                 )
                 break
             except Exception as e:
-                self.logger.error(f"Error scaling deployment: {e}")
-                time.sleep(delay)
+                self.logger.warning(f"Scale attempt {attempt} failed: {e}")
+                if attempt >= self.max_scaling_retries:
+                    self.logger.error("Max retries reached, continuing with metrics")
+                else:
+                    time.sleep(delay)
 
         wait_for_pods_ready(
             prometheus=self.prometheus,
@@ -161,7 +183,7 @@ class KubernetesEnv(Env):
             wait_time=self.wait_time,
             logger=self.logger,
         )
-        cpu, memory, response_time = get_metrics(
+        cpu, memory, response_time, error_rate = get_metrics(
             prometheus=self.prometheus,
             namespace=self.namespace,
             deployment_name=self.deployment_name,
@@ -170,9 +192,11 @@ class KubernetesEnv(Env):
             quantile=self.metrics_quantile,
             endpoints_method=self.metrics_endpoints_method,
         )
-        return cpu, memory, response_time
+        return cpu, memory, response_time, error_rate
 
-    def calculate_reward(self, action: int, response_time: float) -> float:
+    def calculate_reward(
+        self, action: int, response_time: float, error_rate: float
+    ) -> float:
         RESPONSE_TIME_HIGH_THRESHOLD = 80.0
         RESPONSE_TIME_VIOLATION_THRESHOLD = 100.0
 
@@ -208,6 +232,7 @@ class KubernetesEnv(Env):
         total_penalty = (
             self.weight_response_time * response_time_penalty
             + self.weight_cost * effective_cost_penalty
+            + self.weight_error_rate * error_rate
         )
         return 1.0 - total_penalty
 
@@ -240,6 +265,7 @@ class KubernetesEnv(Env):
         self,
         action: int,
         response_time: float,
+        error_rate: float,
         cpu_relative: float,
         memory_relative: float,
         cpu_distance: float,
@@ -261,11 +287,12 @@ class KubernetesEnv(Env):
                 cpu_distance,
                 memory_distance,
                 response_time,
+                error_rate,
             ],
             dtype=np.float32,
         )
 
-    def render(self) -> None:
+    def render(self) -> None:  # noqa: PLR0915
         def _color(v: float, warn: float, crit: float, reverse: bool = False) -> str:
             GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 
@@ -294,50 +321,55 @@ class KubernetesEnv(Env):
             except Exception:
                 return f"{v}"
 
-        action = int(self.observations[0] * 99)
-        cpu = self.observations[1] * 100.0
-        mem = self.observations[2] * 100.0
-        cpu_distance = self.observations[3]
-        mem_distance = self.observations[4]
-        rt = self.observations[5] * 100.0
+        if self.render_mode == "human":
+            action = int(self.observations[0] * 99)
+            cpu = self.observations[1] * 100.0
+            mem = self.observations[2] * 100.0
+            cpu_distance = self.observations[3]
+            mem_distance = self.observations[4]
+            rt = self.observations[5] * 100.0
+            err = self.observations[6] * 100.0
 
-        DIST_GREEN_LOWER_BOUND = -0.1
-        DIST_GREEN_UPPER_BOUND = 0.1
+            DIST_GREEN_LOWER_BOUND = -0.1
+            DIST_GREEN_UPPER_BOUND = 0.1
 
-        DIST_RED_LOWER_BOUND = -0.3
-        DIST_RED_UPPER_BOUND = 0.5
+            DIST_RED_LOWER_BOUND = -0.3
+            DIST_RED_UPPER_BOUND = 0.5
 
-        def _dist_color(dist: float) -> str:
-            GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
-            if DIST_GREEN_LOWER_BOUND <= dist <= DIST_GREEN_UPPER_BOUND:
-                return GREEN
-            if dist < DIST_RED_LOWER_BOUND or dist > DIST_RED_UPPER_BOUND:
-                return RED
-            return YELLOW
+            def _dist_color(dist: float) -> str:
+                GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+                if DIST_GREEN_LOWER_BOUND <= dist <= DIST_GREEN_UPPER_BOUND:
+                    return GREEN
+                if dist < DIST_RED_LOWER_BOUND or dist > DIST_RED_UPPER_BOUND:
+                    return RED
+                return YELLOW
 
-        cpu_col = _dist_color(cpu_distance)
-        mem_col = _dist_color(mem_distance)
-        rt_col = _color(rt, warn=80, crit=100)
+            cpu_col = _dist_color(cpu_distance)
+            mem_col = _dist_color(mem_distance)
+            rt_col = _color(rt, warn=80, crit=100)
+            err_col = _color(err, warn=10, crit=30)
 
-        cpu_bar = _bar(cpu)
-        mem_bar = _bar(mem)
-        rt_bar = _bar(min(rt, 200.0), width=12)
+            cpu_bar = _bar(cpu)
+            mem_bar = _bar(mem)
+            rt_bar = _bar(min(rt, 200.0), width=12)
+            err_bar = _bar(min(err, 100.0), width=12)
 
-        RESET = "\033[0m"
+            RESET = "\033[0m"
 
-        # line 1
-        hdr = "▶ "
-        cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
-        mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-        rt_str = f"{rt_col}RT {rt:6.1f}% {rt_bar}{RESET}"
-        act_str = f"ACT {action:3d}"
-        cpu_dist_str = f"CPU_D {cpu_distance:+7.3f}"
-        mem_dist_str = f"MEM_D {mem_distance:+7.3f}"
-        reward_str = f"RWD {self.last_reward:+6.3f}"
-        self.logger.info(
-            f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
-            f"{cpu_dist_str} | {mem_dist_str} | {act_str} | {reward_str} |"
-        )
+            # line 1
+            hdr = "▶ "
+            cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
+            mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
+            rt_str = f"{rt_col}RT {rt:6.1f}% {rt_bar}{RESET}"
+            err_str = f"{err_col}ERR {err:5.1f}% {err_bar}{RESET}"
+            act_str = f"ACT {action:3d}"
+            cpu_dist_str = f"CPU_D {cpu_distance:+7.3f}"
+            mem_dist_str = f"MEM_D {mem_distance:+7.3f}"
+            reward_str = f"RWD {self.last_reward:+6.3f}"
+            self.logger.info(
+                f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | {err_str} | "
+                f"{cpu_dist_str} | {mem_dist_str} | {act_str} | {reward_str} |"
+            )
 
     def reset(
         self,
@@ -351,7 +383,7 @@ class KubernetesEnv(Env):
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
         replica = min(replica, self.max_replicas)  # Safety clamp
 
-        cpu, memory, response_time = self.scale(replica)
+        cpu, memory, response_time, error_rate = self.scale(replica)
 
         cpu_relative, memory_relative, cpu_distance, memory_distance = (
             self.calculate_distance(cpu, memory)
@@ -360,6 +392,7 @@ class KubernetesEnv(Env):
         self.observations = self.observation(
             action=action,
             response_time=response_time,
+            error_rate=error_rate,
             cpu_relative=cpu_relative,
             memory_relative=memory_relative,
             cpu_distance=cpu_distance,
@@ -370,6 +403,7 @@ class KubernetesEnv(Env):
             "cpu": cpu,
             "memory": memory,
             "response_time": response_time,
+            "error_rate": error_rate,
             "replicas": replica,
             "action": action,
             "cpu_relative": cpu_relative,
@@ -377,7 +411,5 @@ class KubernetesEnv(Env):
             "cpu_distance": cpu_distance,
             "memory_distance": memory_distance,
         }
-
-        self.render()
 
         return self.observations, info

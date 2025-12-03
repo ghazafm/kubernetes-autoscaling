@@ -89,12 +89,27 @@ def _metrics_query(
                 )
                 )
             """)
+
+    error_rate_query = f"""
+        sum(rate(http_requests_total{{
+            namespace="{namespace}",
+            pod=~"{deployment_name}-.*",
+            http_status=~"5.."
+        }}[{interval}s]))
+        /
+        sum(rate(http_requests_total{{
+            namespace="{namespace}",
+            pod=~"{deployment_name}-.*"
+        }}[{interval}s]))
+        """
+
     return (
         cpu_query,
         memory_query,
         cpu_limits_query,
         memory_limits_query,
         response_time_query,
+        error_rate_query,
     )
 
 
@@ -105,6 +120,7 @@ def process_metrics(
     memory_limits,
     response_times,
     max_response_time,
+    error_rate,
 ):
     # Extract scalar values from quantile queries
     cpu_value = float(cpu_usage[0]["value"][1]) if cpu_usage else 0.0
@@ -128,10 +144,15 @@ def process_metrics(
     response_time_percentage = (response_time / max_response_time) * 100.0
     response_time_percentage = min(response_time_percentage, 1000.0)
 
+    error_rate_scale = float(error_rate[0]["value"][1]) if error_rate else 0.0
+    if np.isnan(error_rate_scale):
+        error_rate_scale = 0.0
+
     return (
         cpu_percentage,
         memory_percentage,
         response_time_percentage,
+        error_rate_scale,
     )
 
 
@@ -150,6 +171,7 @@ def get_metrics(
         cpu_limits_query,
         memory_limits_query,
         response_time_query,
+        error_rate_query,
     ) = _metrics_query(
         namespace,
         deployment_name,
@@ -162,6 +184,7 @@ def get_metrics(
     memory_usage_results = prometheus.custom_query(memory_query)
     cpu_limits_results = prometheus.custom_query(cpu_limits_query)
     memory_limits_results = prometheus.custom_query(memory_limits_query)
+    error_rate_results = prometheus.custom_query(error_rate_query)
 
     response_time_results = []
     for query in response_time_query:
@@ -172,13 +195,24 @@ def get_metrics(
 
         response_time_results.append(float(response[0]["value"][1]))
 
-    cpu_percentages, memory_percentages, response_time_percentage = process_metrics(
+    (
+        cpu_percentages,
+        memory_percentages,
+        response_time_percentage,
+        error_rate_scale,
+    ) = process_metrics(
         cpu_usage_results,
         memory_usage_results,
         cpu_limits_results,
         memory_limits_results,
         response_time_results,
         max_response_time,
+        error_rate_results,
     )
 
-    return cpu_percentages, memory_percentages, response_time_percentage
+    return (
+        cpu_percentages,
+        memory_percentages,
+        response_time_percentage,
+        error_rate_scale,
+    )
