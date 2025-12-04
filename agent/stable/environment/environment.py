@@ -115,7 +115,12 @@ class KubernetesEnv(Env):
             self.calculate_distance(cpu, memory)
         )
 
-        reward = self.calculate_reward(action=action, response_time=response_time)
+        reward = self.calculate_reward(
+            action=action,
+            cpu_distance=cpu_distance,
+            memory_distance=memory_distance,
+            response_time=response_time,
+        )
         self.last_reward = reward
 
         self.observations = self.observation(
@@ -212,7 +217,13 @@ class KubernetesEnv(Env):
         )
         return cpu, memory, response_time
 
-    def calculate_reward(self, action: int, response_time: float) -> float:
+    def calculate_reward(
+        self,
+        action: int,
+        cpu_distance: float,
+        memory_distance: float,
+        response_time: float,
+    ) -> float:
         RESPONSE_TIME_HIGH_THRESHOLD = 50.0
         RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
 
@@ -235,8 +246,10 @@ class KubernetesEnv(Env):
         cost_penalty_raw = action / 99.0
 
         rt_bad = response_time > RESPONSE_TIME_VIOLATION_THRESHOLD
+        cpu_bad = cpu_distance != 0.0
+        memory_bad = memory_distance != 0.0
 
-        if rt_bad:
+        if rt_bad or cpu_bad or memory_bad:
             cost_weight_multiplier = 0.0
         elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             cost_weight_multiplier = 1.0
