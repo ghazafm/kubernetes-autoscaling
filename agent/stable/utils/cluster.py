@@ -9,10 +9,11 @@ def wait_for_pods_ready(
     prometheus: PrometheusConnect,
     namespace: str,
     deployment_name: str,
+    replica: int,
     timeout: int,
     wait_time: int,
     logger: logging.Logger,
-):
+) -> tuple[bool, int, int, float]:
     start_time = time.time()
 
     scope_ready = f"""
@@ -41,7 +42,6 @@ def wait_for_pods_ready(
       scalar(sum({scope_ready}))
     """
 
-    # Initialize with defaults to avoid UnboundLocalError
     desired = 0.0
     ready = 0.0
 
@@ -49,8 +49,6 @@ def wait_for_pods_ready(
         desired_result = prometheus.custom_query(q_desired)
         ready_result = prometheus.custom_query(query=q_ready)
 
-        # Prometheus scalar results are [timestamp, 'value_string']
-        # Convert to float for proper numeric comparison
         try:
             desired = float(desired_result[1]) if desired_result else 0.0
             ready = float(ready_result[1]) if ready_result else 0.0
@@ -58,6 +56,9 @@ def wait_for_pods_ready(
             logger.warning(f"Error parsing Prometheus result: {e}")
             time.sleep(1)
             continue
+
+        if desired != replica:
+            return False, int(desired), int(ready), time.time() - start_time
 
         if np.isnan(desired):
             logger.debug("Desired replicas returned NaN, waiting for metrics...")
@@ -72,7 +73,6 @@ def wait_for_pods_ready(
         logger.debug(f"Waiting for pods to be ready: {ready}/{desired}")
         time.sleep(1)
     time.sleep(wait_time)
-    # Final NaN check before returning
     if np.isnan(desired):
         desired = 0.0
     if np.isnan(ready):

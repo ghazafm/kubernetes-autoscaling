@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
     eval_env = KubernetesEnv(
         min_replicas=int(os.getenv("MIN_REPLICAS")),
-        max_replicas=int(os.getenv("MAX_REPLICAS")) - 10,
+        max_replicas=min(int(os.getenv("MAX_REPLICAS")) / 2, 1),
         iteration=iteration,
         namespace=os.getenv("NAMESPACE"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
@@ -78,7 +78,7 @@ if __name__ == "__main__":
         logger=logger,
         influxdb=influxdb,
         prometheus_url=os.getenv("PROMETHEUS_URL"),
-        metrics_endpoints_method=[("/", "GET"), ("/docs", "GET")],
+        metrics_endpoints_method=metrics_endpoints_method,
         metrics_interval=int(os.getenv("METRICS_INTERVAL")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE")),
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES")),

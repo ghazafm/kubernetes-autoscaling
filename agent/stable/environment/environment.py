@@ -189,14 +189,18 @@ class KubernetesEnv(Env):
                 else:
                     time.sleep(delay)
 
-        wait_for_pods_ready(
-            prometheus=self.prometheus,
-            deployment_name=self.deployment_name,
-            namespace=self.namespace,
-            timeout=self.timeout,
-            wait_time=self.wait_time,
-            logger=self.logger,
-        )
+            ready, _, _, _ = wait_for_pods_ready(
+                prometheus=self.prometheus,
+                deployment_name=self.deployment_name,
+                namespace=self.namespace,
+                timeout=self.timeout,
+                wait_time=self.wait_time,
+                logger=self.logger,
+            )
+            if ready:
+                break
+            time.sleep(delay)
+
         cpu, memory, response_time = get_metrics(
             prometheus=self.prometheus,
             namespace=self.namespace,

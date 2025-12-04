@@ -107,19 +107,16 @@ def process_metrics(
     response_times,
     max_response_time,
 ):
-    # Extract scalar values from quantile queries
     cpu_value = float(cpu_usage[0]["value"][1]) if cpu_usage else 0.0
     memory_value = float(memory_usage[0]["value"][1]) if memory_usage else 0.0
     cpu_limit = float(cpu_limits[0]["value"][1]) if cpu_limits else 0.0
     memory_limit = float(memory_limits[0]["value"][1]) if memory_limits else 0.0
 
-    # Handle NaN
     if np.isnan(cpu_value):
         cpu_value = 0.0
     if np.isnan(memory_value):
         memory_value = 0.0
 
-    # Calculate percentages
     cpu_percentage = (cpu_value / cpu_limit * 100) if cpu_limit > 0 else 0.0
     memory_percentage = (memory_value / memory_limit * 100) if memory_limit > 0 else 0.0
 
