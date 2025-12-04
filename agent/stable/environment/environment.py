@@ -246,8 +246,8 @@ class KubernetesEnv(Env):
         cost_penalty_raw = action / 99.0
 
         rt_bad = response_time > RESPONSE_TIME_VIOLATION_THRESHOLD
-        cpu_bad = cpu_distance != 0.0
-        memory_bad = memory_distance != 0.0
+        cpu_bad = cpu_distance > 0.0
+        memory_bad = memory_distance > 0.0
 
         if rt_bad or cpu_bad or memory_bad:
             cost_weight_multiplier = 0.0
