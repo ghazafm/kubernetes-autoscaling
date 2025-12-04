@@ -161,7 +161,7 @@ if __name__ == "__main__":
         best_model_save_path=str(model_dir / "best_model"),
         log_path=str(model_dir / "eval_logs"),
         eval_freq=iteration,
-        n_eval_episodes=3,
+        n_eval_episodes=1,
         deterministic=True,
         render=False,
     )
