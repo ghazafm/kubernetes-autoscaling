@@ -192,6 +192,7 @@ class KubernetesEnv(Env):
                 prometheus=self.prometheus,
                 deployment_name=self.deployment_name,
                 namespace=self.namespace,
+                replica=replica,
                 timeout=self.timeout,
                 wait_time=self.wait_time,
                 logger=self.logger,
