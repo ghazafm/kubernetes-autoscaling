@@ -57,15 +57,16 @@ def wait_for_pods_ready(
             time.sleep(1)
             continue
 
-        if desired != replica:
-            return False, int(desired), int(ready), time.time() - start_time
-
+        # Handle NaN values before any comparisons
         if np.isnan(desired):
             logger.debug("Desired replicas returned NaN, waiting for metrics...")
             time.sleep(1)
             continue
         if np.isnan(ready):
             ready = 0.0
+
+        if int(desired) != replica:
+            return False, int(desired), int(ready), time.time() - start_time
 
         if ready == desired and desired > 0:
             time.sleep(wait_time)
