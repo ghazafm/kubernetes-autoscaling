@@ -181,7 +181,6 @@ class KubernetesEnv(Env):
                     namespace=self.namespace,
                     body={"spec": {"replicas": replica}},
                 )
-                break
             except Exception as e:
                 self.logger.warning(f"Scale attempt {attempt} failed: {e}")
                 if attempt >= self.max_scaling_retries:
@@ -198,8 +197,8 @@ class KubernetesEnv(Env):
                 logger=self.logger,
             )
             if ready:
+                time.sleep(delay)
                 break
-            time.sleep(delay)
 
         cpu, memory, response_time = get_metrics(
             prometheus=self.prometheus,

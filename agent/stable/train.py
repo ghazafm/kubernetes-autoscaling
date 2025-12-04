@@ -85,7 +85,8 @@ if __name__ == "__main__":
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME")),
         weight_cost=float(os.getenv("WEIGHT_COST")),
         render_mode="human",
-        csv_log_dir=None,
+        csv_log_dir=csv_log_dir,
+        csv_log_prefix=f"{now}_{note}_eval",
     )
 
     # Training configuration
