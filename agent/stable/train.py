@@ -109,9 +109,11 @@ if __name__ == "__main__":
             tensorboard_log=log_dir,
             device="auto",
         )
+
         model.exploration_fraction = 0.4
         model.exploration_initial_eps = 1.0
         model.exploration_final_eps = 0.1
+        model.exploration_rate = 1.0
 
         current_timesteps = model.num_timesteps
         logger.info(f"Loaded model at timestep: {current_timesteps}")
