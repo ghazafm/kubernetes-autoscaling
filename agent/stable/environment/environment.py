@@ -86,7 +86,6 @@ class KubernetesEnv(Env):
 
         self.weight_response_time = weight_response_time
         self.weight_cost = weight_cost
-        self.max_response_penalty = 3.0
 
         self.observations = np.array(
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -110,6 +109,29 @@ class KubernetesEnv(Env):
         prev_obs = self.observations.copy()
 
         cpu, memory, response_time = self.scale(replica)
+
+        RT_STALE_THRESHOLD = 0.3
+        is_stale = cpu <= 0.0 and memory <= 0.0 and prev_obs[5] >= RT_STALE_THRESHOLD
+
+        if is_stale:
+            prev_action = prev_obs[0]
+            current_action = action / 99.0
+            action_change = current_action - prev_action
+
+            prev_cpu_rel = prev_obs[1]
+            prev_mem_rel = prev_obs[2]
+
+            cpu_bandwidth = self.max_cpu - self.min_cpu
+            mem_bandwidth = self.max_memory - self.min_memory
+            prev_cpu = prev_cpu_rel * cpu_bandwidth + self.min_cpu
+            prev_mem = prev_mem_rel * mem_bandwidth + self.min_memory
+
+            scale_factor = 0.5
+            cpu = prev_cpu * (1 - action_change * scale_factor)
+            memory = prev_mem * (1 - action_change * scale_factor)
+
+            cpu = max(0.01, cpu)
+            memory = max(0.01, memory)
 
         cpu_relative, memory_relative, cpu_distance, memory_distance = (
             self.calculate_distance(cpu, memory)
@@ -239,9 +261,7 @@ class KubernetesEnv(Env):
             ) / RESPONSE_TIME_VIOLATION_THRESHOLD
             response_time_penalty = 1.0 + over
 
-        response_time_penalty = max(
-            0.0, min(response_time_penalty, self.max_response_penalty)
-        )
+        # No upper clamp - let penalty grow with RT violation severity
 
         cost_penalty_raw = action / 99.0
 
@@ -254,9 +274,7 @@ class KubernetesEnv(Env):
         elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             cost_weight_multiplier = 1.0
         else:
-            cost_weight_multiplier = 1.0 - (
-                response_time_penalty / self.max_response_penalty
-            )
+            cost_weight_multiplier = 1.0 - response_time_penalty
 
         effective_cost_penalty = cost_penalty_raw * cost_weight_multiplier
 
