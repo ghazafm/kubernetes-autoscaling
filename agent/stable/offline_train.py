@@ -44,7 +44,15 @@ def load_csv_data(csv_paths: list[str]) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
-def populate_replay_buffer(model: DQN, df: pd.DataFrame, env: OfflineEnv):
+def populate_replay_buffer(
+    model: DQN,
+    df: pd.DataFrame,
+    env: OfflineEnv,
+    min_cpu: float,
+    max_cpu: float,
+    min_memory: float,
+    max_memory: float,
+):
     """Add transitions from DataFrame to replay buffer, recalculating rewards."""
     obs_cols = [
         "obs_action",
@@ -54,27 +62,76 @@ def populate_replay_buffer(model: DQN, df: pd.DataFrame, env: OfflineEnv):
         "obs_memory_distance",
         "obs_response_time",
     ]
-    next_obs_cols = [
-        "next_obs_action",
-        "next_obs_cpu_relative",
-        "next_obs_memory_relative",
-        "next_obs_cpu_distance",
-        "next_obs_memory_distance",
-        "next_obs_response_time",
-    ]
+
+    cpu_bandwidth = max_cpu - min_cpu
+    mem_bandwidth = max_memory - min_memory
 
     for _, row in df.iterrows():
         obs = np.array([row[c] for c in obs_cols], dtype=np.float32)
-        next_obs = np.array([row[c] for c in next_obs_cols], dtype=np.float32)
         action = int(row["action"])
         terminated = bool(row["terminated"])
         truncated = bool(row["truncated"])
+        response_time = float(row["response_time"])
 
+        # Get raw cpu/memory from CSV
+        cpu = float(row["cpu"])
+        memory = float(row["memory"])
+
+        # Stale data handling - recalculate cpu/memory if stale
+        RT_STALE_THRESHOLD = 0.3
+        is_stale = cpu <= 0.0 and memory <= 0.0 and obs[5] >= RT_STALE_THRESHOLD
+
+        if is_stale:
+            prev_action = obs[0]
+            current_action = action / 99.0
+            action_change = current_action - prev_action
+
+            prev_cpu = obs[1] * cpu_bandwidth + min_cpu
+            prev_mem = obs[2] * mem_bandwidth + min_memory
+
+            scale_factor = 0.5
+            cpu = prev_cpu * (1 - action_change * scale_factor)
+            memory = prev_mem * (1 - action_change * scale_factor)
+
+            cpu = max(0.01, cpu)
+            memory = max(0.01, memory)
+
+        # Recalculate distance with corrected cpu/memory
+        if cpu < min_cpu:
+            cpu_distance = (cpu - min_cpu) / cpu_bandwidth
+        elif cpu > max_cpu:
+            cpu_distance = (cpu - max_cpu) / cpu_bandwidth
+        else:
+            cpu_distance = 0.0
+
+        if memory < min_memory:
+            memory_distance = (memory - min_memory) / mem_bandwidth
+        elif memory > max_memory:
+            memory_distance = (memory - max_memory) / mem_bandwidth
+        else:
+            memory_distance = 0.0
+
+        # Recalculate reward
         reward = env.calculate_reward(
             action=action,
-            cpu_distance=float(row["cpu_distance"]),
-            memory_distance=float(row["memory_distance"]),
-            response_time=float(row["response_time"]),
+            cpu_distance=cpu_distance,
+            memory_distance=memory_distance,
+            response_time=response_time,
+        )
+
+        # Recalculate next_obs with corrected values
+        cpu_relative = np.clip((cpu - min_cpu) / cpu_bandwidth, 0.0, 1.0)
+        memory_relative = np.clip((memory - min_memory) / mem_bandwidth, 0.0, 1.0)
+        next_obs = np.array(
+            [
+                action / 99.0,
+                cpu_relative,
+                memory_relative,
+                np.clip(cpu_distance, -2.0, 2.0),
+                np.clip(memory_distance, -2.0, 2.0),
+                np.clip(response_time / 100.0, 0.0, 3.0),
+            ],
+            dtype=np.float32,
         )
 
         model.replay_buffer.add(
@@ -108,6 +165,13 @@ if __name__ == "__main__":
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME", "1.0")),
         weight_cost=float(os.getenv("WEIGHT_COST", "1.0")),
     )
+
+    # CPU/memory bounds for stale data recalculation
+    min_cpu = float(os.getenv("MIN_CPU", "20.0"))
+    max_cpu = float(os.getenv("MAX_CPU", "80.0"))
+    min_memory = float(os.getenv("MIN_MEMORY", "20.0"))
+    max_memory = float(os.getenv("MAX_MEMORY", "60.0"))
+
     note = os.getenv("NOTE", "offline")
     model_dir = Path(f"model/{now}_{note}")
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -133,8 +197,8 @@ if __name__ == "__main__":
         device="auto",
     )
 
-    logger.info("Populating replay buffer...")
-    populate_replay_buffer(model, df, env)
+    logger.info("Populating replay buffer with stale data correction...")
+    populate_replay_buffer(model, df, env, min_cpu, max_cpu, min_memory, max_memory)
     logger.info(f"Replay buffer size: {model.replay_buffer.size()}")
 
     train_steps = int(os.getenv("TRAIN_STEPS", len(df) * 10))
