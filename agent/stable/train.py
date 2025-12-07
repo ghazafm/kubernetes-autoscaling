@@ -12,6 +12,7 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
     EvalCallback,
 )
+from stable_baselines3.common.utils import LinearSchedule
 from utils import setup_logger
 
 load_dotenv()
@@ -64,7 +65,7 @@ if __name__ == "__main__":
 
     eval_env = KubernetesEnv(
         min_replicas=int(os.getenv("MIN_REPLICAS")),
-        max_replicas=min(int(os.getenv("MAX_REPLICAS")) / 2, 1),
+        max_replicas=max(int(os.getenv("MAX_REPLICAS")) // 2, 1),
         iteration=iteration,
         namespace=os.getenv("NAMESPACE"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
@@ -110,20 +111,36 @@ if __name__ == "__main__":
             device="auto",
         )
 
+        old_timesteps = model.num_timesteps
+        logger.info(f"Loaded model from timestep: {old_timesteps}")
+
         model.exploration_fraction = 0.4
         model.exploration_initial_eps = 1.0
         model.exploration_final_eps = 0.1
-        model.exploration_rate = 1.0
 
-        current_timesteps = model.num_timesteps
-        logger.info(f"Loaded model at timestep: {current_timesteps}")
+        model.exploration_schedule = LinearSchedule(
+            model.exploration_initial_eps,
+            model.exploration_final_eps,
+            model.exploration_fraction,
+        )
+
+        model.num_timesteps = 0
+        model._n_calls = 0
+        model.exploration_rate = model.exploration_initial_eps
+
+        logger.info(
+            f"Reset exploration schedule: "
+            f"fraction={model.exploration_fraction}, "
+            f"initial_eps={model.exploration_initial_eps}, "
+            f"final_eps={model.exploration_final_eps}"
+        )
         logger.info(f"Current exploration_rate: {model.exploration_rate:.3f}")
 
         additional_timesteps = num_episodes * iteration
-        total_timesteps = current_timesteps + additional_timesteps
+        total_timesteps = additional_timesteps
 
-        logger.info(f"Will train for {additional_timesteps} additional steps")
-        logger.info(f"Total timesteps target: {total_timesteps}")
+        logger.info(f"Will train for {additional_timesteps} steps (fresh exploration)")
+        logger.info(f"Model weights from {old_timesteps} offline steps are preserved")
 
     else:
         model_dir = Path(f"model/{now}_{note}")
