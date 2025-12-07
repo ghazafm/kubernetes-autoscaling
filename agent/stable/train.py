@@ -12,6 +12,7 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
     EvalCallback,
 )
+from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import LinearSchedule
 from utils import setup_logger
 
@@ -89,6 +90,7 @@ if __name__ == "__main__":
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}_eval",
     )
+    eval_env = Monitor(eval_env)
 
     # Training configuration
     BASE_EPISODES = 10
