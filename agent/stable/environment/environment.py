@@ -16,26 +16,26 @@ class KubernetesEnv(Env):
 
     def __init__(  # noqa: PLR0913
         self,
-        min_replicas: int,
-        max_replicas: int,
-        iteration: int,
         namespace: str,
         deployment_name: str,
+        min_replicas: int,
+        max_replicas: int,
         min_cpu: float,
         min_memory: float,
         max_cpu: float,
         max_memory: float,
         max_response_time: float,
+        iteration: int,
         timeout: int,
         wait_time: int,
-        logger: Optional[logging.Logger],
-        influxdb: Optional[InfluxDB],
         prometheus_url: str,
         metrics_interval: int,
         metrics_quantile: float,
         max_scaling_retries: int,
         weight_response_time: float,
         weight_cost: float,
+        logger: Optional[logging.Logger],
+        influxdb: Optional[InfluxDB],
         metrics_endpoints_method: list[tuple[str, str]] = (
             ("/cpu", "GET"),
             ("/memory", "GET"),
@@ -112,28 +112,22 @@ class KubernetesEnv(Env):
 
         cpu, memory, response_time = self.scale(replica)
 
+        # kenapa digunakan response time sebelumnya?
+        # karena ada kemungkinan response time sekarang
+        # juga bernilai 0.0 karena pod belum siap
         RT_STALE_THRESHOLD = 0.3
-        is_stale = cpu <= 0.0 and memory <= 0.0 and prev_obs[5] >= RT_STALE_THRESHOLD
+        missing_cpu = cpu <= 0.0
+        missing_mem = memory <= 0.0
+        is_broken = (missing_cpu or missing_mem) and prev_obs[5] >= RT_STALE_THRESHOLD
 
-        if is_stale:
-            prev_action = prev_obs[0]
-            current_action = action / 99.0
-            action_change = current_action - prev_action
-
-            prev_cpu_rel = prev_obs[1]
-            prev_mem_rel = prev_obs[2]
-
-            cpu_bandwidth = self.max_cpu - self.min_cpu
-            mem_bandwidth = self.max_memory - self.min_memory
-            prev_cpu = prev_cpu_rel * cpu_bandwidth + self.min_cpu
-            prev_mem = prev_mem_rel * mem_bandwidth + self.min_memory
-
-            scale_factor = 0.5
-            cpu = prev_cpu * (1 - action_change * scale_factor)
-            memory = prev_mem * (1 - action_change * scale_factor)
-
-            cpu = max(0.01, cpu)
-            memory = max(0.01, memory)
+        if is_broken:
+            cpu, memory, response_time = self._estimate_missing_metrics(
+                prev_obs=prev_obs,
+                action=action,
+                cpu=cpu,
+                memory=memory,
+                response_time=response_time,
+            )
 
         cpu_relative, memory_relative, cpu_distance, memory_distance = (
             self.calculate_distance(cpu, memory)
@@ -239,6 +233,61 @@ class KubernetesEnv(Env):
             quantile=self.metrics_quantile,
             endpoints_method=self.metrics_endpoints_method,
         )
+        return cpu, memory, response_time
+
+    def estimate_metrics(
+        self,
+        prev_obs,
+        action: int,
+        cpu: float,
+        memory: float,
+        response_time: float,
+    ) -> tuple[float, float, float]:
+        prev_action = prev_obs[0]
+        current_action = action / 99.0
+        action_change = current_action - prev_action
+
+        prev_cpu_rel = prev_obs[1]
+        prev_mem_rel = prev_obs[2]
+
+        cpu_bandwidth = self.max_cpu - self.min_cpu
+        mem_bandwidth = self.max_memory - self.min_memory
+        prev_cpu = prev_cpu_rel * cpu_bandwidth + self.min_cpu
+        prev_mem = prev_mem_rel * mem_bandwidth + self.min_memory
+        prev_rt = float(prev_obs[5]) * 100.0
+
+        scale_factor = 0.5
+
+        missing_cpu = cpu <= 0.0
+        missing_mem = memory <= 0.0
+        missing_rt = response_time <= 0.0
+
+        if missing_cpu:
+            cpu = prev_cpu * (1 - action_change * scale_factor)
+            cpu = max(0.01, cpu)
+
+        if missing_mem:
+            memory = prev_mem * (1 - action_change * scale_factor)
+            memory = max(0.01, memory)
+
+        if missing_rt:
+            response_time = prev_rt * (1 - action_change * scale_factor)
+            response_time = float(np.clip(response_time, 0.01, 1000.0))
+
+        if self.logger:
+            est_parts: list[str] = []
+            if missing_cpu:
+                est_parts.append(f"cpu={cpu:.1f}%")
+            if missing_mem:
+                est_parts.append(f"mem={memory:.1f}%")
+            if missing_rt:
+                est_parts.append(f"rt={response_time:.1f}%")
+
+            self.logger.info(
+                "Metrics missing — estimated: %s",
+                ", ".join(est_parts) if est_parts else "(none)",
+            )
+
         return cpu, memory, response_time
 
     def calculate_reward(

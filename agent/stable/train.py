@@ -1,5 +1,6 @@
 import ast
 import os
+import pickle
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import LinearSchedule
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from utils import setup_logger
 
 load_dotenv()
@@ -112,6 +114,44 @@ if __name__ == "__main__":
             tensorboard_log=log_dir,
             device="auto",
         )
+
+        try:
+            checkpoints_dir = resume_model_path.parent.parent / "checkpoints"
+            if checkpoints_dir.exists():
+                vec_files = list(checkpoints_dir.glob("*vecnormalize*"))
+                if vec_files:
+                    venv = DummyVecEnv([lambda: env])
+                    vec_path = str(vec_files[-1])
+                    vecnorm = VecNormalize.load(vec_path, venv)
+                    model.set_env(vecnorm)
+                    env = vecnorm
+                    logger.info(f"Loaded VecNormalize from {vec_path}")
+        except Exception as e:
+            logger.warning(f"Could not restore VecNormalize: {e}")
+
+        # Attempt to load replay buffer (best-effort). SB3 provides
+        # load_replay_buffer in some versions; otherwise try unpickling.
+        try:
+            if checkpoints_dir.exists():
+                replay_candidates = list(checkpoints_dir.glob("*replay*"))
+            else:
+                replay_candidates = []
+
+            if replay_candidates:
+                replay_path = str(replay_candidates[-1])
+                try:
+                    model.load_replay_buffer(replay_path)
+                    logger.info(f"Loaded replay buffer from {replay_path}")
+                except AttributeError:
+                    with Path(replay_path).open("rb") as fh:
+                        buf = pickle.load(fh)  # noqa: S301
+                    try:
+                        model.replay_buffer = buf
+                        logger.info(f"Assigned replay buffer from {replay_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to assign replay buffer: {e}")
+        except Exception as e:
+            logger.warning(f"Could not load replay buffer: {e}")
 
         old_timesteps = model.num_timesteps
         logger.info(f"Loaded model from timestep: {old_timesteps}")
