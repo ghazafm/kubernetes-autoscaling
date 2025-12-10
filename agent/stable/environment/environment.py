@@ -121,7 +121,7 @@ class KubernetesEnv(Env):
         is_broken = (missing_cpu or missing_mem) and prev_obs[5] >= RT_STALE_THRESHOLD
 
         if is_broken:
-            cpu, memory, response_time = self._estimate_missing_metrics(
+            cpu, memory, response_time = self.estimate_metrics(
                 prev_obs=prev_obs,
                 action=action,
                 cpu=cpu,
@@ -504,5 +504,16 @@ class KubernetesEnv(Env):
         }
 
         self.csv_logger.on_reset(self.observations, info)
+        if self.influxdb:
+            self.influxdb.write_point(
+                measurement="autoscaling_metrics",
+                tags={
+                    "namespace": self.namespace,
+                    "deployment": self.deployment_name,
+                },
+                fields={**info},
+            )
+
+        self.render()
 
         return self.observations, info
