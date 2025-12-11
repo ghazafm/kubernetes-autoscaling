@@ -14,6 +14,7 @@ NC='\033[0m' # No Color
 
 # Optional: support a test env file when caller passes --test as first arg
 # Usage: ./run-k6.sh --test training
+export PATH="$PWD:$PATH"
 TEST_ENV_FILE=""
 if [ "$1" = "--test" ]; then
     TEST_ENV_FILE=".env.test"
@@ -120,9 +121,60 @@ run_test() {
     k6_cmd="$k6_cmd --env MIN_REPLICAS=\"$MIN_REPLICAS\""
     k6_cmd="$k6_cmd --env REQUESTS_PER_POD=\"$REQUESTS_PER_POD\""
 
+    # --- InfluxDB output support ---
+    # Two modes supported:
+    # 1) InfluxDB v1 (default k6 core): set INFLUXDB_URL and INFLUXDB_DB
+    #    e.g. INFLUXDB_URL=http://localhost:8086 INFLUXDB_DB=myk6db
+    #    The script will append: --out influxdb=http://localhost:8086/myk6db
+    # 2) InfluxDB v2 using xk6-influxdb extension: set INFLUXDB_V2=true and provide
+    #    K6_INFLUXDB_ADDR/K6_INFLUXDB_BUCKET/K6_INFLUXDB_TOKEN/K6_INFLUXDB_ORGANIZATION
+    #    or INFLUXDB_URL/INFLUXDB_BUCKET/INFLUXDB_TOKEN/INFLUXDB_ORG. The script will
+    #    set the K6_INFLUXDB_* env vars and append: -o xk6-influxdb=http://host:8086
+
+    if [ -n "$INFLUXDB_URL" ] && [ -n "$INFLUXDB_DB" ] && [ -z "$INFLUXDB_V2" ]; then
+        echo -e "${BLUE}Sending k6 metrics to InfluxDB v1 at ${INFLUXDB_URL}/${INFLUXDB_DB}${NC}"
+        k6_cmd="$k6_cmd --out influxdb=${INFLUXDB_URL}/${INFLUXDB_DB}"
+    elif [ "${INFLUXDB_V2:-}" = "true" ] || [ -n "${K6_INFLUXDB_TOKEN:-}" ] || [ -n "${INFLUXDB_TOKEN:-}" ]; then
+        echo ${INFLUXDB_TOKEN}
+        # Prefer explicit K6_ vars if present, otherwise fall back to INFLUXDB_* aliases
+        export K6_INFLUXDB_ADDR=${K6_INFLUXDB_ADDR:-${INFLUXDB_URL:-http://localhost:8086}}
+        export K6_INFLUXDB_BUCKET=${K6_INFLUXDB_BUCKET:-${INFLUXDB_BUCKET:-}}
+        export K6_INFLUXDB_ORGANIZATION=${K6_INFLUXDB_ORGANIZATION:-${INFLUXDB_ORG:-}}
+        export K6_INFLUXDB_TOKEN=${K6_INFLUXDB_TOKEN:-${INFLUXDB_TOKEN:-}}
+
+        echo -e "${BLUE}Sending k6 metrics to InfluxDB v2 at ${K6_INFLUXDB_ADDR} using xk6-influxdb (ensure k6 was built with the extension)${NC}"
+
+        # Preflight: verify we can write to the configured bucket (helps catch 403 permission errors)
+        if [ -n "${K6_INFLUXDB_BUCKET:-}" ] && [ -n "${K6_INFLUXDB_ORGANIZATION:-}" ] && [ -n "${K6_INFLUXDB_TOKEN:-}" ]; then
+            echo -e "${BLUE}Verifying InfluxDB write access to bucket '${K6_INFLUXDB_BUCKET}' (org: ${K6_INFLUXDB_ORGANIZATION})...${NC}"
+            # Attempt a single lightweight line-protocol write (do not expose token in output)
+            http_status=$(curl -s -o /dev/null -w "%{http_code}" -XPOST "${K6_INFLUXDB_ADDR}/api/v2/write?org=${K6_INFLUXDB_ORGANIZATION}&bucket=${K6_INFLUXDB_BUCKET}&precision=ns" -H "Authorization: Token ${K6_INFLUXDB_TOKEN}" --data-binary "k6_preflight value=1")
+
+            if [ "${http_status}" != "204" ]; then
+                echo -e "${RED}Error: InfluxDB write preflight failed (HTTP ${http_status}). This usually means the bucket does not exist or the token lacks WRITE permission for that bucket.${NC}"
+                echo -e "${YELLOW}Suggestions:${NC}"
+                echo "  - Ensure bucket '${K6_INFLUXDB_BUCKET}' exists in org '${K6_INFLUXDB_ORGANIZATION}'."
+                echo "  - Ensure the token (K6_INFLUXDB_TOKEN / INFLUXDB_TOKEN) has WRITE permission scoped to that bucket."
+                echo "  - Quick test (replace <TOKEN> if needed):"
+                echo -e "    ${GREEN}curl -i -XPOST \"${K6_INFLUXDB_ADDR}/api/v2/write?org=${K6_INFLUXDB_ORGANIZATION}&bucket=${K6_INFLUXDB_BUCKET}&precision=ns\" -H \"Authorization: Token <TOKEN>\" --data-binary \"k6_check value=1\"${NC}"
+                echo -e "${RED}Aborting test run to avoid generating lots of 403 errors.${NC}"
+                return 1
+            else
+                echo -e "${GREEN}InfluxDB write preflight successful (HTTP 204). Continuing...${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Warning: InfluxDB v2 configured but bucket/org/token not fully set. Skipping preflight check.${NC}"
+        fi
+
+        # Use xk6-influxdb output identifier
+        k6_cmd="$k6_cmd -o xk6-influxdb=${K6_INFLUXDB_ADDR}"
+    else
+        # No InfluxDB configuration detected; continue without outputs
+        :
+    fi
+
     k6_cmd="$k6_cmd \"$test_file\""
 
-    # Execute command
     eval $k6_cmd
 
     local exit_code=$?

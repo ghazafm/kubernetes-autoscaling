@@ -434,3 +434,62 @@ For issues or improvements:
 ---
 
 **Happy Training! 🚀🤖**
+
+---
+
+## 📥 Sending k6 metrics to InfluxDB
+
+The test runner (`run-k6.sh`) can send k6 metrics directly to InfluxDB. There are two supported modes:
+
+1) InfluxDB v1 (built-in k6 support)
+
+- Set the following environment variables (or add them to `.env`):
+  ```bash
+  INFLUXDB_URL=http://localhost:8086
+  INFLUXDB_DB=k6_results
+  ```
+- The runner will append `--out influxdb=${INFLUXDB_URL}/${INFLUXDB_DB}` to the k6 command and k6 will write results in real-time.
+
+2) InfluxDB v2 (requires xk6-influxdb extension)
+
+- Build k6 with the `xk6-output-influxdb` extension (xk6) or use the provided docker image that includes it. Example build:
+  ```bash
+  go install go.k6.io/xk6/cmd/xk6@latest
+  xk6 build --with github.com/grafana/xk6-output-influxdb
+  export PATH="$PWD:$PATH"
+  ```
+- Provide v2 credentials (or add to `.env`):
+  ```bash
+  INFLUXDB_V2=true
+  INFLUXDB_URL=http://localhost:8086
+  INFLUXDB_BUCKET=my-bucket
+  INFLUXDB_TOKEN=<your-token>
+  INFLUXDB_ORG=<your-org>
+  ```
+- The runner will set `K6_INFLUXDB_*` env vars and use the `-o xk6-influxdb=...` output flag.
+
+Example: Run training and push to InfluxDB v1
+```bash
+# copy example env
+cp .env.example .env
+# edit .env and set INFLUXDB_URL and INFLUXDB_DB
+./run-k6.sh training
+```
+
+Example: Run using InfluxDB v2 (xk6)
+```bash
+# ensure k6 binary has xk6-influxdb
+export INFLUXDB_V2=true
+export INFLUXDB_URL=http://localhost:8086
+export INFLUXDB_BUCKET=my-bucket
+export INFLUXDB_TOKEN=<your-token>
+./run-k6.sh training
+```
+
+Notes:
+- For v2 you must use a k6 binary built with the `xk6-output-influxdb` extension (or a docker image that contains it).
+- The runner will prefer v1 mode when `INFLUXDB_URL`+`INFLUXDB_DB` are set and `INFLUXDB_V2` is not `true`.
+- Multiple outputs are supported by k6; you can still create local JSON summaries while streaming to InfluxDB.
+
+If you'd like, I can also add a small docker-compose example (k6 + InfluxDB + Grafana) under `test/` to make local testing turnkey.
+

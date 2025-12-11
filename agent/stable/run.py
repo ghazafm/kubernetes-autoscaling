@@ -11,7 +11,7 @@ from environment import KubernetesEnv
 from stable_baselines3 import DQN
 from utils import setup_logger
 
-load_dotenv()
+load_dotenv(".env.test")
 
 # Graceful shutdown using threading Event
 shutdown_event = threading.Event()
