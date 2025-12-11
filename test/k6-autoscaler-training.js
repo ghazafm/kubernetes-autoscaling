@@ -132,7 +132,7 @@ const basePattern = [
 
   // ===== PHASE 10: GRACEFUL SHUTDOWN =====
   { duration: scaleDuration(1), target: VU_WARMUP },       // Final users
-  { duration: scaleDuration(0.5), target: 0 },             // Complete ramp down
+  { duration: scaleDuration(2), target: 0 },             // Complete ramp down
 ];
 
 // Generate stages by repeating the pattern
