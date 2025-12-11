@@ -5,17 +5,7 @@ import numpy as np
 from prometheus_api_client import PrometheusConnect
 
 
-def wait_for_pods_ready(
-    prometheus: PrometheusConnect,
-    namespace: str,
-    deployment_name: str,
-    replica: int,
-    timeout: int,
-    wait_time: int,
-    logger: logging.Logger,
-) -> tuple[bool, int, int, float]:
-    start_time = time.time()
-
+def generate_query(namespace: str, deployment_name: str) -> tuple[str, str, str]:
     scope_ready = f"""
         (kube_pod_status_ready{{namespace="{namespace}", condition="true"}} == 1)
         and on(pod)
@@ -41,6 +31,20 @@ def wait_for_pods_ready(
     q_ready = f"""
       scalar(sum({scope_ready}))
     """
+    return q_desired, q_ready
+
+
+def wait_for_pods_ready(
+    prometheus: PrometheusConnect,
+    namespace: str,
+    deployment_name: str,
+    replica: int,
+    timeout: int,
+    wait_time: int,
+    logger: logging.Logger,
+) -> tuple[bool, int, int, float]:
+    start_time = time.time()
+    q_desired, q_ready = generate_query(namespace, deployment_name)
 
     desired = 0.0
     ready = 0.0
@@ -79,3 +83,27 @@ def wait_for_pods_ready(
     if np.isnan(ready):
         ready = 0.0
     return False, int(desired), int(ready), time.time() - start_time
+
+
+def get_replica(
+    prometheus: PrometheusConnect,
+    namespace: str,
+    deployment_name: str,
+    wait_time: int,
+) -> tuple[int, int]:
+    q_desired, q_ready = generate_query(namespace, deployment_name)
+
+    desired = 0.0
+    ready = 0.0
+
+    desired_result = prometheus.custom_query(q_desired)
+    ready_result = prometheus.custom_query(query=q_ready)
+    desired = float(desired_result[1]) if desired_result else 0.0
+    ready = float(ready_result[1]) if ready_result else 0.0
+
+    time.sleep(wait_time)
+    if np.isnan(desired):
+        desired = 0.0
+    if np.isnan(ready):
+        ready = 0.0
+    return int(desired), int(ready)
