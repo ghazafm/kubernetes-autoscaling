@@ -35,7 +35,7 @@ class KubernetesEnv(Env):
         weight_response_time: float,
         weight_cost: float,
         logger: Optional[logging.Logger],
-        influxdb: Optional[InfluxDB],
+        influxdb: Optional[InfluxDB] = None,
         metrics_endpoints_method: list[tuple[str, str]] = (
             ("/cpu", "GET"),
             ("/memory", "GET"),
