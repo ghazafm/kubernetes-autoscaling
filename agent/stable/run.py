@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 
+from database import InfluxDB
 from dotenv import load_dotenv
 from environment import KubernetesEnv
 from stable_baselines3 import DQN
@@ -29,13 +30,13 @@ if __name__ == "__main__":
         "kubernetes_agent", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
     )
 
-    # influxdb = InfluxDB(
-    #     logger=logger,
-    #     url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
-    #     token=os.getenv("INFLUXDB_TOKEN", "my-token"),
-    #     org=os.getenv("INFLUXDB_ORG", "my-org"),
-    #     bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
-    # )
+    influxdb = InfluxDB(
+        logger=logger,
+        url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
+        token=os.getenv("INFLUXDB_TOKEN", "my-token"),
+        org=os.getenv("INFLUXDB_ORG", "my-org"),
+        bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
+    )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
 
     iteration = int(os.getenv("ITERATION", "100"))
@@ -53,7 +54,7 @@ if __name__ == "__main__":
         timeout=int(os.getenv("TIMEOUT", "120")),
         wait_time=int(os.getenv("WAIT_TIME", "5")),
         logger=logger,
-        # influxdb=influxdb,
+        influxdb=influxdb,
         prometheus_url=os.getenv("PROMETHEUS_URL", "http://localhost:9090"),
         metrics_endpoints_method=metrics_endpoints_method,
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "60")),
@@ -98,11 +99,11 @@ if __name__ == "__main__":
                 time.sleep(5)
 
     finally:
-        # try:
-        #     if "influxdb" in locals() and hasattr(influxdb, "close"):
-        #         influxdb.close()
-        # except Exception:
-        #     logger.exception("Error while closing InfluxDB client")
+        try:
+            if "influxdb" in locals() and hasattr(influxdb, "close"):
+                influxdb.close()
+        except Exception:
+            logger.exception("Error while closing InfluxDB client")
 
         logger.info("Shutting down gracefully...")
         sys.exit(0)

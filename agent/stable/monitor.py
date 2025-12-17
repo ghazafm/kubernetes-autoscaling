@@ -1,3 +1,4 @@
+import argparse
 import ast
 import os
 
@@ -6,7 +7,14 @@ from dotenv import load_dotenv
 from prometheus_api_client import PrometheusConnect
 from utils import calculate_distance, get_metrics, get_replica, setup_logger
 
-load_dotenv()
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--test", action="store_true", help="Use .env.test file")
+args, _ = parser.parse_known_args()
+
+if args.test:
+    load_dotenv(".env.test")
+else:
+    load_dotenv()
 
 logger, log_dir = setup_logger(
     "monitoring_kubernetes", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
