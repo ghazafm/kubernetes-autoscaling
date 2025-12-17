@@ -505,7 +505,7 @@ class KubernetesEnv(Env):
         super().reset(seed=seed)
         self.iteration = self.iteration_init
         if self.mode == "prod":
-            replica = get_replica(
+            _, replica = get_replica(
                 prometheus=self.prometheus,
                 namespace=self.namespace,
                 deployment_name=self.deployment_name,
