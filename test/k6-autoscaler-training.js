@@ -75,7 +75,7 @@ function scaleDuration(minutes) {
 // Now uses dynamic VU targets based on MAX_REPLICAS
 const basePattern = [
   // ===== WARM-UP PHASE (Baseline establishment) =====
-  { duration: scaleDuration(5), target: 0 },               // No requests initially
+  { duration: scaleDuration(1), target: 0 },               // No requests initially
   { duration: scaleDuration(1), target: VU_WARMUP },       // Gentle start
   { duration: scaleDuration(2), target: VU_WARMUP },       // Baseline LOW traffic
 
