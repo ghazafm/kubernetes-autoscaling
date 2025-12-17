@@ -8,7 +8,7 @@ from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from kubernetes import client, config
 from prometheus_api_client import PrometheusConnect
-from utils import TransitionLogger, get_metrics, wait_for_pods_ready
+from utils import TransitionLogger, get_metrics, get_replica, wait_for_pods_ready
 
 
 class KubernetesEnv(Env):
@@ -43,6 +43,7 @@ class KubernetesEnv(Env):
         render_mode: Optional[str] = None,
         csv_log_dir: Optional[str] = None,
         csv_log_prefix: str = "data",
+        mode: str = "dev",
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -50,6 +51,7 @@ class KubernetesEnv(Env):
                 f"Supported modes: {self.metadata['render_modes']}"
             )
         self.render_mode = render_mode
+        self.mode = mode
 
         config.load_kube_config()
         self.api = client.AppsV1Api()
@@ -300,19 +302,49 @@ class KubernetesEnv(Env):
         RESPONSE_TIME_HIGH_THRESHOLD = 50.0
         RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
 
+        """
+        Kenapa menetapkan HIGH 50?
+        Agar penalti sudah mulai terakumulasi sejak response time 50% mendekati batas
+        """
+
+        """
+        Kenapa menetapkan VIOLATION 80? bukan tepat 100?
+        Karena agar agen tidak terlalu mentolerir penalti dengan response time
+        yang mendekati batas SLO.
+        Dengan adanya ini agen akan mendapatkan penalti lebih dari -1 jika response
+        time mulai melebihi 80%,
+        """
+
+        """
+        Kedua parameter diatas bisa disesuaikan lagi tergantung kebutuhan
+        dan kasus pelatihan.
+        (Tunning).
+        """
+
         if response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             response_time_penalty = 0.0
         elif response_time <= RESPONSE_TIME_VIOLATION_THRESHOLD:
+            """
+            #  Perhitungan ini agar penalti mulai dari -+0.0 pada saat melewati HIGH
+            # threshold dan -1.0 pada saat berada tepat di VIOLATION threshold
+            """
             response_time_penalty = (response_time - RESPONSE_TIME_HIGH_THRESHOLD) / (
                 RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
             )
         else:
+            """
+            Setelah sebelumnya penalti -0.0 hingga -1.0
+            pada perhitungan ini akan diberlakukan penalti yang menghitung
+            seberapa jauh response time melebihi VIOLATION threshold.
+            oleh karena itu penalti
+            dimulai dari 1(penalti sebelumnya yang melewati violation)
+            lalu bertambah sesuai dengan seberapa jauh response time melebihi
+            VIOLATION threshold.
+            """
             over = (
                 response_time - RESPONSE_TIME_VIOLATION_THRESHOLD
             ) / RESPONSE_TIME_VIOLATION_THRESHOLD
             response_time_penalty = 1.0 + over
-
-        # No upper clamp - let penalty grow with RT violation severity
 
         cost_penalty_raw = action / 99.0
 
@@ -472,9 +504,21 @@ class KubernetesEnv(Env):
     ):
         super().reset(seed=seed)
         self.iteration = self.iteration_init
-        action = self.np_random.integers(0, 100)
+        if self.mode == "prod":
+            replica = get_replica(
+                prometheus=self.prometheus,
+                namespace=self.namespace,
+                deployment_name=self.deployment_name,
+                wait_time=1,
+            )
+            action = round((replica - self.min_replicas) * 99 / self.range_replicas)
+            action = int(np.clip(action, 0, 99))
+        elif self.mode == "dev":
+            action = self.action_space.sample()
+        else:
+            raise ValueError(f"Invalid mode '{self.mode}'")
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
-        replica = min(replica, self.max_replicas)  # Safety clamp
+        replica = min(replica, self.max_replicas)
 
         cpu, memory, response_time = self.scale(replica)
 

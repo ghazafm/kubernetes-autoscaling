@@ -90,3 +90,5 @@ kubeconfig
 AGENTS.md
 *.env.train
 *.env.test
+
+*.png

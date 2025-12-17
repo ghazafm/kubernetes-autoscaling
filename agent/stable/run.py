@@ -64,6 +64,7 @@ if __name__ == "__main__":
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME", "0.7")),
         weight_cost=float(os.getenv("WEIGHT_COST", "0.3")),
         render_mode="human",
+        mode="prod",
     )
 
     model = DQN.load(os.getenv("MODEL_PATH"), env=env, device="auto")
