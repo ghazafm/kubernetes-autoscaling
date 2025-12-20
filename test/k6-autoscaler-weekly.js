@@ -1,4 +1,5 @@
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
 
@@ -181,7 +182,19 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+
+function getBaseUrl() {
+  if (BASE_URLS.length === 1) return BASE_URLS[0];
+  if (typeof exec !== 'undefined' && exec.vu && exec.vu.idInTest) {
+    const vuId = exec.vu.idInTest;
+    return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  }
+  if (typeof __VU !== 'undefined') return BASE_URLS[(__VU - 1) % BASE_URLS.length];
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+}
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 const MAX_MEMORY_MB = parseInt(__ENV.MAX_MEMORY_MB || '140');
 
@@ -189,7 +202,11 @@ export function setup() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('📅 RL AUTOSCALER WEEKLY SIMULATION - DYNAMIC LOAD');
   console.log('═══════════════════════════════════════════════════════');
-  console.log(`Target: ${BASE_URL}`);
+  if (BASE_URLS.length === 1) {
+    console.log(`Target: ${BASE_URLS[0]}`);
+  } else {
+    console.log(`Targets: ${BASE_URLS.join(', ')}`);
+  }
   console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
   console.log(`Week Count: ${CYCLE_COUNT}`);
   console.log('');
@@ -395,7 +412,7 @@ export default function () {
   if (requestType === 'cpu') {
     let iterations = getRequestParams('cpu', pattern.intensity);
     iterations = Math.min(iterations, MAX_CPU_ITERATIONS);
-    res = safeGet(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
+    res = safeGet(`${getBaseUrl()}/api/cpu?iterations=${iterations}`, {
       tags: tags,
       timeout: '35s',
     });
@@ -418,7 +435,7 @@ export default function () {
     let sizeMb = getRequestParams('memory', pattern.intensity);
     // Cap memory to configured safe max and account for concurrency
     sizeMb = Math.min(sizeMb, Math.max(1, Math.floor(MAX_MEMORY_MB / 2)));
-    res = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+    res = safeGet(`${getBaseUrl()}/api/memory?size_mb=${sizeMb}`, {
       tags: tags,
       timeout: '25s',
     });
@@ -438,7 +455,7 @@ export default function () {
     }) || errorRate.add(1);
 
   } else {
-    res = safeGet(`${BASE_URL}/api`, {
+    res = safeGet(`${getBaseUrl()}/api`, {
       tags: tags,
       timeout: '8s',
     });

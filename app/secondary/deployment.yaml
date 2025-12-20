@@ -1,26 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: test-flask-app
+  name: second-flask-app
   namespace: default
   labels:
-    app: test-flask-app
+    app: second-flask-app
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: test-flask-app
+      app: second-flask-app
   template:
     metadata:
       labels:
-        app: test-flask-app
+        app: second-flask-app
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
       containers:
-      - name: test-flask-app
+      - name: second-flask-app
         image: fauzanghaza/flask-app:latest
         imagePullPolicy: Always
         ports:
@@ -32,7 +32,7 @@ spec:
           protocol: TCP
         envFrom:
         - configMapRef:
-            name: test-flask-app-config
+            name: second-flask-app-config
         livenessProbe:
           httpGet:
             path: /health
@@ -72,14 +72,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: test-flask-app
+  name: second-flask-app
   namespace: default
   labels:
-    app: test-flask-app
+    app: second-flask-app
 spec:
   type: LoadBalancer
   selector:
-    app: test-flask-app
+    app: second-flask-app
   ports:
   - name: http-app
     port: 80

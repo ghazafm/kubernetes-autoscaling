@@ -1,4 +1,5 @@
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
@@ -148,13 +149,29 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+
+function getBaseUrl() {
+  if (BASE_URLS.length === 1) return BASE_URLS[0];
+  if (typeof exec !== 'undefined' && exec.vu && exec.vu.idInTest) {
+    const vuId = exec.vu.idInTest;
+    return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  }
+  if (typeof __VU !== 'undefined') return BASE_URLS[(__VU - 1) % BASE_URLS.length];
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+}
 
 export function setup() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('🎯 RL AUTOSCALER EDGE CASES - DYNAMIC LOAD');
   console.log('═══════════════════════════════════════════════════════');
-  console.log(`Target: ${BASE_URL}`);
+  if (BASE_URLS.length === 1) {
+    console.log(`Target: ${BASE_URLS[0]}`);
+  } else {
+    console.log(`Targets: ${BASE_URLS.join(', ')}`);
+  }
   console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
   console.log(`Cycle Count: ${CYCLE_COUNT}`);
   console.log('');
@@ -319,7 +336,7 @@ export default function () {
   if (workload.type === 'cpu') {
     const params = getWorkloadParams('cpu', workload.intensity);
     // Use a stable name tag to avoid URL-based high-cardinality in k6 metrics
-    res = safeGet(`${BASE_URL}/api/cpu?iterations=${params.iterations}`, {
+    res = safeGet(`${getBaseUrl()}/api/cpu?iterations=${params.iterations}`, {
       tags: {
         name: 'cpu',
         request_type: 'cpu',
@@ -347,7 +364,7 @@ export default function () {
     const params = getWorkloadParams('memory', workload.intensity);
     // Add a stable "name" tag to avoid high-cardinality series caused by
     // many distinct query parameter combinations being used as metric tags.
-    res = safeGet(`${BASE_URL}/api/memory?size_mb=${params.size_mb}`, {
+    res = safeGet(`${getBaseUrl()}/api/memory?size_mb=${params.size_mb}`, {
       tags: {
         name: 'memory',
         request_type: 'memory',
@@ -373,7 +390,7 @@ export default function () {
 
   } else {
     // Basic request
-    res = safeGet(`${BASE_URL}/api`, {
+    res = safeGet(`${getBaseUrl()}/api`, {
       tags: {
         name: 'basic',
         request_type: 'basic',

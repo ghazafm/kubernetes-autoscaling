@@ -5,11 +5,13 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-    - 10.34.4.196-10.34.4.199
+    - 10.34.4.196-10.34.4.197
+    - 10.34.4.199-10.34.4.200
+
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
 metadata:
-  name: pg-l2adv
+  name: l2adv
   namespace: metallb-system
 spec: {}

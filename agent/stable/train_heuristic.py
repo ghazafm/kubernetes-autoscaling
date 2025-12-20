@@ -5,8 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-from environment import KubernetesEnv
-from stable_baselines3 import DQN
+from environment import HeuristicDecayCallback, HeuristicDQN, KubernetesEnv
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
@@ -20,6 +19,7 @@ from utils import setup_logger
 from database import InfluxDB
 
 load_dotenv()
+
 
 if __name__ == "__main__":
     now = datetime.now().strftime("%Y-%m-%d-%H-%M")
@@ -35,6 +35,10 @@ if __name__ == "__main__":
         bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
     )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
+
+    heuristic_prob = float(os.getenv("HEURISTIC_PROB", "0.7"))
+    heuristic_decay = float(os.getenv("HEURISTIC_DECAY", "0.995"))
+    min_heuristic_prob = float(os.getenv("MIN_HEURISTIC_PROB", "0.1"))
 
     iteration = int(os.getenv("ITERATION"))
     csv_log_dir = os.getenv("CSV_LOG_DIR", "data")
@@ -100,6 +104,7 @@ if __name__ == "__main__":
     num_episodes = int(os.getenv("EPISODE", BASE_EPISODES))
 
     resume_path = os.getenv("RESUME_PATH", "")
+    learning_starts = int(os.getenv("LEARNING_STARTS", iteration * 3))
 
     if resume_path:
         resume_model_path = Path(resume_path)
@@ -109,11 +114,22 @@ if __name__ == "__main__":
         model_dir = resume_model_path.parent.parent / f"resume_{now}_{note}"
         logger.info(f"Resuming training from: {resume_path}")
 
-        model = DQN.load(
+        model = HeuristicDQN.load(
             resume_path,
             env=env,
             tensorboard_log=log_dir,
             device="auto",
+        )
+
+        model.heuristic_prob = heuristic_prob
+        model.initial_heuristic_prob = heuristic_prob
+        model.heuristic_decay = heuristic_decay
+        model.min_heuristic_prob = min_heuristic_prob
+        model.custom_logger = logger
+        model.learning_starts = learning_starts
+        logger.info(
+            f"Restored heuristic parameters: prob={heuristic_prob:.3f}, "
+            f"decay={heuristic_decay:.5f}"
         )
 
         try:
@@ -130,8 +146,6 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"Could not restore VecNormalize: {e}")
 
-        # Attempt to load replay buffer (best-effort). SB3 provides
-        # load_replay_buffer in some versions; otherwise try unpickling.
         try:
             if checkpoints_dir.exists():
                 replay_candidates = list(checkpoints_dir.glob("*replay*"))
@@ -190,14 +204,14 @@ if __name__ == "__main__":
         model_dir.mkdir(parents=True, exist_ok=True)
         total_timesteps = num_episodes * iteration
 
-        model = DQN(
+        model = HeuristicDQN(
             policy="MlpPolicy",
             env=env,
             policy_kwargs={"net_arch": [256, 256, 128]},
             learning_rate=1e-4,
             gamma=0.99,
             buffer_size=100_000,
-            learning_starts=iteration * 3,
+            learning_starts=learning_starts,
             batch_size=256,
             train_freq=1,
             gradient_steps=1,
@@ -210,6 +224,10 @@ if __name__ == "__main__":
             tensorboard_log=log_dir,
             seed=42,
             device="auto",
+            heuristic_prob=heuristic_prob,
+            heuristic_decay=heuristic_decay,
+            min_heuristic_prob=min_heuristic_prob,
+            custom_logger=logger,
         )
 
     logger.info(
@@ -236,7 +254,16 @@ if __name__ == "__main__":
         save_vecnormalize=True,
         verbose=1,
     )
-    callback = CallbackList([checkpoint_callback, eval_callback])
+
+    heuristic_callback = HeuristicDecayCallback(logger=logger, verbose=1)
+    logger.info("=" * 70)
+    logger.info("INITIAL HEURISTIC CONFIGURATION")
+    logger.info(f"  Heuristic Probability: {model.heuristic_prob:.3f}")
+    logger.info(f"  Heuristic Decay: {model.heuristic_decay:.5f}")
+    logger.info(f"  Min Heuristic Prob: {model.min_heuristic_prob:.3f}")
+    logger.info("=" * 70)
+
+    callback = CallbackList([checkpoint_callback, eval_callback, heuristic_callback])
 
     # Train the model
     model.learn(
@@ -244,13 +271,22 @@ if __name__ == "__main__":
         callback=callback,
         reset_num_timesteps=False,
         progress_bar=True,
-        tb_log_name="DQN",
+        tb_log_name="HeuristicDQN",
     )
 
     final_model_path = model_dir / "final" / "model"
     final_model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(final_model_path)
     logger.info(f"Final model saved to {final_model_path}")
+
+    final_stats = model.get_heuristic_stats()
+    logger.info("=" * 70)
+    logger.info("FINAL HEURISTIC STATISTICS")
+    logger.info(f"  Final probability: {final_stats['current_heuristic_prob']:.3f}")
+    logger.info(f"  Total heuristic actions: {final_stats['heuristic_count']}")
+    logger.info(f"  Total actions: {final_stats['total_actions']}")
+    logger.info(f"  Overall usage rate: {final_stats['actual_usage_rate']:.3f}")
+    logger.info("=" * 70)
 
     # Log CSV stats
     csv_stats = env.csv_logger.get_stats()

@@ -3,12 +3,13 @@ import time
 from typing import Any, Optional
 
 import numpy as np
-from database import InfluxDB
 from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from kubernetes import client, config
 from prometheus_api_client import PrometheusConnect
 from utils import TransitionLogger, get_metrics, get_replica, wait_for_pods_ready
+
+from database import InfluxDB
 
 
 class KubernetesEnv(Env):

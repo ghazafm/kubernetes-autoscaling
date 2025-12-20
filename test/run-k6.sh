@@ -15,12 +15,43 @@ NC='\033[0m' # No Color
 # Optional: support a test env file when caller passes --test as first arg
 # Usage: ./run-k6.sh --test training
 export PATH="$PWD:$PATH"
+
 TEST_ENV_FILE=""
-if [ "$1" = "--test" ]; then
-    TEST_ENV_FILE=".env.test"
-    # shift so the next positional argument is the test name
-    shift
-fi
+OVERRIDE_BASE_URL=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --test)
+            TEST_ENV_FILE=".env.test"
+            shift
+            ;;
+        --url)
+            if [[ -z "${2:-}" ]]; then
+                echo -e "${RED}Error: --url requires a value${NC}"
+                exit 1
+            fi
+            OVERRIDE_BASE_URL="$2"
+            shift 2
+            ;;
+        --url=*)
+            OVERRIDE_BASE_URL="${1#*=}"
+            shift
+            ;;
+        -h|--help|help)
+            # Let the normal help handler deal with it later via TEST_FILE
+            break
+            ;;
+        --*)
+            echo -e "${RED}Error: Unknown option: $1${NC}"
+            echo -e "${YELLOW}Try: ./run-k6.sh --help${NC}"
+            exit 1
+            ;;
+        *)
+            # First positional arg = test name/file
+            break
+            ;;
+    esac
+done
 
 # Load environment variables (test env has priority when --test used)
 if [ -n "$TEST_ENV_FILE" ]; then
@@ -41,8 +72,14 @@ else
     fi
 fi
 
+# Set final BASE_URL resolution (CLI > env > default)
+if [ -n "$OVERRIDE_BASE_URL" ]; then
+    BASE_URL="$OVERRIDE_BASE_URL"
+else
+    BASE_URL="${BASE_URL:-http://localhost:5000}"
+fi
+
 # Set default BASE_URL if not set
-BASE_URL=${BASE_URL:-http://localhost:5000}
 DURATION_MULTIPLIER=${DURATION_MULTIPLIER:-}
 CYCLE_COUNT=${CYCLE_COUNT:-}
 MAX_REPLICAS=${MAX_REPLICAS:-50}
@@ -191,7 +228,11 @@ run_test() {
 show_help() {
     echo -e "${BLUE}RL Autoscaler K6 Test Runner${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}\n"
-    echo "Usage: ./run-k6.sh [test-name]"
+    echo "Usage: ./run-k6.sh [--test] [--url <BASE_URL>] [test-name]"
+    echo ""
+    echo "Options:"
+    echo "  ${YELLOW}--test${NC}                 - Load .env.test instead of .env"
+    echo "  ${YELLOW}--url <BASE_URL>${NC}       - Override BASE_URL from env files"
     echo ""
     echo "Available test names:"
     echo "  ${GREEN}training${NC}       - Comprehensive daily traffic patterns (60 min)"
@@ -209,34 +250,15 @@ show_help() {
     echo "  ${YELLOW}quick${NC}          - Run quick validation (spike + cpu + memory)"
     echo "  ${YELLOW}help${NC}           - Show this help message"
     echo ""
-    echo "Environment Variables:"
-    echo "  ${YELLOW}BASE_URL${NC}              - Target URL (default: http://localhost:5000)"
-    echo "  ${YELLOW}DURATION_MULTIPLIER${NC}   - Time scale multiplier (1=default, 24=1day, 168=1week)"
-    echo "  ${YELLOW}CYCLE_COUNT${NC}           - Number of pattern repetitions (1=once, 7=weekly)"
-    echo ""
     echo "Examples:"
-    echo "  ${GRAY}# Run default 60-minute training${NC}"
+    echo "  ${GRAY}# Override URL without touching .env${NC}"
+    echo "  ./run-k6.sh --url http://10.34.4.196 training"
+    echo ""
+    echo "  ${GRAY}# Use .env.test + override URL${NC}"
+    echo "  ./run-k6.sh --test --url http://my-app:5000 training"
+    echo ""
+    echo "  ${GRAY}# Old style still works${NC}"
     echo "  ./run-k6.sh training"
-    echo ""
-    echo "  ${GRAY}# Run all tests${NC}"
-    echo "  ./run-k6.sh all"
-    echo ""
-    echo "  ${GRAY}# Quick validation test${NC}"
-    echo "  ./run-k6.sh quick"
-    echo ""
-    echo "  ${GRAY}# Change target URL${NC}"
-    echo "  BASE_URL=http://my-app:5000 ./run-k6.sh training"
-    echo ""
-    echo "  ${GRAY}# Run 1-day training (24x duration)${NC}"
-    echo "  DURATION_MULTIPLIER=24 ./run-k6.sh training"
-    echo ""
-    echo "  ${GRAY}# Run 1-week training (24x duration, 7 cycles)${NC}"
-    echo "  DURATION_MULTIPLIER=24 CYCLE_COUNT=7 ./run-k6.sh training"
-    echo ""
-    echo "  ${GRAY}# Run 1-week edge cases in background${NC}"
-    echo "  nohup env DURATION_MULTIPLIER=24 CYCLE_COUNT=7 ./run-k6.sh edge > training.log 2>&1 &"
-    echo ""
-    echo "For more details on extended durations, see: ${YELLOW}EXTENDED_DURATION_GUIDE.md${NC}"
     echo ""
 }
 

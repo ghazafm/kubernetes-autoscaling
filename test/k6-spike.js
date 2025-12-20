@@ -1,4 +1,5 @@
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import http from 'k6/http';
 import { Rate } from 'k6/metrics';
 
@@ -29,14 +30,30 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+
+function getBaseUrl() {
+  if (BASE_URLS.length === 1) return BASE_URLS[0];
+  if (typeof exec !== 'undefined' && exec.vu && exec.vu.idInTest) {
+    const vuId = exec.vu.idInTest;
+    return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  }
+  if (typeof __VU !== 'undefined') return BASE_URLS[(__VU - 1) % BASE_URLS.length];
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+}
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 export function setup() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('⚡ SPIKE TEST - DYNAMIC LOAD');
   console.log('═══════════════════════════════════════════════════════');
-  console.log(`Target: ${BASE_URL}`);
+  if (BASE_URLS.length === 1) {
+    console.log(`Target: ${BASE_URLS[0]}`);
+  } else {
+    console.log(`Targets: ${BASE_URLS.join(', ')}`);
+  }
   console.log('');
   console.log('📊 Replica Configuration:');
   console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
@@ -71,11 +88,11 @@ export default function () {
     // Keep CPU load within safe range for 500m limit and MAX_CPU_ITERATIONS=2.5M
     const iterations = Math.floor(Math.random() * 400000) + 200000; // 200k-600k
     const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
-    url = `${BASE_URL}/api/cpu?iterations=${safeIterations}`;
+    url = `${getBaseUrl()}/api/cpu?iterations=${safeIterations}`;
   } else {
     // FIXED: Max 70 MB to account for concurrent requests (was 50-200 MB!)
     const sizeMb = Math.floor(Math.random() * 50) + 20; // 20-70 MB
-    url = `${BASE_URL}/api/memory?size_mb=${sizeMb}`;
+    url = `${getBaseUrl()}/api/memory?size_mb=${sizeMb}`;
   }
 
   const res = safeGet(url, { tags: { name: (url.includes('/api/cpu') ? 'cpu' : 'memory'), request_type: (url.includes('/api/cpu') ? 'cpu' : 'memory') }, timeout: '20s' });

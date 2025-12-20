@@ -1,4 +1,5 @@
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import http from 'k6/http';
 import { Rate, Trend } from 'k6/metrics';
 
@@ -32,14 +33,30 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+
+function getBaseUrl() {
+  if (BASE_URLS.length === 1) return BASE_URLS[0];
+  if (typeof exec !== 'undefined' && exec.vu && exec.vu.idInTest) {
+    const vuId = exec.vu.idInTest;
+    return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  }
+  if (typeof __VU !== 'undefined') return BASE_URLS[(__VU - 1) % BASE_URLS.length];
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+}
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 export function setup() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('💾 MEMORY STRESS TEST - DYNAMIC LOAD');
   console.log('═══════════════════════════════════════════════════════');
-  console.log(`Target: ${BASE_URL}`);
+  if (BASE_URLS.length === 1) {
+    console.log(`Target: ${BASE_URLS[0]}`);
+  } else {
+    console.log(`Targets: ${BASE_URLS.join(', ')}`);
+  }
   console.log('');
   console.log('📊 Replica Configuration:');
   console.log(`   MIN_REPLICAS: ${MIN_REPLICAS}`);
@@ -70,7 +87,7 @@ export default function () {
   // Safe memory allocation - account for concurrency (2-3 simultaneous requests)
   // Max safe: 140 MB ÷ 2 = 70 MB per request
   const sizeMb = Math.floor(Math.random() * 50) + 20; // 20MB to 70MB (safe for concurrency)
-  const memRes = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+  const memRes = safeGet(`${getBaseUrl()}/api/memory?size_mb=${sizeMb}`, {
     tags: { name: 'memory', request_type: 'memory' },
     timeout: '20s',
   });

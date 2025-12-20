@@ -1,12 +1,14 @@
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
 
+
 // Custom metrics for comprehensive monitoring
 const errorRate = new Rate('errors');
-const cpuDuration = new Trend('cpu_request_duration');
-const memoryDuration = new Trend('memory_request_duration');
-const basicDuration = new Trend('basic_request_duration');
+const cpuDuration = new Trend('cpu_request_duration', true);
+const memoryDuration = new Trend('memory_request_duration', true);
+const basicDuration = new Trend('basic_request_duration', true);
 const requestsPerStage = new Counter('requests_per_stage');
 const currentLoad = new Gauge('current_load_level');
 const requestTypeDistribution = new Counter('request_type_distribution');
@@ -156,7 +158,18 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:5000';
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+
+// Helper to pick a base URL. Uses __VU mapping for stable distribution across VUs,
+// falls back to a random choice when __VU is not available.
+function getBaseUrl() {
+  if (BASE_URLS.length === 1) return BASE_URLS[0];
+  const vuId = exec.vu.idInTest;
+  return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+}
+
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
 function safeGet(url, params, maxRetries = 2) {
@@ -182,12 +195,12 @@ const REQUEST_PATTERNS = {
 };
 
 // Determine current load phase based on VU count
-function getLoadPhase(vu) {
-  if (vu <= 3) return 'NIGHT';
-  if (vu <= 10) return 'LOW';
-  if (vu <= 20) return 'MEDIUM';
-  if (vu <= 30) return 'HIGH';
-  if (vu <= 50) return 'PEAK';
+function getLoadPhase(activeVUs) {
+  if (activeVUs <= 3) return 'NIGHT';
+  if (activeVUs <= 10) return 'LOW';
+  if (activeVUs <= 20) return 'MEDIUM';
+  if (activeVUs <= 30) return 'HIGH';
+  if (activeVUs <= 50) return 'PEAK';
   return 'EXTREME';
 }
 
@@ -316,7 +329,11 @@ export function setup() {
   console.log('═══════════════════════════════════════════════════════');
   console.log('🎯 RL AUTOSCALER TRAINING - DYNAMIC LOAD');
   console.log('═══════════════════════════════════════════════════════');
-  console.log(`Target: ${BASE_URL}`);
+  if (BASE_URLS.length === 1) {
+    console.log(`Target: ${BASE_URLS[0]}`);
+  } else {
+    console.log(`Targets: ${BASE_URLS.join(', ')}`);
+  }
   console.log(`Duration Multiplier: ${DURATION_MULTIPLIER}x`);
   console.log(`Cycle Count: ${CYCLE_COUNT}`);
   console.log('');
@@ -340,11 +357,14 @@ export function setup() {
 }
 
 export default function () {
-  const phase = getLoadPhase(__VU);
+  const activeVUs = exec.instance.vusActive;   // real current load
+  const phase = getLoadPhase(activeVUs);
   const pattern = getRequestPattern(phase);
 
+  currentLoad.add(activeVUs);
+
   // Update gauge metric for monitoring
-  currentLoad.add(__VU);
+  currentLoad.add(activeVUs);
 
   // Determine request type based on pattern distribution
   const rand = Math.random();
@@ -367,7 +387,7 @@ export default function () {
   switch(requestType) {
     case 'cpu':
       const iterations = Math.min(getCpuIterations(phase), MAX_CPU_ITERATIONS);
-      res = safeGet(`${BASE_URL}/api/cpu?iterations=${iterations}`, {
+      res = safeGet(`${getBaseUrl()}/api/cpu?iterations=${iterations}`, {
         tags: { name: 'cpu', request_type: 'cpu', load_phase: phase },
         timeout: '30s', // Prevent hanging requests
       });
@@ -386,12 +406,12 @@ export default function () {
         },
         'cpu api response time acceptable': (r) => r.timings.duration < 10000,
       });
-      errorRate.add(cpuOk ? 0 : 1);
+      errorRate.add(!cpuOk);;
       break;
 
     case 'memory':
       const sizeMb = getMemorySize(phase);
-      res = safeGet(`${BASE_URL}/api/memory?size_mb=${sizeMb}`, {
+      res = safeGet(`${getBaseUrl()}/api/memory?size_mb=${sizeMb}`, {
         tags: { name: 'memory', request_type: 'memory', load_phase: phase },
         timeout: '20s',
       });
@@ -414,7 +434,7 @@ export default function () {
       break;
 
     case 'basic':
-      res = safeGet(`${BASE_URL}/api`, {
+      res = safeGet(`${getBaseUrl()}/api`, {
         tags: { name: 'basic', request_type: 'basic', load_phase: phase },
         timeout: '5s',
       });

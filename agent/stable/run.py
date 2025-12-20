@@ -5,11 +5,12 @@ import sys
 import threading
 import time
 
-from database import InfluxDB
 from dotenv import load_dotenv
 from environment import KubernetesEnv
 from stable_baselines3 import DQN
 from utils import setup_logger
+
+from database import InfluxDB
 
 load_dotenv(".env.test")
 
@@ -66,6 +67,7 @@ if __name__ == "__main__":
         mode="prod",
     )
 
+    logger.info("Loading model from %s", os.getenv("MODEL_PATH"))
     model = DQN.load(os.getenv("MODEL_PATH"), env=env, device="auto")
     vec_env = model.get_env()
     obs = vec_env.reset()
