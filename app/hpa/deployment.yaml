@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-flask-app
+  namespace: default
+  labels:
+    app: hpa-flask-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpa-flask-app
+  template:
+    metadata:
+      labels:
+        app: hpa-flask-app
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: hpa-flask-app
+        image: fauzanghaza/flask-app:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
+          name: http-app
+          protocol: TCP
+        - containerPort: 8000
+          name: http-metrics
+          protocol: TCP
+        envFrom:
+        - configMapRef:
+            name: hpa-flask-app-config
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 5000
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 5
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        # Ensure resources are always enforced
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities:
+            drop:
+              - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpa-flask-app
+  namespace: default
+  labels:
+    app: hpa-flask-app
+spec:
+  type: LoadBalancer
+  selector:
+    app: hpa-flask-app
+  ports:
+  - name: http-app
+    port: 80
+    targetPort: 5000
+    protocol: TCP
+  - name: http-metrics
+    port: 8000
+    targetPort: 8000
+    protocol: TCP

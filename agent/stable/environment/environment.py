@@ -505,7 +505,7 @@ class KubernetesEnv(Env):
     ):
         super().reset(seed=seed)
         self.iteration = self.iteration_init
-        if self.mode == "prod":
+        if self.mode in {"prod", "test", "production"}:
             _, replica = get_replica(
                 prometheus=self.prometheus,
                 namespace=self.namespace,
@@ -514,7 +514,7 @@ class KubernetesEnv(Env):
             )
             action = round((replica - self.min_replicas) * 99 / self.range_replicas)
             action = int(np.clip(action, 0, 99))
-        elif self.mode == "dev":
+        elif self.mode in {"dev", "development"}:
             action = self.action_space.sample()
         else:
             raise ValueError(f"Invalid mode '{self.mode}'")

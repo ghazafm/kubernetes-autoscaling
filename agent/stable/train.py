@@ -65,6 +65,7 @@ if __name__ == "__main__":
         render_mode="human",
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}",
+        mode="dev",
     )
 
     eval_env = KubernetesEnv(
@@ -92,6 +93,7 @@ if __name__ == "__main__":
         render_mode="human",
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}_eval",
+        mode="prod",
     )
     eval_env = Monitor(eval_env)
 

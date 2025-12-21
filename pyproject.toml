@@ -57,6 +57,7 @@ dev = [
 members = [
     "agent",
     "agent/stable",
+    "agent/scratch",
 ]
 
 [tool.uv]
