@@ -11,22 +11,41 @@ data:
   APP_PORT: "5000"
   METRICS_PORT: "8000"
   DEBUG: "false"
-
-  # Performance tuning
-  # 100ms baseline latency - predictable for RL training
   DEFAULT_SLEEP_TIME: "0.1"
 
-  # Memory configuration (optimized for 512Mi container limit)
-  # Formula: (512 - 220 overhead) / 2 concurrent = 146 MB per request
-  # With 2-3 concurrent requests, container reaches 70-85% memory usage
+  # Resource limits
   MAX_MEMORY_MB: "140"
-
-  # CPU configuration (optimized for 500m CPU limit)
-  # 500k iterations ≈ 200-500ms CPU time under throttling
-  # Reduced from 2.5M to prevent 3-4 second response times
-  # With 3-5 concurrent requests, container reaches 70-95% CPU usage
   MAX_CPU_ITERATIONS: "500000"
 
-  # Add more configuration as needed
-  # LOG_LEVEL: "INFO"
-  # MAX_WORKERS: "4"
+  # ========================================
+  # HPA TESTING MODE - Sustained Memory Load
+  # ========================================
+
+  # INCREASE cache size for more memory retention
+  MEMORY_PRESSURE_CACHE_LIMIT: "17"  # Was 3, now 10 for HPA testing
+
+  # INCREASE TTL to keep memory allocated longer
+  CACHE_ENTRY_TTL: "600"  # 10 minutes (was 60s)
+
+  # INCREASE idle seconds before cleanup
+  CACHE_IDLE_SECONDS: "300"  # 5 minutes (was 30s)
+
+  # SLOW DOWN automatic cleanup
+  CLEAN_CHECK_INTERVAL: "60"  # Every 60s (was 10s)
+
+  # Default caching ON for sustained load
+  CACHE_DEFAULT: "true"
+
+  # ========================================
+  # Memory Management Settings (Adjusted for HPA)
+  # ========================================
+
+  # SLOW DOWN malloc_trim for sustained memory
+  USE_MALLOC_TRIM: "true"
+  MALLOC_TRIM_INTERVAL: "300"  # 5 minutes (was 180s)
+
+  # Keep aggressive GC but less frequent
+  AGGRESSIVE_GC: "false"  # Turn OFF for slower cleanup
+
+  # CRITICAL: Keep PYTHONMALLOC=malloc for when cleanup DOES happen
+  PYTHONMALLOC: "malloc"
