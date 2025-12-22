@@ -269,7 +269,7 @@ case "$TEST_FILE" in
         exit 0
         ;;
     "training"|"train")
-        run_test "k6-train.js" "Autoscaler Training"
+        run_test "train.js" "Autoscaler Training"
         ;;
     "edge"|"edge-cases")
         run_test "k6-autoscaler-edge-cases.js" "Edge Cases & Stress Testing"

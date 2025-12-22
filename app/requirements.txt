@@ -21,6 +21,8 @@ packaging==25.0
     # via gunicorn
 prometheus-client==0.23.1
     # via rl-autoscale
+psutil==7.1.3
+    # via app (pyproject.toml)
 rl-autoscale==1.1.0
     # via app (pyproject.toml)
 werkzeug==3.1.4

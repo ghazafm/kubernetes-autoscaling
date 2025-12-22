@@ -11,22 +11,44 @@ data:
   APP_PORT: "5000"
   METRICS_PORT: "8000"
   DEBUG: "false"
-
-  # Performance tuning
-  # 100ms baseline latency - predictable for RL training
   DEFAULT_SLEEP_TIME: "0.1"
 
-  # Memory configuration (optimized for 512Mi container limit)
-  # Formula: (512 - 220 overhead) / 2 concurrent = 146 MB per request
-  # With 2-3 concurrent requests, container reaches 70-85% memory usage
+  # Resource limits
   MAX_MEMORY_MB: "140"
-
-  # CPU configuration (optimized for 500m CPU limit)
-  # 500k iterations ≈ 200-500ms CPU time under throttling
-  # Reduced from 2.5M to prevent 3-4 second response times
-  # With 3-5 concurrent requests, container reaches 70-95% CPU usage
   MAX_CPU_ITERATIONS: "500000"
 
-  # Add more configuration as needed
-  # LOG_LEVEL: "INFO"
-  # MAX_WORKERS: "4"
+  # ========================================
+  # NEW: Memory Management Settings
+  # ========================================
+
+  # malloc_trim configuration (Linux only)
+  # Forces glibc to release free memory back to OS
+  USE_MALLOC_TRIM: "true"
+  MALLOC_TRIM_INTERVAL: "30"  # seconds between automatic trim calls
+
+  # Aggressive garbage collection
+  # Runs GC across all generations (0, 1, 2) for thorough cleanup
+  AGGRESSIVE_GC: "true"
+
+  # ========================================
+  # Cache Configuration (tuned for lower memory)
+  # ========================================
+
+  # Reduce cache size to minimize memory retention
+  # Original: 5, Recommended: 2-3 for memory-constrained environments
+  MEMORY_PRESSURE_CACHE_LIMIT: "3"
+
+  # Reduce TTL for faster cache eviction
+  # Original: 300 (5 minutes), New: 60 (1 minute)
+  CACHE_ENTRY_TTL: "60"
+
+  # Clean cache after shorter idle period
+  # Original: 60, New: 30
+  CACHE_IDLE_SECONDS: "30"
+
+  # How often the background cleaner runs
+  CLEAN_CHECK_INTERVAL: "10"
+
+  # Default caching behavior for /api/memory endpoint
+  # Set to "false" to disable caching by default (better for testing)
+  CACHE_DEFAULT: "true"
