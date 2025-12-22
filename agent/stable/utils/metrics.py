@@ -124,7 +124,7 @@ def process_metrics(
     if np.isnan(response_time):
         response_time = 0.0
     response_time_percentage = (response_time / max_response_time) * 100.0
-    response_time_percentage = min(response_time_percentage, 1000.0)
+    response_time_percentage = min(response_time_percentage, 300.0)
 
     return (
         cpu_percentage,

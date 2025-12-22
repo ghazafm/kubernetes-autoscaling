@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Flask App Deployment Script
@@ -17,6 +18,44 @@ IMAGE_NAME="fauzanghaza/flask-app"
 IMAGE_TAG="latest"
 APP_NAME="flask-app"
 NAMESPACE="default"
+
+# Default actions
+DO_BUILD=true
+DO_DEPLOY=true
+
+print_usage() {
+    echo "Usage: $0 [options]"
+    echo "Options:"
+    echo "  --build-only        Build and push image only (skip deploy)"
+    echo "  --deploy-only       Deploy only (skip build/push)"
+    echo "  --build             Build and push image (can be combined with --deploy)"
+    echo "  --deploy            Deploy to Kubernetes (can be combined with --build)"
+    echo "  --image NAME        Override image name (default: $IMAGE_NAME)"
+    echo "  --tag TAG           Override image tag (default: $IMAGE_TAG)"
+    echo "  -h, --help          Show this help"
+}
+
+# Parse args (simple)
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --build-only)
+            DO_BUILD=true; DO_DEPLOY=false; shift;;
+        --deploy-only)
+            DO_BUILD=false; DO_DEPLOY=true; shift;;
+        --build)
+            DO_BUILD=true; shift;;
+        --deploy)
+            DO_DEPLOY=true; shift;;
+        --image)
+            IMAGE_NAME="$2"; shift 2;;
+        --tag)
+            IMAGE_TAG="$2"; shift 2;;
+        -h|--help)
+            print_usage; exit 0;;
+        *)
+            echo "Unknown option: $1"; print_usage; exit 1;;
+    esac
+done
 
 echo -e "${BLUE}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║  Flask Application Deployment Script                ║${NC}"
@@ -67,8 +106,9 @@ ARCHS=$(kubectl get nodes -o jsonpath='{.items[*].status.nodeInfo.architecture}'
 echo -e "   Detected architectures: ${GREEN}$ARCHS${NC}"
 
 # Build multi-platform Docker image and push (creates a multi-arch manifest)
-print_section "Building multi-platform Docker image for: ${ARCHS:-all}..."
-echo "   Image: $IMAGE_NAME:$IMAGE_TAG"
+if [ "$DO_BUILD" = true ]; then
+    print_section "Building multi-platform Docker image for: ${ARCHS:-all}..."
+    echo "   Image: $IMAGE_NAME:$IMAGE_TAG"
 
 # Ensure buildx is available
 if ! docker buildx version &> /dev/null; then
@@ -79,19 +119,53 @@ fi
 # Create and use a builder (idempotent)
 docker buildx create --use --name buildx_builder >/dev/null 2>&1 || true
 
-# Build for common architectures (amd64 and arm64). Use the detected ARCHS to decide if necessary.
-PLATFORMS="linux/amd64,linux/arm64"
-print_section "Running buildx build --platform $PLATFORMS --push ..."
-if docker buildx build --platform $PLATFORMS -t $IMAGE_NAME:$IMAGE_TAG . --push; then
-    print_success "Docker image built and pushed successfully (multi-arch)"
+# Build for cluster architecture only (amd64 for your cluster)
+# Determine the platform based on detected cluster architectures
+if echo "$ARCHS" | grep -q "amd64"; then
+    PLATFORMS="linux/amd64"
+elif echo "$ARCHS" | grep -q "arm64"; then
+    PLATFORMS="linux/arm64"
 else
-    print_error "Failed to build/push multi-platform Docker image"
-    echo "   Make sure you're logged in: docker login and that buildx is configured correctly"
-    exit 1
+    PLATFORMS="linux/amd64"  # Default to amd64
+fi
+print_section "Running buildx build --platform $PLATFORMS --push ..."
+# Build for the specific cluster architecture
+if docker buildx build --platform $PLATFORMS -t $IMAGE_NAME:$IMAGE_TAG . --push; then
+    print_success "Docker image built and pushed successfully for $PLATFORMS"
+else
+    # Inspect builder driver and fall back if it's the docker driver which doesn't support
+    # multi-platform emulation on some systems.
+    if docker buildx inspect --bootstrap 2>/dev/null | grep -qi "driver.*docker"; then
+        print_error "Multi-platform build not supported by the current buildx driver (docker). Falling back to single-arch build."
+        # Choose a sensible single platform from detected cluster architectures (prefer amd64)
+        if echo "$ARCHS" | grep -q "amd64"; then
+            SINGLE_PLATFORM="linux/amd64"
+        elif echo "$ARCHS" | grep -q "arm64"; then
+            SINGLE_PLATFORM="linux/arm64"
+        else
+            SINGLE_PLATFORM="linux/amd64"
+        fi
+        print_section "Running single-arch docker build for $SINGLE_PLATFORM and pushing..."
+        # Simple docker build (single-arch) and push
+        if docker build -t $IMAGE_NAME:$IMAGE_TAG . && docker push $IMAGE_NAME:$IMAGE_TAG; then
+            print_success "Docker image built and pushed successfully (single-arch: $SINGLE_PLATFORM)"
+        else
+            print_error "Failed to build/push single-arch Docker image"
+            echo "   Make sure you're logged in: docker login and that docker can push images"
+            exit 1
+        fi
+    else
+        print_error "Failed to build/push multi-platform Docker image"
+        echo "   Make sure you're logged in: docker login and that buildx is configured correctly"
+        exit 1
+    fi
 fi
 
-# Optional: Deploy Prometheus ServiceMonitor (only if Prometheus Operator is installed)
-print_section "Checking for Prometheus Operator..."
+fi
+
+if [ "$DO_DEPLOY" = true ]; then
+    # Optional: Deploy Prometheus ServiceMonitor (only if Prometheus Operator is installed)
+    print_section "Checking for Prometheus Operator..."
 if kubectl get crd servicemonitors.monitoring.coreos.com &> /dev/null; then
     print_success "Prometheus Operator detected"
     if [ -f monitor.yaml ]; then
@@ -252,5 +326,6 @@ echo "   kubectl get pods -l app=$APP_NAME -w    # Watch pods"
 echo "   kubectl logs -l app=$APP_NAME -f        # Follow logs"
 echo "   kubectl top pods -l app=$APP_NAME       # Resource usage"
 echo "   kubectl get configmap flask-app-config  # View config"
+
 echo "   kubectl delete -f deployment.yaml       # Delete deployment"
-echo ""
+fi

@@ -75,6 +75,12 @@ if __name__ == "__main__":
     episode = 0
     episode_reward = 0.0
     step_count = 0
+    last_action = 0
+    max_scale_down_steps = int(
+        os.getenv(
+            "MAX_SCALE_DOWN",
+        )
+    )
 
     logger.info("Starting inference loop...")
 
@@ -82,7 +88,10 @@ if __name__ == "__main__":
         while not shutdown_event.is_set():
             try:
                 action, _ = model.predict(obs, deterministic=True)
+                action = max(action, last_action - max_scale_down_steps)
+
                 obs, rewards, dones, info = vec_env.step(action)
+                last_action = action
 
                 episode_reward += rewards[0]
                 step_count += 1

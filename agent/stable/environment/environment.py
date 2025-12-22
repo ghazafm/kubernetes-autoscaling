@@ -275,7 +275,7 @@ class KubernetesEnv(Env):
 
         if missing_rt:
             response_time = prev_rt * (1 - action_change * scale_factor)
-            response_time = float(np.clip(response_time, 0.01, 1000.0))
+            response_time = float(np.clip(response_time, 0.01, 300.0))
 
         if self.logger:
             est_parts: list[str] = []

@@ -58,6 +58,7 @@ members = [
     "agent",
     "agent/stable",
     "agent/scratch",
+    "app",
 ]
 
 [tool.uv]

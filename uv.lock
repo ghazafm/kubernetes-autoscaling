@@ -13,8 +13,10 @@ resolution-markers = [
 [manifest]
 members = [
     "agent",
+    "app",
     "autoscaling",
-    "stable",
+    "autoscaling-scratch",
+    "autoscaling-stable",
 ]
 
 [[package]]
@@ -126,6 +128,23 @@ wheels = [
 ]
 
 [[package]]
+name = "app"
+version = "0.1.0"
+source = { virtual = "app" }
+dependencies = [
+    { name = "flask" },
+    { name = "gunicorn" },
+    { name = "rl-autoscale" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "flask", specifier = ">=3.1.1" },
+    { name = "gunicorn", specifier = ">=23.0.0" },
+    { name = "rl-autoscale", specifier = ">=1.0.3" },
+]
+
+[[package]]
 name = "appnope"
 version = "0.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -233,6 +252,60 @@ dev = [
     { name = "ipywidgets", specifier = ">=8.1.7" },
     { name = "nbqa", specifier = ">=1.9.1" },
     { name = "tensorboard", specifier = ">=2.19.0" },
+]
+
+[[package]]
+name = "autoscaling-scratch"
+version = "0.1.0"
+source = { virtual = "agent/scratch" }
+dependencies = [
+    { name = "influxdb-client" },
+    { name = "kubernetes" },
+    { name = "numpy" },
+    { name = "prometheus-api-client" },
+    { name = "python-dotenv" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "influxdb-client", specifier = ">=1.49.0" },
+    { name = "kubernetes", specifier = ">=33.1.0" },
+    { name = "numpy", specifier = ">=2.1.3" },
+    { name = "prometheus-api-client", specifier = ">=0.6.0" },
+    { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "torch", specifier = ">=2.7.1" },
+    { name = "torchvision", specifier = ">=0.22.1" },
+]
+
+[[package]]
+name = "autoscaling-stable"
+version = "0.1.0"
+source = { virtual = "agent/stable" }
+dependencies = [
+    { name = "gymnasium" },
+    { name = "influxdb-client" },
+    { name = "kubernetes" },
+    { name = "numpy" },
+    { name = "prometheus-api-client" },
+    { name = "python-dotenv" },
+    { name = "stable-baselines3", extra = ["extra"] },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gymnasium", specifier = ">=1.2.2" },
+    { name = "influxdb-client", specifier = ">=1.49.0" },
+    { name = "kubernetes", specifier = ">=34.1.0" },
+    { name = "numpy", specifier = ">=2.3.5" },
+    { name = "prometheus-api-client", specifier = ">=0.6.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.7.0" },
+    { name = "torch", specifier = ">=2.9.1" },
+    { name = "torchvision", specifier = ">=0.24.1" },
 ]
 
 [[package]]
@@ -673,6 +746,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e2/d8/738c77c1e821e350da4a048849f695ff88a02b291f8c69db23908867aea6/grpcio-1.73.0-cp313-cp313-musllinux_1_1_x86_64.whl", hash = "sha256:07ad7c57233c2109e4ac999cb9c2710c3b8e3f491a73b058b0ce431f31ed8145", size = 6287593, upload-time = "2025-06-09T10:04:22.878Z" },
     { url = "https://files.pythonhosted.org/packages/09/ec/8498eabc018fa39ae8efe5e47e3f4c1bc9ed6281056713871895dc998807/grpcio-1.73.0-cp313-cp313-win32.whl", hash = "sha256:0eb5df4f41ea10bda99a802b2a292d85be28958ede2a50f2beb8c7fc9a738419", size = 3668637, upload-time = "2025-06-09T10:04:25.787Z" },
     { url = "https://files.pythonhosted.org/packages/d7/35/347db7d2e7674b621afd21b12022e7f48c7b0861b5577134b4e939536141/grpcio-1.73.0-cp313-cp313-win_amd64.whl", hash = "sha256:38cf518cc54cd0c47c9539cefa8888549fcc067db0b0c66a46535ca8032020c4", size = 4335872, upload-time = "2025-06-09T10:04:29.032Z" },
+]
+
+[[package]]
+name = "gunicorn"
+version = "23.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/72/9614c465dc206155d93eff0ca20d42e1e35afc533971379482de953521a4/gunicorn-23.0.0.tar.gz", hash = "sha256:f014447a0101dc57e294f6c18ca6b40227a4c90e9bdb586042628030cba004ec", size = 375031, upload-time = "2024-08-10T20:25:27.378Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/7d/6dac2a6e1eba33ee43f318edbed4ff29151a49b5d37f080aad1e6469bca4/gunicorn-23.0.0-py3-none-any.whl", hash = "sha256:ec400d38950de4dfd418cff8328b2c8faed0edb0d517d3394e457c317908ca4d", size = 85029, upload-time = "2024-08-10T20:25:24.996Z" },
 ]
 
 [[package]]
@@ -1927,6 +2012,18 @@ wheels = [
 ]
 
 [[package]]
+name = "rl-autoscale"
+version = "1.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "prometheus-client" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/34/a410370ea9a5995127b9090ffa4d33308fac2ff8b047352372d414a10cdf/rl_autoscale-1.1.0.tar.gz", hash = "sha256:8bcdc9e81561ac1ac0e15bfa6cb1bf4827655762e2da7514eb90a23394db2fb3", size = 18223, upload-time = "2025-12-02T13:12:39.78Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/dc/8287194866d92cc6f231de4ef70014a1ff344675b4780ab1cd8e990fb455/rl_autoscale-1.1.0-py3-none-any.whl", hash = "sha256:de65c59429e7bb389553ce820848f361e7c632e049d09f66572e766c8761f0c9", size = 14342, upload-time = "2025-12-02T13:12:38.263Z" },
+]
+
+[[package]]
 name = "rsa"
 version = "4.9.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1968,35 +2065,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
-]
-
-[[package]]
-name = "stable"
-version = "0.1.0"
-source = { virtual = "agent/stable" }
-dependencies = [
-    { name = "gymnasium" },
-    { name = "influxdb-client" },
-    { name = "kubernetes" },
-    { name = "numpy" },
-    { name = "prometheus-api-client" },
-    { name = "python-dotenv" },
-    { name = "stable-baselines3", extra = ["extra"] },
-    { name = "torch" },
-    { name = "torchvision" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "gymnasium", specifier = ">=1.2.2" },
-    { name = "influxdb-client", specifier = ">=1.49.0" },
-    { name = "kubernetes", specifier = ">=34.1.0" },
-    { name = "numpy", specifier = ">=2.3.5" },
-    { name = "prometheus-api-client", specifier = ">=0.6.0" },
-    { name = "python-dotenv", specifier = ">=1.2.1" },
-    { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.7.0" },
-    { name = "torch", specifier = ">=2.9.1" },
-    { name = "torchvision", specifier = ">=0.24.1" },
 ]
 
 [[package]]

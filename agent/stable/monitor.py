@@ -2,10 +2,11 @@ import argparse
 import ast
 import os
 
-from database import InfluxDB
 from dotenv import load_dotenv
 from prometheus_api_client import PrometheusConnect
 from utils import calculate_distance, get_metrics, get_replica, setup_logger
+
+from database import InfluxDB
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("--test", action="store_true", help="Use .env.test file")
