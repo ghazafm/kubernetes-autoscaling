@@ -4,7 +4,13 @@ import os
 
 from dotenv import load_dotenv
 from prometheus_api_client import PrometheusConnect
-from utils import calculate_distance, get_metrics, get_replica, setup_logger
+from utils import (
+    calculate_distance,
+    get_metrics,
+    get_raw_metrics,
+    get_replica,
+    setup_logger,
+)
 
 from database import InfluxDB
 
@@ -57,6 +63,14 @@ while True:
         quantile=metrics_quantile,
         endpoints_method=metrics_endpoints_method,
     )
+    cpu_raw, memory_raw, cpu_limit, memory_limit, response_time_raw = get_raw_metrics(
+        prometheus=prometheus,
+        namespace=namespace,
+        deployment_name=deployment_name,
+        interval=metrics_interval,
+        quantile=metrics_quantile,
+        endpoints_method=metrics_endpoints_method,
+    )
 
     cpu_relative, memory_relative, cpu_distance, memory_distance = calculate_distance(
         cpu, memory, max_cpu, min_cpu, max_memory, min_memory
@@ -73,6 +87,11 @@ while True:
         "cpu": cpu,
         "memory": memory,
         "response_time": response_time,
+        "cpu_raw": cpu_raw,
+        "memory_raw": memory_raw,
+        "response_time_raw": response_time_raw,
+        "cpu_limit": cpu_limit,
+        "memory_limit": memory_limit,
         "replicas": replica,
         "desired_replicas": desired_replica,
         "cpu_relative": cpu_relative,

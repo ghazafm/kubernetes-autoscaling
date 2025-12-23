@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 from prometheus_api_client import PrometheusConnect
 
@@ -189,3 +191,68 @@ def get_metrics(
         memory_percentages,
         response_time_percentage,
     )
+
+
+def get_raw_metrics(
+    prometheus: PrometheusConnect,
+    namespace: str,
+    deployment_name: str,
+    interval: int,
+    quantile: float,
+    endpoints_method: list[tuple[str, str]],
+):
+    """Return raw metric values (not percentages).
+
+    Returns:
+        cpu_value: float (cores, as returned by the query)
+        memory_value: float (bytes)
+        cpu_limit: float (cores)
+        memory_limit: float (bytes)
+        response_times: list[float] (ms values from histogram_quantile queries)
+    """
+    (
+        cpu_query,
+        memory_query,
+        cpu_limits_query,
+        memory_limits_query,
+        response_time_query,
+    ) = _metrics_query(
+        namespace,
+        deployment_name,
+        interval=interval,
+        quantile=quantile,
+        endpoints_method=endpoints_method,
+    )
+
+    cpu_usage_results = prometheus.custom_query(cpu_query)
+    memory_usage_results = prometheus.custom_query(memory_query)
+    cpu_limits_results = prometheus.custom_query(cpu_limits_query)
+    memory_limits_results = prometheus.custom_query(memory_limits_query)
+
+    # Parse raw values (keep 0.0 when missing)
+    cpu_value = float(cpu_usage_results[0]["value"][1]) if cpu_usage_results else 0.0
+    memory_value = (
+        float(memory_usage_results[0]["value"][1]) if memory_usage_results else 0.0
+    )
+    cpu_limit = float(cpu_limits_results[0]["value"][1]) if cpu_limits_results else 0.0
+    memory_limit = (
+        float(memory_limits_results[0]["value"][1]) if memory_limits_results else 0.0
+    )
+
+    response_time_results = []
+    for query in response_time_query:
+        response = prometheus.custom_query(query)
+        if not response:
+            continue
+
+        try:
+            value = float(response[0]["value"][1])
+        except Exception:
+            logging.exception("Error parsing response time value in get_raw_metrics")
+            continue
+
+        # ignore NaNs
+        if not np.isnan(value):
+            response_time_results.append(value)
+
+    return cpu_value, memory_value, cpu_limit, memory_limit, response_time_results
