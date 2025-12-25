@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: test-flask-app-config
+  name: testing-flask-app-config
   namespace: default
   labels:
-    app: test-flask-app
+    app: testing-flask-app
 data:
   # Application settings
   APP_HOST: "0.0.0.0"

@@ -5,7 +5,6 @@ import os
 from dotenv import load_dotenv
 from prometheus_api_client import PrometheusConnect
 from utils import (
-    calculate_distance,
     get_metrics,
     get_raw_metrics,
     get_replica,
@@ -15,7 +14,7 @@ from utils import (
 from database import InfluxDB
 
 parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--test", action="store_true", help="Use .env.test file")
+parser.add_argument("--second", action="store_true", help="Use .env.test file")
 args, _ = parser.parse_known_args()
 
 if args.test:
@@ -34,10 +33,6 @@ deployment_name = os.getenv("DEPLOYMENT_NAME")
 metrics_interval = int(os.getenv("METRICS_INTERVAL"))
 metrics_quantile = float(os.getenv("METRICS_QUANTILE"))
 max_response_time = float(os.getenv("MAX_RESPONSE_TIME"))
-max_cpu = float(os.getenv("MAX_CPU"))
-min_cpu = float(os.getenv("MIN_CPU"))
-max_memory = float(os.getenv("MAX_MEMORY"))
-min_memory = float(os.getenv("MIN_MEMORY"))
 
 influxdb = InfluxDB(
     logger=logger,
@@ -72,10 +67,6 @@ while True:
         endpoints_method=metrics_endpoints_method,
     )
 
-    cpu_relative, memory_relative, cpu_distance, memory_distance = calculate_distance(
-        cpu, memory, max_cpu, min_cpu, max_memory, min_memory
-    )
-
     desired_replica, replica = get_replica(
         prometheus,
         namespace,
@@ -94,10 +85,6 @@ while True:
         "memory_limit": memory_limit,
         "replicas": replica,
         "desired_replicas": desired_replica,
-        "cpu_relative": cpu_relative,
-        "memory_relative": memory_relative,
-        "cpu_distance": cpu_distance,
-        "memory_distance": memory_distance,
     }
 
     influxdb.write_point(

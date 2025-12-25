@@ -47,10 +47,6 @@ if __name__ == "__main__":
         iteration=iteration,
         namespace=os.getenv("NAMESPACE", "default"),
         deployment_name=os.getenv("DEPLOYMENT_NAME", "your-app"),
-        min_cpu=float(os.getenv("MIN_CPU", "0.3")),
-        min_memory=float(os.getenv("MIN_MEMORY", "0.3")),
-        max_cpu=float(os.getenv("MAX_CPU", "0.7")),
-        max_memory=float(os.getenv("MAX_MEMORY", "0.7")),
         max_response_time=float(os.getenv("MAX_RESPONSE_TIME", "1000")),
         timeout=int(os.getenv("TIMEOUT", "120")),
         wait_time=int(os.getenv("WAIT_TIME", "5")),
@@ -70,17 +66,16 @@ if __name__ == "__main__":
     logger.info("Loading model from %s", os.getenv("MODEL_PATH"))
     model = DQN.load(os.getenv("MODEL_PATH"), env=env, device="auto")
     vec_env = model.get_env()
+    logger.info("Resetting environment...")
+    logger.info(f"Deployment: {env.deployment_name} in Namespace: {env.namespace}")
+
     obs = vec_env.reset()
 
     episode = 0
     episode_reward = 0.0
     step_count = 0
     last_action = 0
-    max_scale_down_steps = int(
-        os.getenv(
-            "MAX_SCALE_DOWN",
-        )
-    )
+    max_scale_down_steps = int(os.getenv("MAX_SCALE_DOWN", "10"))
 
     logger.info("Starting inference loop...")
 
@@ -88,7 +83,7 @@ if __name__ == "__main__":
         while not shutdown_event.is_set():
             try:
                 action, _ = model.predict(obs, deterministic=True)
-                action = max(action, last_action - max_scale_down_steps)
+                # action = max(action, last_action - max_scale_down_steps)
 
                 obs, rewards, dones, info = vec_env.step(action)
                 last_action = action

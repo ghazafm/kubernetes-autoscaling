@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -16,49 +17,41 @@ load_dotenv()
 
 
 class OfflineEnv(Env):
-    """Dummy environment for offline training - only defines spaces."""
-
     def __init__(
         self,
         weight_response_time: float = 1.0,
         weight_cost: float = 1.0,
-        max_cpu: float = 80.0,
-        min_cpu: float = 20.0,
-        max_memory: float = 60.0,
-        min_memory: float = 20.0,
+        num_epochs: int = 1,
     ):
         self.action_space = Discrete(100)
         self.observation_space = Box(
-            low=np.array([0.0, 0.0, 0.0, -2.0, -2.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 2.0, 2.0, 3.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 3.0], dtype=np.float32),
             dtype=np.float32,
         )
         self.weight_response_time = weight_response_time
         self.weight_cost = weight_cost
-        self.min_cpu: float = min_cpu
-        self.min_memory: float = min_memory
-        self.max_cpu: float = max_cpu
-        self.max_memory: float = max_memory
+        self.num_epochs = num_epochs
 
         self.data = None
         self._index = 0
-        self.observations = np.zeros(6, dtype=np.float32)
+        self._epoch = 0
+        self.observations = np.zeros(4, dtype=np.float32)
 
     calculate_reward = KubernetesEnv.calculate_reward
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        # reset dataset cursor
         self._index = 0
+        self._epoch = 0
+
         if self.data is not None and len(self.data) > 0:
             row = self.data.iloc[0]
             obs = np.array(
                 [
                     float(row["obs_action"]),
-                    float(row["obs_cpu_relative"]),
-                    float(row["obs_memory_relative"]),
-                    float(row["obs_cpu_distance"]),
-                    float(row["obs_memory_distance"]),
+                    float(row["cpu"]) / 100.0,
+                    float(row["memory"]) / 100.0,
                     float(row["obs_response_time"]),
                 ],
                 dtype=np.float32,
@@ -66,47 +59,50 @@ class OfflineEnv(Env):
             self.observations = obs
             return obs, {}
 
-        return np.zeros(6, dtype=np.float32), {}
+        return np.zeros(4, dtype=np.float32), {}
 
     def step(self, action):
-        """
-        Return the next transition from the offline dataset (if provided).
-        The env ignores the agent's action and yields the recorded next state,
-        reward and done flags so training can proceed deterministically from
-        existing transitions.
-        """
-        if self.data is None or self._index >= len(self.data):
-            # no data left — return a terminal empty transition
-            obs = np.zeros(6, dtype=np.float32)
-            return obs, 0.0, True, False, {}
+        if self.data is None or len(self.data) == 0:
+            return np.zeros(4, dtype=np.float32), 0.0, True, False, {}
+
+        if self._index >= len(self.data):
+            self._epoch += 1
+            self._index = 0
+
+            if self._epoch >= self.num_epochs:
+                return np.zeros(4, dtype=np.float32), 0.0, True, False, {}
+
+            row = self.data.iloc[0]
+            obs = np.array(
+                [
+                    float(row["obs_action"]),
+                    float(row["cpu"]) / 100.0,
+                    float(row["memory"]) / 100.0,
+                    float(row["obs_response_time"]),
+                ],
+                dtype=np.float32,
+            )
+            self.observations = obs
 
         row = self.data.iloc[self._index]
-
-        obs = np.array(
-            [
-                float(row["obs_action"]),
-                float(row["obs_cpu_relative"]),
-                float(row["obs_memory_relative"]),
-                float(row["obs_cpu_distance"]),
-                float(row["obs_memory_distance"]),
-                float(row["obs_response_time"]),
-            ],
-            dtype=np.float32,
-        )
-
+        obs = self.observations.copy()
         next_obs = np.array(
             [
                 float(row["next_obs_action"]),
-                float(row["next_obs_cpu_relative"]),
-                float(row["next_obs_memory_relative"]),
-                float(row["next_obs_cpu_distance"]),
-                float(row["next_obs_memory_distance"]),
-                float(row["next_obs_response_time"]),
+                float(row["cpu"]) / 100.0,
+                float(row["memory"]) / 100.0,
+                float(row["response_time"]) / 100.0,
             ],
             dtype=np.float32,
         )
+        action = int(row["action"])
 
-        reward = float(row.get("reward", 0.0))
+        reward = KubernetesEnv.calculate_reward(
+            self,
+            action=action,
+            response_time=float(row["response_time"]),
+        )
+
         terminated = bool(row.get("terminated", False))
         truncated = bool(row.get("truncated", False))
 
@@ -115,121 +111,28 @@ class OfflineEnv(Env):
             "memory": float(row.get("memory", 0.0)),
             "response_time": float(row.get("response_time", 0.0)),
             "replicas": int(row.get("replicas", 0)),
+            "epoch": self._epoch,
+            "index": self._index,
         }
 
-        # Use previous observation (the env's last returned observation) to
-        # decide whether metrics are stale, mirroring the logic in
-        # `environment.KubernetesEnv.step()`.
-        prev_obs = self.observations.copy()
-        RT_STALE_THRESHOLD = 0.3
-
-        missing_cpu = info["cpu"] <= 0.0
-        missing_mem = info["memory"] <= 0.0
-        is_broken = (missing_cpu or missing_mem) and prev_obs[5] >= RT_STALE_THRESHOLD
-
-        if is_broken:
-            recorded_action = int(obs[0] * 99)
-            est_cpu, est_mem, est_rt = self.estimate_metrics(
-                prev_obs=prev_obs,
-                action=recorded_action,
-                cpu=info["cpu"],
-                memory=info["memory"],
-                response_time=info["response_time"],
-            )
-
-            info["cpu"] = est_cpu
-            info["memory"] = est_mem
-            info["response_time"] = est_rt
-
-            # Recompute normalized distances using the same helper as the
-            # online environment so offline and online observations stay
-            # consistent.
-            cpu_relative, memory_relative, cpu_distance, memory_distance = (
-                KubernetesEnv.calculate_distance(self, est_cpu, est_mem)
-            )
-
-            next_obs[1] = float(np.clip(cpu_relative, 0.0, 1.0))
-            next_obs[2] = float(np.clip(memory_relative, 0.0, 1.0))
-            next_obs[3] = float(np.clip(cpu_distance, -2.0, 2.0))
-            next_obs[4] = float(np.clip(memory_distance, -2.0, 2.0))
-            next_obs[5] = float(np.clip(est_rt / 100.0, 0.0, 3.0))
-
-        # advance cursor
         self._index += 1
         self.observations = next_obs
 
         return next_obs, reward, terminated, truncated, info
 
-    def calculate_distance(self, cpu: float, memory: float) -> tuple[float, float]:
-        cpu_bandwidth = self.max_cpu - self.min_cpu
-
-        if cpu < self.min_cpu:
-            cpu_distance = (cpu - self.min_cpu) / cpu_bandwidth
-        elif cpu > self.max_cpu:
-            cpu_distance = (cpu - self.max_cpu) / cpu_bandwidth
-        else:
-            cpu_distance = 0.0
-
-        cpu_relative = (cpu - self.min_cpu) / cpu_bandwidth
-
-        memory_bandwidth = self.max_memory - self.min_memory
-
-        if memory < self.min_memory:
-            memory_distance = (memory - self.min_memory) / memory_bandwidth
-        elif memory > self.max_memory:
-            memory_distance = (memory - self.max_memory) / memory_bandwidth
-        else:
-            memory_distance = 0.0
-
-        memory_relative = (memory - self.min_memory) / memory_bandwidth
-
-        return cpu_relative, memory_relative, cpu_distance, memory_distance
-
-    def estimate_metrics(
-        self,
-        prev_obs,
-        action: int,
-        cpu: float,
-        memory: float,
-        response_time: float,
-    ) -> tuple[float, float, float]:
-        prev_action = prev_obs[0]
-        current_action = action / 99.0
-        action_change = current_action - prev_action
-
-        prev_cpu_rel = prev_obs[1]
-        prev_mem_rel = prev_obs[2]
-
-        cpu_bandwidth = self.max_cpu - self.min_cpu
-        mem_bandwidth = self.max_memory - self.min_memory
-        prev_cpu = prev_cpu_rel * cpu_bandwidth + self.min_cpu
-        prev_mem = prev_mem_rel * mem_bandwidth + self.min_memory
-        prev_rt = float(prev_obs[5]) * 100.0
-
-        scale_factor = 0.5
-
-        missing_cpu = cpu <= 0.0
-        missing_mem = memory <= 0.0
-        missing_rt = response_time <= 0.0
-
-        if missing_cpu:
-            cpu = prev_cpu * (1 - action_change * scale_factor)
-            cpu = max(0.01, cpu)
-
-        if missing_mem:
-            memory = prev_mem * (1 - action_change * scale_factor)
-            memory = max(0.01, memory)
-
-        if missing_rt:
-            response_time = prev_rt * (1 - action_change * scale_factor)
-            response_time = float(np.clip(response_time, 0.01, 1000.0))
-
-        return cpu, memory, response_time
-
 
 def load_csv_data(csv_paths: list[str]) -> pd.DataFrame:
-    """Load and concatenate multiple CSV files."""
-    dfs = [pd.read_csv(p) for p in csv_paths]
+    dfs = []
+    for p in csv_paths:
+        try:
+            df = pd.read_csv(p)
+            dfs.append(df)
+        except Exception as e:
+            print(f"Warning: Failed to load {p}: {e}")  # noqa: T201
+
+    if not dfs:
+        raise ValueError("No CSV files could be loaded")
+
     return pd.concat(dfs, ignore_index=True)
 
 
@@ -246,36 +149,83 @@ if __name__ == "__main__":
         data_dir = Path("data")
         csv_paths = [str(p) for p in data_dir.glob("*.csv")]
 
+    if not csv_paths:
+        logger.error(
+            "No CSV files found. Please set CSV_PATHS or "
+            "place CSV files in 'data' directory"
+        )
+        sys.exit(1)
+
     logger.info(f"Loading {len(csv_paths)} CSV files: {csv_paths}")
     df = load_csv_data(csv_paths)
     logger.info(f"Loaded {len(df)} transitions")
 
-    # CPU/memory bounds for stale data recalculation
-    min_cpu = float(os.getenv("MIN_CPU", "20.0"))
-    max_cpu = float(os.getenv("MAX_CPU", "80.0"))
-    min_memory = float(os.getenv("MIN_MEMORY", "20.0"))
-    max_memory = float(os.getenv("MAX_MEMORY", "60.0"))
+    required_columns = [
+        "obs_action",
+        "obs_response_time",
+        "cpu",
+        "memory",
+        "response_time",
+        "next_obs_action",
+        "action",
+        "replicas",
+    ]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logger.error(f"Missing required columns: {missing_columns}")
+        logger.info(f"Available columns: {list(df.columns)}")
+        sys.exit(1)
+
+    logger.info("Data statistics:")
+    logger.info(f"  CPU range: {df['cpu'].min():.2f}% - {df['cpu'].max():.2f}%")
+    logger.info(
+        f"  Memory range: {df['memory'].min():.2f}% - {df['memory'].max():.2f}%"
+    )
+    logger.info(
+        f"  Response time range: {df['response_time'].min():.2f}% - "
+        f"{df['response_time'].max():.2f}%"
+    )
+    logger.info(f"  Actions: {df['action'].min()} - {df['action'].max()}")
+    logger.info(
+        f"  Episodes: {df['episode'].nunique() if 'episode' in df.columns else 'unknown'}"  # noqa: E501
+    )
+
+    zero_cpu = (df["cpu"] <= 0.0).sum()
+    zero_mem = (df["memory"] <= 0.0).sum()
+    zero_rt = (df["response_time"] <= 0.0).sum()
+    if zero_cpu > 0 or zero_mem > 0 or zero_rt > 0:
+        logger.warning(f"Found {zero_cpu} rows with zero/negative CPU")
+        logger.warning(f"Found {zero_mem} rows with zero/negative memory")
+        logger.warning(f"Found {zero_rt} rows with zero/negative response time")
+
+    num_epochs = int(os.getenv("NUM_EPOCHS", "1"))
+    target_update_freq = int(os.getenv("TARGET_UPDATE_FREQ", "100"))
+    warmup_steps = int(os.getenv("WARMUP_STEPS", "1000"))
 
     env = OfflineEnv(
         weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME", "1.0")),
         weight_cost=float(os.getenv("WEIGHT_COST", "1.0")),
-        max_cpu=max_cpu,
-        min_cpu=min_cpu,
-        max_memory=max_memory,
-        min_memory=min_memory,
+        num_epochs=num_epochs,
     )
-    # attach loaded dataset so env.step yields offline transitions
     env.data = df.reset_index(drop=True)
 
     note = os.getenv("NOTE", "offline")
     model_dir = Path(f"model/{now}_{note}")
     model_dir.mkdir(parents=True, exist_ok=True)
-    iteration = int(os.getenv("ITERATION"))
-    BASE_EPISODES = 10
-    num_episodes = int(os.getenv("EPISODE", BASE_EPISODES))
 
-    additional_timesteps = num_episodes * iteration
-    total_timesteps = additional_timesteps
+    dataset_size = len(df)
+    total_timesteps = dataset_size * num_epochs
+
+    adjusted_learning_starts = min(warmup_steps, dataset_size // 10)
+
+    logger.info("=" * 80)
+    logger.info("Training Configuration:")
+    logger.info(f"  Dataset size: {dataset_size:,} transitions")
+    logger.info(f"  Number of epochs: {num_epochs}")
+    logger.info(f"  Total timesteps: {total_timesteps:,}")
+    logger.info(f"  Warmup steps: {adjusted_learning_starts:,}")
+    logger.info(f"  Target update frequency: {target_update_freq}")
+    logger.info("=" * 80)
 
     model = DQN(
         policy="MlpPolicy",
@@ -284,11 +234,11 @@ if __name__ == "__main__":
         learning_rate=1e-4,
         gamma=0.99,
         buffer_size=100_000,
-        learning_starts=iteration * 3,
+        learning_starts=adjusted_learning_starts,
         batch_size=256,
         train_freq=1,
         gradient_steps=1,
-        target_update_interval=iteration,
+        target_update_interval=target_update_freq,
         exploration_fraction=0.4,
         exploration_initial_eps=1.0,
         exploration_final_eps=0.1,
@@ -299,12 +249,12 @@ if __name__ == "__main__":
         device="auto",
     )
 
-    logger.info("Populating replay buffer with stale data correction...")
-
-    logger.info(f"Training for {iteration} gradient steps")
+    logger.info("Starting offline training...")
+    logger.info(f"Buffer size: {model.buffer_size}")
+    logger.info(f"Learning starts after: {model.learning_starts} steps")
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=iteration * 2,
+        save_freq=max(target_update_freq * 2, 50000),
         save_path=str(model_dir / "checkpoints"),
         name_prefix="dqn_autoscaler",
         save_replay_buffer=True,
@@ -312,17 +262,30 @@ if __name__ == "__main__":
         verbose=1,
     )
 
-    model.learn(
-        total_timesteps=len(df),
-        callback=checkpoint_callback,
-        reset_num_timesteps=False,
-        progress_bar=True,
-        tb_log_name="DQN",
-    )
+    try:
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=checkpoint_callback,
+            reset_num_timesteps=False,
+            progress_bar=True,
+            tb_log_name="DQN",
+        )
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
 
     final_path = model_dir / "final" / "model"
     final_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(final_path)
     logger.info(f"Model saved to {final_path}")
 
+    buffer_path = model_dir / "final" / "replay_buffer.pkl"
+    model.save_replay_buffer(buffer_path)
+    logger.info(f"Replay buffer saved to {buffer_path}")
+
     env.close()
+    logger.info("=" * 80)
+    logger.info("Offline training completed successfully!")
+    logger.info(f"Trained for {num_epochs} epochs over {dataset_size:,} transitions")
+    logger.info(f"Total training steps: {total_timesteps:,}")
+    logger.info("=" * 80)

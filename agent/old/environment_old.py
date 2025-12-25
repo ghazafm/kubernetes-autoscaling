@@ -21,6 +21,10 @@ class KubernetesEnv(Env):
         deployment_name: str,
         min_replicas: int,
         max_replicas: int,
+        min_cpu: float,
+        min_memory: float,
+        max_cpu: float,
+        max_memory: float,
         max_response_time: float,
         iteration: int,
         timeout: int,
@@ -66,28 +70,28 @@ class KubernetesEnv(Env):
         self.logger = logger
         self.action_space = Discrete(100)
         self.observation_space = Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 3.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, 0.0, -2.0, -2.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 2.0, 2.0, 3.0], dtype=np.float32),
             dtype=np.float32,
         )
-
         self.iteration = iteration
         self.iteration_init = iteration
         self.min_replicas: int = min_replicas
         self.max_replicas: int = max_replicas
         self.range_replicas: int = max(1, self.max_replicas - self.min_replicas)
         self.max_response_time: float = max_response_time
+        self.min_cpu: float = min_cpu
+        self.min_memory: float = min_memory
+        self.max_cpu: float = max_cpu
+        self.max_memory: float = max_memory
         self.influxdb = influxdb
         self.max_scaling_retries = max_scaling_retries
 
         self.weight_response_time = weight_response_time
         self.weight_cost = weight_cost
-        self.logger.info(
-            f"Reward weights: RT={self.weight_response_time}, Cost={self.weight_cost}"
-        )
 
         self.observations = np.array(
-            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             dtype=np.float32,
         )
         self.last_reward = 0.0
@@ -113,11 +117,11 @@ class KubernetesEnv(Env):
 
         # kenapa digunakan response time sebelumnya?
         # karena ada kemungkinan response time sekarang
-        # juga bernilai 0.0 karena pod belum siap atau tidak ada request masuk
+        # juga bernilai 0.0 karena pod belum siap
         RT_STALE_THRESHOLD = 0.3
         missing_cpu = cpu <= 0.0
         missing_mem = memory <= 0.0
-        is_broken = (missing_cpu or missing_mem) and prev_obs[3] >= RT_STALE_THRESHOLD
+        is_broken = (missing_cpu or missing_mem) and prev_obs[5] >= RT_STALE_THRESHOLD
 
         if is_broken:
             cpu, memory, response_time = self.estimate_metrics(
@@ -128,8 +132,14 @@ class KubernetesEnv(Env):
                 response_time=response_time,
             )
 
+        cpu_relative, memory_relative, cpu_distance, memory_distance = (
+            self.calculate_distance(cpu, memory)
+        )
+
         reward = self.calculate_reward(
             action=action,
+            cpu_distance=cpu_distance,
+            memory_distance=memory_distance,
             response_time=response_time,
         )
         self.last_reward = reward
@@ -137,8 +147,10 @@ class KubernetesEnv(Env):
         self.observations = self.observation(
             action=action,
             response_time=response_time,
-            cpu=cpu,
-            memory=memory,
+            cpu_relative=cpu_relative,
+            memory_relative=memory_relative,
+            cpu_distance=cpu_distance,
+            memory_distance=memory_distance,
         )
 
         if self.iteration <= 0:
@@ -154,6 +166,10 @@ class KubernetesEnv(Env):
             "response_time": response_time,
             "replicas": replica,
             "action": action,
+            "cpu_relative": cpu_relative,
+            "memory_relative": memory_relative,
+            "cpu_distance": cpu_distance,
+            "memory_distance": memory_distance,
         }
 
         self.csv_logger.log_transition(
@@ -234,9 +250,14 @@ class KubernetesEnv(Env):
         current_action = action / 99.0
         action_change = current_action - prev_action
 
-        prev_cpu = float(prev_obs[1]) * 100.0
-        prev_mem = float(prev_obs[2]) * 100.0
-        prev_rt = float(prev_obs[3]) * 100.0
+        prev_cpu_rel = prev_obs[1]
+        prev_mem_rel = prev_obs[2]
+
+        cpu_bandwidth = self.max_cpu - self.min_cpu
+        mem_bandwidth = self.max_memory - self.min_memory
+        prev_cpu = prev_cpu_rel * cpu_bandwidth + self.min_cpu
+        prev_mem = prev_mem_rel * mem_bandwidth + self.min_memory
+        prev_rt = float(prev_obs[5]) * 100.0
 
         scale_factor = 0.5
 
@@ -275,6 +296,8 @@ class KubernetesEnv(Env):
     def calculate_reward(
         self,
         action: int,
+        cpu_distance: float,
+        memory_distance: float,
         response_time: float,
     ) -> float:
         RESPONSE_TIME_HIGH_THRESHOLD = 50.0
@@ -326,7 +349,11 @@ class KubernetesEnv(Env):
 
         cost_penalty_raw = action / 99.0
 
-        if response_time > RESPONSE_TIME_VIOLATION_THRESHOLD:
+        rt_bad = response_time > RESPONSE_TIME_VIOLATION_THRESHOLD
+        cpu_bad = cpu_distance > 0.0
+        memory_bad = memory_distance > 0.0
+
+        if rt_bad or cpu_bad or memory_bad:
             cost_weight_multiplier = 0.0
         elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
             cost_weight_multiplier = 1.0
@@ -339,38 +366,72 @@ class KubernetesEnv(Env):
             self.weight_response_time * response_time_penalty
             + self.weight_cost * effective_cost_penalty
         )
-        reward = 1.0 - total_penalty
+        return 1.0 - total_penalty
 
-        if action > 50 and reward > 0.9:  # noqa: PLR2004
-            self.logger.warning(
-                f"⚠️ SUSPICIOUS REWARD: action={action}, rt={response_time:.1f}%, "
-                f"rt_penalty={response_time_penalty:.3f}, "
-                f"cost_penalty={effective_cost_penalty:.3f}, "
-                f"total_penalty={total_penalty:.3f}, "
-                f"reward={reward:.3f}, "
-                f"weight_rt={self.weight_response_time}, "
-                f"weight_cost={self.weight_cost}"
-            )
-        return reward
+    def calculate_distance(self, cpu: float, memory: float) -> tuple[float, float]:
+        """
+        Kenapa perlu jarak relatif?
+        Dan
+        Kenapa perlu diatur rentang cpu dan memory nya?
+
+        Karena pada perhitungan reward, jika cpu, memory, atau response time melebihi
+        batas max,
+        Maka penalti biaya akan dinonaktifkan.
+        Hal ini berarti agen akan cenderung mempertahankan waktu respons.
+
+        Rentang minimum dan maksimum, memungkinkan kita mengatur sensitivitas
+        terhadap pelanggaran sumber daya.
+        Misalnya, jika rentang cpu adalah 20% - 80%,
+        Maka agen akan fokus dengan waktu respons ketika penggunaan CPU lebih dari 80%
+        """
+        cpu_bandwidth = self.max_cpu - self.min_cpu
+
+        if cpu < self.min_cpu:
+            cpu_distance = (cpu - self.min_cpu) / cpu_bandwidth
+        elif cpu > self.max_cpu:
+            cpu_distance = (cpu - self.max_cpu) / cpu_bandwidth
+        else:
+            cpu_distance = 0.0
+
+        cpu_relative = (cpu - self.min_cpu) / cpu_bandwidth
+
+        memory_bandwidth = self.max_memory - self.min_memory
+
+        if memory < self.min_memory:
+            memory_distance = (memory - self.min_memory) / memory_bandwidth
+        elif memory > self.max_memory:
+            memory_distance = (memory - self.max_memory) / memory_bandwidth
+        else:
+            memory_distance = 0.0
+
+        memory_relative = (memory - self.min_memory) / memory_bandwidth
+
+        return cpu_relative, memory_relative, cpu_distance, memory_distance
 
     def observation(
         self,
         action: int,
         response_time: float,
-        cpu: float,
-        memory: float,
-    ) -> np.ndarray:
+        cpu_relative: float,
+        memory_relative: float,
+        cpu_distance: float,
+        memory_distance: float,
+    ):
         action = action / 99.0
 
-        cpu = float(np.clip(cpu / 100.0, 0.0, 1.0))
-        memory = float(np.clip(memory / 100.0, 0.0, 1.0))
+        cpu_relative = float(np.clip(cpu_relative, 0.0, 1.0))
+        memory_relative = float(np.clip(memory_relative, 0.0, 1.0))
+        cpu_distance = float(np.clip(cpu_distance, -2.0, 2.0))
+        memory_distance = float(np.clip(memory_distance, -2.0, 2.0))
         response_time = float(np.clip(response_time / 100.0, 0.0, 3.0))
 
         return np.array(
             [
                 action,
-                cpu,
-                memory,
+                cpu_relative,
+                memory_relative,
+                cpu_distance,
+                memory_distance,
                 response_time,
             ],
             dtype=np.float32,
@@ -409,12 +470,9 @@ class KubernetesEnv(Env):
             action = int(self.observations[0] * 99)
             cpu = self.observations[1] * 100.0
             mem = self.observations[2] * 100.0
-            rt = self.observations[3] * 100.0
-
-            self.logger.debug(
-                f"Render debug: obs[0]={self.observations[0]:.4f}, "
-                f"action={action}, last_reward={self.last_reward:.3f}"
-            )
+            cpu_distance = self.observations[3]
+            mem_distance = self.observations[4]
+            rt = self.observations[5] * 100.0
 
             DIST_GREEN_LOWER_BOUND = -0.1
             DIST_GREEN_UPPER_BOUND = 0.1
@@ -430,6 +488,8 @@ class KubernetesEnv(Env):
                     return RED
                 return YELLOW
 
+            cpu_col = _dist_color(cpu_distance)
+            mem_col = _dist_color(mem_distance)
             rt_col = _color(rt, warn=80, crit=100)
 
             cpu_bar = _bar(cpu)
@@ -440,14 +500,16 @@ class KubernetesEnv(Env):
 
             # line 1
             hdr = "▶ "
-            cpu_str = f"CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
-            mem_str = f"MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
+            cpu_str = f"{cpu_col}CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
+            mem_str = f"{mem_col}MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
             rt_str = f"{rt_col}RT {rt:6.1f}% {rt_bar}{RESET}"
             act_str = f"ACT {action:3d}"
+            cpu_dist_str = f"CPU_D {cpu_distance:+7.3f}"
+            mem_dist_str = f"MEM_D {mem_distance:+7.3f}"
             reward_str = f"RWD {self.last_reward:+6.3f}"
             self.logger.info(
                 f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
-                f"{act_str} | {reward_str} |"
+                f"{cpu_dist_str} | {mem_dist_str} | {act_str} | {reward_str} |"
             )
 
     def reset(
@@ -476,11 +538,17 @@ class KubernetesEnv(Env):
 
         cpu, memory, response_time = self.scale(replica)
 
+        cpu_relative, memory_relative, cpu_distance, memory_distance = (
+            self.calculate_distance(cpu, memory)
+        )
+
         self.observations = self.observation(
             action=action,
-            cpu=cpu,
-            memory=memory,
             response_time=response_time,
+            cpu_relative=cpu_relative,
+            memory_relative=memory_relative,
+            cpu_distance=cpu_distance,
+            memory_distance=memory_distance,
         )
 
         info = {
@@ -489,6 +557,10 @@ class KubernetesEnv(Env):
             "response_time": response_time,
             "replicas": replica,
             "action": action,
+            "cpu_relative": cpu_relative,
+            "memory_relative": memory_relative,
+            "cpu_distance": cpu_distance,
+            "memory_distance": memory_distance,
         }
 
         self.csv_logger.on_reset(self.observations, info)

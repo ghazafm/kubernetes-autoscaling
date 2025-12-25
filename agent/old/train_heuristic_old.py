@@ -1,4 +1,3 @@
-import argparse
 import ast
 import os
 import pickle
@@ -19,15 +18,10 @@ from utils import setup_logger
 
 from database import InfluxDB
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--second", action="store_true", help="Use .env.second file")
-    args, _ = parser.parse_known_args()
+load_dotenv()
 
-    if args.second:
-        load_dotenv(".env.second")
-    else:
-        load_dotenv()
+
+if __name__ == "__main__":
     now = datetime.now().strftime("%Y-%m-%d-%H-%M")
     logger, log_dir = setup_logger(
         "kubernetes_agent", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
@@ -56,6 +50,10 @@ if __name__ == "__main__":
         iteration=iteration,
         namespace=os.getenv("NAMESPACE"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
+        min_cpu=float(os.getenv("MIN_CPU")),
+        min_memory=float(os.getenv("MIN_MEMORY")),
+        max_cpu=float(os.getenv("MAX_CPU")),
+        max_memory=float(os.getenv("MAX_MEMORY")),
         max_response_time=float(os.getenv("MAX_RESPONSE_TIME")),
         timeout=int(os.getenv("TIMEOUT")),
         wait_time=int(os.getenv("WAIT_TIME")),
@@ -79,6 +77,10 @@ if __name__ == "__main__":
         iteration=iteration,
         namespace=os.getenv("NAMESPACE"),
         deployment_name=os.getenv("DEPLOYMENT_NAME"),
+        min_cpu=float(os.getenv("MIN_CPU")),
+        min_memory=float(os.getenv("MIN_MEMORY")),
+        max_cpu=float(os.getenv("MAX_CPU")),
+        max_memory=float(os.getenv("MAX_MEMORY")),
         max_response_time=float(os.getenv("MAX_RESPONSE_TIME")),
         timeout=int(os.getenv("TIMEOUT")),
         wait_time=int(os.getenv("WAIT_TIME")),
@@ -238,7 +240,7 @@ if __name__ == "__main__":
         eval_env,
         best_model_save_path=str(model_dir / "best_model"),
         log_path=str(model_dir / "eval_logs"),
-        eval_freq=iteration * 10,
+        eval_freq=iteration,
         n_eval_episodes=1,
         deterministic=True,
         render=False,

@@ -255,4 +255,10 @@ def get_raw_metrics(
         if not np.isnan(value):
             response_time_results.append(value)
 
-    return cpu_value, memory_value, cpu_limit, memory_limit, response_time_results
+    response_value = (
+        float(np.mean(response_time_results)) if response_time_results else 0.0
+    )
+    if np.isnan(response_value):
+        response_value = 0.0
+
+    return cpu_value, memory_value, cpu_limit, memory_limit, response_value

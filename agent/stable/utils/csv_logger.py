@@ -28,10 +28,8 @@ class TransitionLogger:
         "step",
         # Current observation (state)
         "obs_action",
-        "obs_cpu_relative",
-        "obs_memory_relative",
-        "obs_cpu_distance",
-        "obs_memory_distance",
+        "obs_cpu",
+        "obs_memory",
         "obs_response_time",
         # Action taken
         "action",
@@ -39,10 +37,8 @@ class TransitionLogger:
         "reward",
         # Next observation (next state)
         "next_obs_action",
-        "next_obs_cpu_relative",
-        "next_obs_memory_relative",
-        "next_obs_cpu_distance",
-        "next_obs_memory_distance",
+        "next_obs_cpu",
+        "next_obs_memory",
         "next_obs_response_time",
         # Done flags
         "terminated",
@@ -52,10 +48,6 @@ class TransitionLogger:
         "memory",
         "response_time",
         "replicas",
-        "cpu_relative",
-        "memory_relative",
-        "cpu_distance",
-        "memory_distance",
     ]
 
     def __init__(
@@ -132,22 +124,18 @@ class TransitionLogger:
             "step": self.step,
             # Current observation
             "obs_action": float(obs[0]),
-            "obs_cpu_relative": float(obs[1]),
-            "obs_memory_relative": float(obs[2]),
-            "obs_cpu_distance": float(obs[3]),
-            "obs_memory_distance": float(obs[4]),
-            "obs_response_time": float(obs[5]),
+            "obs_cpu": float(obs[1]),
+            "obs_memory": float(obs[2]),
+            "obs_response_time": float(obs[3]),
             # Action
             "action": action,
             # Reward
             "reward": reward,
             # Next observation
             "next_obs_action": float(next_obs[0]),
-            "next_obs_cpu_relative": float(next_obs[1]),
-            "next_obs_memory_relative": float(next_obs[2]),
-            "next_obs_cpu_distance": float(next_obs[3]),
-            "next_obs_memory_distance": float(next_obs[4]),
-            "next_obs_response_time": float(next_obs[5]),
+            "next_obs_cpu": float(next_obs[1]),
+            "next_obs_memory": float(next_obs[2]),
+            "next_obs_response_time": float(next_obs[3]),
             # Done flags
             "terminated": terminated,
             "truncated": truncated,
@@ -156,10 +144,6 @@ class TransitionLogger:
             "memory": info.get("memory", 0.0),
             "response_time": info.get("response_time", 0.0),
             "replicas": info.get("replicas", 0),
-            "cpu_relative": info.get("cpu_relative", 0.0),
-            "memory_relative": info.get("memory_relative", 0.0),
-            "cpu_distance": info.get("cpu_distance", 0.0),
-            "memory_distance": info.get("memory_distance", 0.0),
         }
 
         with self.filepath.open("a", newline="") as f:
