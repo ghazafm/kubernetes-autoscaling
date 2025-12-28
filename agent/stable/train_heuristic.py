@@ -71,6 +71,7 @@ if __name__ == "__main__":
         render_mode="human",
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}",
+        mode="dev",
     )
 
     eval_env = KubernetesEnv(
@@ -94,6 +95,7 @@ if __name__ == "__main__":
         render_mode="human",
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}_eval",
+        mode="prod",
     )
     eval_env = Monitor(eval_env)
 
@@ -102,7 +104,6 @@ if __name__ == "__main__":
     num_episodes = int(os.getenv("EPISODE", BASE_EPISODES))
 
     resume_path = os.getenv("RESUME_PATH", "")
-    learning_starts = int(os.getenv("LEARNING_STARTS", iteration * 3))
 
     if resume_path:
         resume_model_path = Path(resume_path)
@@ -119,24 +120,14 @@ if __name__ == "__main__":
             device="auto",
         )
 
-        model.heuristic_prob = heuristic_prob
-        model.initial_heuristic_prob = heuristic_prob
-        model.heuristic_decay = heuristic_decay
-        model.min_heuristic_prob = min_heuristic_prob
-        model.custom_logger = logger
-        model.learning_starts = learning_starts
-        logger.info(
-            f"Restored heuristic parameters: prob={heuristic_prob:.3f}, "
-            f"decay={heuristic_decay:.5f}"
-        )
-
         try:
             checkpoints_dir = resume_model_path.parent.parent / "checkpoints"
             if checkpoints_dir.exists():
                 vec_files = list(checkpoints_dir.glob("*vecnormalize*"))
                 if vec_files:
+                    vec_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    vec_path = str(vec_files[0])
                     venv = DummyVecEnv([lambda: env])
-                    vec_path = str(vec_files[-1])
                     vecnorm = VecNormalize.load(vec_path, venv)
                     model.set_env(vecnorm)
                     env = vecnorm
@@ -151,18 +142,17 @@ if __name__ == "__main__":
                 replay_candidates = []
 
             if replay_candidates:
-                replay_path = str(replay_candidates[-1])
+                replay_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                replay_path = replay_candidates[0]
+
                 try:
                     model.load_replay_buffer(replay_path)
                     logger.info(f"Loaded replay buffer from {replay_path}")
                 except AttributeError:
                     with Path(replay_path).open("rb") as fh:
                         buf = pickle.load(fh)  # noqa: S301
-                    try:
-                        model.replay_buffer = buf
-                        logger.info(f"Assigned replay buffer from {replay_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to assign replay buffer: {e}")
+                    model.replay_buffer = buf
+                    logger.info(f"Assigned replay buffer from {replay_path}")
         except Exception as e:
             logger.warning(f"Could not load replay buffer: {e}")
 
@@ -197,6 +187,16 @@ if __name__ == "__main__":
         logger.info(f"Will train for {additional_timesteps} steps (fresh exploration)")
         logger.info(f"Model weights from {old_timesteps} offline steps are preserved")
 
+        model.heuristic_prob = heuristic_prob
+        model.initial_heuristic_prob = heuristic_prob
+        model.heuristic_decay = heuristic_decay
+        model.min_heuristic_prob = min_heuristic_prob
+        model.custom_logger = logger
+        logger.info(
+            f"Restored heuristic parameters: prob={heuristic_prob:.3f}, "
+            f"decay={heuristic_decay:.5f}"
+        )
+
     else:
         model_dir = Path(f"model/{now}_{note}")
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -209,7 +209,7 @@ if __name__ == "__main__":
             learning_rate=1e-4,
             gamma=0.99,
             buffer_size=100_000,
-            learning_starts=learning_starts,
+            learning_starts=iteration * 3,
             batch_size=256,
             train_freq=1,
             gradient_steps=1,

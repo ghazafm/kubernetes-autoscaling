@@ -123,8 +123,9 @@ if __name__ == "__main__":
             if checkpoints_dir.exists():
                 vec_files = list(checkpoints_dir.glob("*vecnormalize*"))
                 if vec_files:
+                    vec_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    vec_path = str(vec_files[0])
                     venv = DummyVecEnv([lambda: env])
-                    vec_path = str(vec_files[-1])
                     vecnorm = VecNormalize.load(vec_path, venv)
                     model.set_env(vecnorm)
                     env = vecnorm
@@ -132,8 +133,6 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"Could not restore VecNormalize: {e}")
 
-        # Attempt to load replay buffer (best-effort). SB3 provides
-        # load_replay_buffer in some versions; otherwise try unpickling.
         try:
             if checkpoints_dir.exists():
                 replay_candidates = list(checkpoints_dir.glob("*replay*"))
