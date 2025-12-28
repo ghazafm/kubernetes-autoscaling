@@ -10,6 +10,7 @@ dependencies = [
     "prometheus-api-client>=0.6.0",
     "python-dotenv>=1.2.1",
     "stable-baselines3[extra]>=2.7.0",
+    "tensorflow>=2.20.0",
     "torch>=2.9.1",
     "torchvision>=0.24.1",
 ]

@@ -141,18 +141,17 @@ if __name__ == "__main__":
                 replay_candidates = []
 
             if replay_candidates:
-                replay_path = str(replay_candidates[-1])
+                replay_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                replay_path = replay_candidates[0]
+
                 try:
-                    model.load_replay_buffer(replay_path)
+                    model.load_replay_buffer(str(replay_path))
                     logger.info(f"Loaded replay buffer from {replay_path}")
                 except AttributeError:
                     with Path(replay_path).open("rb") as fh:
                         buf = pickle.load(fh)  # noqa: S301
-                    try:
-                        model.replay_buffer = buf
-                        logger.info(f"Assigned replay buffer from {replay_path}")
-                    except Exception as e:
-                        logger.warning(f"Failed to assign replay buffer: {e}")
+                    model.replay_buffer = buf
+                    logger.info(f"Assigned replay buffer from {replay_path}")
         except Exception as e:
             logger.warning(f"Could not load replay buffer: {e}")
 

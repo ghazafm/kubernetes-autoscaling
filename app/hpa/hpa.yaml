@@ -10,16 +10,3 @@ spec:
     name: hpa-flask-app
   minReplicas: 1
   maxReplicas: 20
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: AverageValue
-          averageValue: 250m
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: AverageValue
-          averageValue: 256Mi

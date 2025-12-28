@@ -55,9 +55,7 @@ dev = [
 
 [tool.uv.workspace]
 members = [
-    "agent",
-    "agent/stable",
-    "agent/scratch",
+    "agent/*",
     "app",
 ]
 

@@ -1,7 +1,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: testing-flask-app-metrics
+  name: test-flask-app-metrics
   namespace: default
   labels:
     app: kube-prometheus-stack
@@ -10,7 +10,7 @@ metadata:
 spec:
   selector:
     matchLabels:
-      app: testing-flask-app
+      app: test-flask-app
   endpoints:
   - port: http-metrics
     path: /metrics
