@@ -84,11 +84,11 @@ if __name__ == "__main__":
         while not shutdown_event.is_set():
             try:
                 action, _ = model.predict(obs, deterministic=True)
-                # action_int = int(action[0])
-                # if action > last_action:
-                #     action[0] = min(action_int, last_action + max_scale_up_steps)
-                # else:
-                #     action[0] = max(action_int, last_action - max_scale_down_steps)
+                action_int = int(action[0])
+                if action > last_action:
+                    action[0] = min(action_int, last_action + max_scale_up_steps)
+                else:
+                    action[0] = max(action_int, last_action - max_scale_down_steps)
 
                 obs, rewards, dones, info = vec_env.step(action)
                 last_action = action

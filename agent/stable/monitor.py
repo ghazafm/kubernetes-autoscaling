@@ -14,7 +14,8 @@ from utils import (
 from database import InfluxDB
 
 parser = argparse.ArgumentParser(add_help=False)
-parser.add_argument("--second", action="store_true", help="Use .env.test file")
+parser.add_argument("--test", action="store_true", help="Use .env.test file")
+parser.add_argument("--deployment", type=str, help="Deployment name to monitor")
 args, _ = parser.parse_known_args()
 
 if args.test:
@@ -29,7 +30,7 @@ logger, log_dir = setup_logger(
 metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
 prometheus_url = os.getenv("PROMETHEUS_URL")
 namespace = os.getenv("NAMESPACE", "default")
-deployment_name = os.getenv("DEPLOYMENT_NAME")
+deployment_name = args.deployment or os.getenv("DEPLOYMENT_NAME", "my-deployment")
 metrics_interval = int(os.getenv("METRICS_INTERVAL"))
 metrics_quantile = float(os.getenv("METRICS_QUANTILE"))
 max_response_time = float(os.getenv("MAX_RESPONSE_TIME"))
