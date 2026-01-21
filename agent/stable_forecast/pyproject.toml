@@ -1,0 +1,16 @@
+[project]
+name = "autoscaling-stable-forecast"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "gymnasium>=1.2.2",
+    "influxdb-client>=1.49.0",
+    "kubernetes>=34.1.0",
+    "numpy>=2.3.5",
+    "prometheus-api-client>=0.6.0",
+    "python-dotenv>=1.2.1",
+    "stable-baselines3[extra]>=2.7.0",
+    "tensorflow>=2.20.0",
+    "torch>=2.9.1",
+    "torchvision>=0.24.1",
+]

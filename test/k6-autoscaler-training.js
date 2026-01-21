@@ -162,12 +162,12 @@ export const options = {
 const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
 const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
 
-// Helper to pick a base URL. Uses __VU mapping for stable distribution across VUs,
-// falls back to a random choice when __VU is not available.
+// Helper to pick a base URL. Uses random selection for balanced load distribution
+// even with low VU counts.
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  const vuId = exec.vu.idInTest;
-  return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  // Use random selection per request for immediate load balancing
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
 }
 
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');

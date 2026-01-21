@@ -56,8 +56,9 @@ const ENABLE_MEMORY_TESTING = (__ENV.ENABLE_MEMORY_TESTING || 'true') === 'true'
 // =====================
 function pickBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  const vuId = exec.vu.idInTest;
-  return BASE_URLS[(vuId - 1) % BASE_URLS.length];
+  // Use random selection per request for immediate load balancing
+  // This ensures balanced distribution even with low VU counts
+  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
 }
 
 function scaleDuration(minutes) {

@@ -1,5 +1,4 @@
 import { check, sleep } from 'k6';
-import exec from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Rate, Trend } from 'k6/metrics';
 
@@ -155,11 +154,8 @@ const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
 
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  if (typeof exec !== 'undefined' && exec.vu && exec.vu.idInTest) {
-    const vuId = exec.vu.idInTest;
-    return BASE_URLS[(vuId - 1) % BASE_URLS.length];
-  }
-  if (typeof __VU !== 'undefined') return BASE_URLS[(__VU - 1) % BASE_URLS.length];
+  // Use random selection per request for immediate load balancing
+  // This ensures balanced distribution even with low VU counts
   return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
 }
 

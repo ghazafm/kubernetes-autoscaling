@@ -66,8 +66,8 @@ class KubernetesEnv(Env):
         self.logger = logger
         self.action_space = Discrete(100)
         self.observation_space = Box(
-            low=np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0, 3.0], dtype=np.float32),
+            low=np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -3.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0], dtype=np.float32),
             dtype=np.float32,
         )
 
@@ -87,7 +87,7 @@ class KubernetesEnv(Env):
         )
 
         self.observations = np.array(
-            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             dtype=np.float32,
         )
         self.last_reward = 0.0
@@ -135,6 +135,7 @@ class KubernetesEnv(Env):
         self.last_reward = reward
 
         self.observations = self.observation(
+            last_observations=prev_obs,
             action=action,
             response_time=response_time,
             cpu=cpu,
@@ -355,16 +356,19 @@ class KubernetesEnv(Env):
 
     def observation(
         self,
+        last_observations: np.ndarray,
         action: int,
         response_time: float,
         cpu: float,
         memory: float,
     ) -> np.ndarray:
         action = action / 99.0
-
         cpu = float(np.clip(cpu / 100.0, 0.0, 1.0))
         memory = float(np.clip(memory / 100.0, 0.0, 1.0))
         response_time = float(np.clip(response_time / 100.0, 0.0, 3.0))
+        delta_cpu = cpu - last_observations[1]
+        delta_memory = memory - last_observations[2]
+        delta_response_time = response_time - last_observations[3]
 
         return np.array(
             [
@@ -372,6 +376,9 @@ class KubernetesEnv(Env):
                 cpu,
                 memory,
                 response_time,
+                delta_cpu,
+                delta_memory,
+                delta_response_time,
             ],
             dtype=np.float32,
         )
@@ -381,15 +388,16 @@ class KubernetesEnv(Env):
             GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 
             if reverse:
-                ok = v <= warn
-                mid = warn < v <= crit
-            else:
-                ok = v < warn
-                mid = warn <= v < crit
                 if v >= crit:
-                    return RED
-
-            return GREEN if ok else (YELLOW if mid else RED)
+                    return GREEN
+                if v >= warn:
+                    return YELLOW
+                return RED
+            if v >= crit:
+                return RED
+            if v >= warn:
+                return YELLOW
+            return GREEN
 
         def _clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
             return max(lo, min(hi, v))
@@ -400,37 +408,37 @@ class KubernetesEnv(Env):
             return "█" * filled + "░" * (width - filled)
 
         def _fmt_pct(v: float) -> str:
-            try:
-                return f"{float(v):6.2f}%"
-            except Exception:
-                return f"{v}"
+            return f"{v:6.2f}%"
+
+        def _fmt_delta(v: float) -> str:
+            sign = "+" if v >= 0 else ""
+            val_str = f"{sign}{v:5.1f}%"
+
+            RED, GREEN, RESET = "\033[31m", "\033[32m", "\033[0m"
+            GREY = "\033[90m"
+
+            if v > 5.0:  # noqa: PLR2004
+                return f"{RED}{val_str}{RESET}"
+            if v < -5.0:  # noqa: PLR2004
+                return f"{GREEN}{val_str}{RESET}"
+            return f"{GREY}{val_str}{RESET}"
 
         if self.render_mode == "human":
             action = int(self.observations[0] * 99)
             cpu = self.observations[1] * 100.0
             mem = self.observations[2] * 100.0
             rt = self.observations[3] * 100.0
+            d_cpu = self.observations[4] * 100.0
+            d_mem = self.observations[5] * 100.0
+            d_rt = self.observations[6] * 100.0
 
             self.logger.debug(
                 f"Render debug: obs[0]={self.observations[0]:.4f}, "
                 f"action={action}, last_reward={self.last_reward:.3f}"
             )
 
-            DIST_GREEN_LOWER_BOUND = -0.1
-            DIST_GREEN_UPPER_BOUND = 0.1
-
-            DIST_RED_LOWER_BOUND = -0.3
-            DIST_RED_UPPER_BOUND = 0.5
-
-            def _dist_color(dist: float) -> str:
-                GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
-                if DIST_GREEN_LOWER_BOUND <= dist <= DIST_GREEN_UPPER_BOUND:
-                    return GREEN
-                if dist < DIST_RED_LOWER_BOUND or dist > DIST_RED_UPPER_BOUND:
-                    return RED
-                return YELLOW
-
             rt_col = _color(rt, warn=80, crit=100)
+            RESET = "\033[0m"
 
             cpu_bar = _bar(cpu)
             mem_bar = _bar(mem)
@@ -440,11 +448,12 @@ class KubernetesEnv(Env):
 
             # line 1
             hdr = "▶ "
-            cpu_str = f"CPU {_fmt_pct(cpu)} {cpu_bar}{RESET}"
-            mem_str = f"MEM {_fmt_pct(mem)} {mem_bar}{RESET}"
-            rt_str = f"{rt_col}RT {rt:6.1f}% {rt_bar}{RESET}"
+            cpu_str = f"CPU {_fmt_pct(cpu)} {_fmt_delta(d_cpu)} {cpu_bar}"
+            mem_str = f"MEM {_fmt_pct(mem)} {_fmt_delta(d_mem)} {mem_bar}"
+            rt_str = f"{rt_col}RT  {_fmt_pct(rt)} {_fmt_delta(d_rt)} {rt_bar}{RESET}"
             act_str = f"ACT {action:3d}"
             reward_str = f"RWD {self.last_reward:+6.3f}"
+
             self.logger.info(
                 f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
                 f"{act_str} | {reward_str} |"
@@ -474,11 +483,17 @@ class KubernetesEnv(Env):
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
         replica = min(replica, self.max_replicas)
 
-        cpu, memory, response_time = 0.0, 0.0, 0.0
-
         cpu, memory, response_time = self.scale(replica)
+        prev_obs = self.observation(
+            last_observations=self.observations,
+            action=action,
+            cpu=cpu,
+            memory=memory,
+            response_time=response_time,
+        )
 
         self.observations = self.observation(
+            last_observations=prev_obs,
             action=action,
             cpu=cpu,
             memory=memory,
