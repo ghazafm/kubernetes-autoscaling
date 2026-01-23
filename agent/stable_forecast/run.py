@@ -93,6 +93,7 @@ if __name__ == "__main__":
                     scale_down_attempts += 1
                     if scale_down_attempts > min_scale_down_attempts:
                         action[0] = max(action_int, last_action - max_scale_down_steps)
+                        scale_down_attempts = 0
                     else:
                         action = last_action
                         action[0] = last_action
