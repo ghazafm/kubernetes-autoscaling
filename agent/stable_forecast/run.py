@@ -75,6 +75,8 @@ if __name__ == "__main__":
     episode_reward = 0.0
     step_count = 0
     last_action = 0
+    scale_down_attempts = 0
+    min_scale_down_attempts = int(os.getenv("MIN_SCALE_DOWN_ATTEMPTS", "3"))
     max_scale_down_steps = int(os.getenv("MAX_SCALE_DOWN", "100"))
     max_scale_up_steps = int(os.getenv("MAX_SCALE_UP", "100"))
 
@@ -88,7 +90,12 @@ if __name__ == "__main__":
                 if action > last_action:
                     action[0] = min(action_int, last_action + max_scale_up_steps)
                 else:
-                    action[0] = max(action_int, last_action - max_scale_down_steps)
+                    scale_down_attempts += 1
+                    if scale_down_attempts > min_scale_down_attempts:
+                        action[0] = max(action_int, last_action - max_scale_down_steps)
+                    else:
+                        action = last_action
+                        action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
                 last_action = action

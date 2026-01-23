@@ -91,6 +91,7 @@ class KubernetesEnv(Env):
             dtype=np.float32,
         )
         self.last_reward = 0.0
+        self.last_reward_details = {}  # Store reward calculation details
 
         self.csv_logger = TransitionLogger(
             log_dir=csv_log_dir if csv_log_dir else "data",
@@ -342,6 +343,18 @@ class KubernetesEnv(Env):
         )
         reward = 1.0 - total_penalty
 
+        # Store details for render function
+        self.last_reward_details = {
+            "action": action,
+            "response_time": response_time,
+            "rt_penalty": response_time_penalty,
+            "cost_raw": cost_penalty_raw,
+            "cost_mult": cost_weight_multiplier,
+            "cost_eff": effective_cost_penalty,
+            "total_penalty": total_penalty,
+            "reward": reward,
+        }
+
         if action > 50 and reward > 0.9:  # noqa: PLR2004
             self.logger.warning(
                 f"⚠️ SUSPICIOUS REWARD: action={action}, rt={response_time:.1f}%, "
@@ -446,7 +459,7 @@ class KubernetesEnv(Env):
 
             RESET = "\033[0m"
 
-            # line 1
+            # line 1: Metrics summary
             hdr = "▶ "
             cpu_str = f"CPU {_fmt_pct(cpu)} {_fmt_delta(d_cpu)} {cpu_bar}"
             mem_str = f"MEM {_fmt_pct(mem)} {_fmt_delta(d_mem)} {mem_bar}"
@@ -458,6 +471,16 @@ class KubernetesEnv(Env):
                 f"{' ' * len(hdr)}| {cpu_str} | {mem_str} | {rt_str} | "
                 f"{act_str} | {reward_str} |"
             )
+
+            # line 2: Reward breakdown (only if we have details)
+            if self.last_reward_details:
+                d = self.last_reward_details
+                details_str = (
+                    f"{hdr}| rt_penalty={d['rt_penalty']:6.3f} | "
+                    f"cost_raw={d['cost_raw']:6.3f} cost_mult={d['cost_mult']:5.2f} "
+                    f"cost_eff={d['cost_eff']:6.3f} | penalty={d['total_penalty']:6.3f}"
+                )
+                self.logger.info(details_str)
 
     def reset(
         self,
