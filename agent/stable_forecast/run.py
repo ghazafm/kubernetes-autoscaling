@@ -26,23 +26,32 @@ signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
 
 
-def calibrate_action(action, state: dict) -> int:
-    action_int = int(action[0])
+def calibrate_action(action_int: int, state: dict) -> int:
+    # Initialize any None values
+    if state["min_action_seen"] is None or state["max_action_seen"] is None:
+        if state["min_action_seen"] is None:
+            state["min_action_seen"] = action_int
+        if state["max_action_seen"] is None:
+            state["max_action_seen"] = action_int
+        logger.info(f"Calibration: Initialized with action {action_int}")
 
-    if state["min_action_seen"] is None:
-        state["min_action_seen"] = action_int
-        state["max_action_seen"] = action_int
-        logger.info(f"Calibration: Setting baseline action to {action_int}")
-    else:
-        old_min = state["min_action_seen"]
-        state["min_action_seen"] = min(state["min_action_seen"], action_int)
-        state["max_action_seen"] = max(state["max_action_seen"], action_int)
-        if state["min_action_seen"] < old_min:
-            logger.info(
-                f"Calibration: Found lower action {state['min_action_seen']} "
-                f"(was {old_min}) after {state['calibration_steps']} steps"
-            )
-        state["calibration_steps"] += 1
+    # Update range
+    old_min = state["min_action_seen"]
+    old_max = state["max_action_seen"]
+    state["min_action_seen"] = min(state["min_action_seen"], action_int)
+    state["max_action_seen"] = max(state["max_action_seen"], action_int)
+
+    if state["min_action_seen"] < old_min:
+        logger.info(
+            f"Calibration: Found lower action {state['min_action_seen']} "
+            f"(was {old_min}) after {state['calibration_steps']} steps"
+        )
+    if state["max_action_seen"] > old_max:
+        logger.info(
+            f"Calibration: Found higher action {state['max_action_seen']} "
+            f"(was {old_max}) after {state['calibration_steps']} steps"
+        )
+    state["calibration_steps"] += 1
 
     action_range = state["max_action_seen"] - state["min_action_seen"]
     if action_range > 0:
@@ -124,7 +133,7 @@ if __name__ == "__main__":
             try:
                 action, _ = model.predict(obs, deterministic=True)
 
-                action_int = calibrate_action(action, calibration_state)
+                action_int = calibrate_action(int(action[0]), calibration_state)
 
                 if action_int > last_action:
                     action[0] = min(action_int, last_action + max_scale_up_steps)
@@ -139,7 +148,7 @@ if __name__ == "__main__":
                         action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
-                last_action = action
+                last_action = int(action[0])
 
                 episode_reward += rewards[0]
                 step_count += 1
@@ -147,9 +156,11 @@ if __name__ == "__main__":
                 if dones[0]:
                     episode += 1
                     baseline_info = (
-                        f" | Baseline action: {calibration_state['min_action_seen']} "
-                        f"(observed after {calibration_state['calibration_steps']} steps)"
-                        if calibration_state["min_action_seen"] is not None
+                        f" | Min/Max action: {calibration_state['min_action_seen']}/"
+                        f"{calibration_state['max_action_seen']} "
+                        f"(observed after {calibration_state['calibration_steps']} steps)"  # noqa: E501
+                        if calibration_state["min_action_seen"]
+                        and calibration_state["max_action_seen"] is not None
                         else ""
                     )
                     logger.info(
