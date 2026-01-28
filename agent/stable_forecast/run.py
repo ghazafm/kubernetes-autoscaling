@@ -52,6 +52,12 @@ def calibrate_action(action: int, state: dict) -> int:
             f"(was {old_max}) after {state['calibration_steps']} steps"
         )
     state["calibration_steps"] += 1
+    if state["calibration_steps"] == state["min_steps"]:
+        logger.info(
+            f"Calibration: Implemented after {state['calibration_steps']} steps. "
+            f"Min action: {state['min_action_seen']}, "
+            f"Max action: {state['max_action_seen']}"
+        )
 
     action_range = state["max_action_seen"] - state["min_action_seen"]
     if action_range > 0 and state["calibration_steps"] >= state["min_steps"]:
@@ -149,6 +155,7 @@ if __name__ == "__main__":
                         action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
+                obs[0] = action[0]
                 last_action = int(action[0])
 
                 episode_reward += rewards[0]
