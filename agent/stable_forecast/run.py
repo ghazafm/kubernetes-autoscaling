@@ -140,22 +140,22 @@ if __name__ == "__main__":
             try:
                 action, _ = model.predict(obs, deterministic=True)
 
-                action_int = calibrate_action(int(action[0]), calibration_state)
+                action[0] = calibrate_action(int(action[0]), calibration_state)
 
-                if action_int > last_action:
-                    action[0] = min(action_int, last_action + max_scale_up_steps)
+                if action[0] > last_action:
+                    action[0] = min(action[0], last_action + max_scale_up_steps)
 
                     scale_down_attempts = 0
                 else:
                     scale_down_attempts += 1
                     if scale_down_attempts > min_scale_down_attempts:
-                        action[0] = max(action_int, last_action - max_scale_down_steps)
+                        action[0] = max(action[0], last_action - max_scale_down_steps)
                         scale_down_attempts = 0
                     else:
                         action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
-                obs[0] = action[0]
+                obs[0] = action[0] / 99.0
                 last_action = int(action[0])
 
                 episode_reward += rewards[0]
