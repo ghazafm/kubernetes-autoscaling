@@ -25,6 +25,43 @@ def shutdown_handler(signum, frame):
 signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
 
+
+def calibrate_action(action, state: dict) -> int:
+    action_int = int(action[0])
+
+    if state["min_action_seen"] is None:
+        state["min_action_seen"] = action_int
+        state["max_action_seen"] = action_int
+        logger.info(f"Calibration: Setting baseline action to {action_int}")
+    else:
+        old_min = state["min_action_seen"]
+        state["min_action_seen"] = min(state["min_action_seen"], action_int)
+        state["max_action_seen"] = max(state["max_action_seen"], action_int)
+        if state["min_action_seen"] < old_min:
+            logger.info(
+                f"Calibration: Found lower action {state['min_action_seen']} "
+                f"(was {old_min}) after {state['calibration_steps']} steps"
+            )
+        state["calibration_steps"] += 1
+
+    action_range = state["max_action_seen"] - state["min_action_seen"]
+    if action_range > 0:
+        normalized = (action_int - state["min_action_seen"]) / action_range * 99
+        return round(normalized)
+    return 0
+
+
+calibration_state = {
+    "min_action_seen": int(os.getenv("MIN_ACTION_SEEN"))
+    if os.getenv("MIN_ACTION_SEEN")
+    else None,
+    "max_action_seen": int(os.getenv("MAX_ACTION_SEEN"))
+    if os.getenv("MAX_ACTION_SEEN")
+    else None,
+    "calibration_steps": 0,
+}
+
+
 if __name__ == "__main__":
     start_time = int(time.time())
     logger, log_dir = setup_logger(
@@ -86,9 +123,12 @@ if __name__ == "__main__":
         while not shutdown_event.is_set():
             try:
                 action, _ = model.predict(obs, deterministic=True)
-                action_int = int(action[0])
-                if action > last_action:
+
+                action_int = calibrate_action(action, calibration_state)
+
+                if action_int > last_action:
                     action[0] = min(action_int, last_action + max_scale_up_steps)
+
                     scale_down_attempts = 0
                 else:
                     scale_down_attempts += 1
@@ -96,7 +136,6 @@ if __name__ == "__main__":
                         action[0] = max(action_int, last_action - max_scale_down_steps)
                         scale_down_attempts = 0
                     else:
-                        action = last_action
                         action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
@@ -107,9 +146,15 @@ if __name__ == "__main__":
 
                 if dones[0]:
                     episode += 1
+                    baseline_info = (
+                        f" | Baseline action: {calibration_state['min_action_seen']} "
+                        f"(observed after {calibration_state['calibration_steps']} steps)"
+                        if calibration_state["min_action_seen"] is not None
+                        else ""
+                    )
                     logger.info(
                         f"Episode {episode} finished | Steps: {step_count} | "
-                        f"Total Reward: {episode_reward:.3f}"
+                        f"Total Reward: {episode_reward:.3f}{baseline_info}"
                     )
                     episode_reward = 0.0
                     step_count = 0
