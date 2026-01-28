@@ -26,20 +26,20 @@ signal.signal(signal.SIGINT, shutdown_handler)
 signal.signal(signal.SIGTERM, shutdown_handler)
 
 
-def calibrate_action(action_int: int, state: dict) -> int:
-    # Initialize any None values
+def calibrate_action(action: int, state: dict) -> int:
+    # Initialize
     if state["min_action_seen"] is None or state["max_action_seen"] is None:
         if state["min_action_seen"] is None:
-            state["min_action_seen"] = action_int
+            state["min_action_seen"] = action
         if state["max_action_seen"] is None:
-            state["max_action_seen"] = action_int
-        logger.info(f"Calibration: Initialized with action {action_int}")
+            state["max_action_seen"] = action
+        logger.info(f"Calibration: Initialized with action {action}")
 
     # Update range
     old_min = state["min_action_seen"]
     old_max = state["max_action_seen"]
-    state["min_action_seen"] = min(state["min_action_seen"], action_int)
-    state["max_action_seen"] = max(state["max_action_seen"], action_int)
+    state["min_action_seen"] = min(state["min_action_seen"], action)
+    state["max_action_seen"] = max(state["max_action_seen"], action)
 
     if state["min_action_seen"] < old_min:
         logger.info(
@@ -54,10 +54,10 @@ def calibrate_action(action_int: int, state: dict) -> int:
     state["calibration_steps"] += 1
 
     action_range = state["max_action_seen"] - state["min_action_seen"]
-    if action_range > 0:
-        normalized = (action_int - state["min_action_seen"]) / action_range * 99
+    if action_range > 0 and state["calibration_steps"] >= state["min_steps"]:
+        normalized = (action - state["min_action_seen"]) / action_range * 99
         return round(normalized)
-    return 0
+    return action
 
 
 calibration_state = {
@@ -67,6 +67,7 @@ calibration_state = {
     "max_action_seen": int(os.getenv("MAX_ACTION_SEEN"))
     if os.getenv("MAX_ACTION_SEEN")
     else None,
+    "min_steps": int(os.getenv("MIN_CALIBRATION_STEPS", "100")),
     "calibration_steps": 0,
 }
 
