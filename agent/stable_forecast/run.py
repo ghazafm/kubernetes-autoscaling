@@ -140,8 +140,6 @@ if __name__ == "__main__":
             try:
                 action, _ = model.predict(obs, deterministic=True)
 
-                action[0] = calibrate_action(int(action[0]), calibration_state)
-
                 if action[0] > last_action:
                     action[0] = min(action[0], last_action + max_scale_up_steps)
 
@@ -155,8 +153,10 @@ if __name__ == "__main__":
                         action[0] = last_action
 
                 obs, rewards, dones, info = vec_env.step(action)
-                obs[0] = action[0] / 99.0
                 last_action = int(action[0])
+                env.logger.info(f"Observation: {obs[0]}, Action taken: {action[0]}, ")
+                obs[0][0] = action[0] / 99.0
+                env.logger.info(f"Normalized next observation: {obs[0]}")
 
                 episode_reward += rewards[0]
                 step_count += 1

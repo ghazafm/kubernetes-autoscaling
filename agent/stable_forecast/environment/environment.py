@@ -437,7 +437,7 @@ class KubernetesEnv(Env):
             return f"{GREY}{val_str}{RESET}"
 
         if self.render_mode == "human":
-            action = int(self.observations[0] * 99)
+            action = round(self.observations[0] * 99)
             cpu = self.observations[1] * 100.0
             mem = self.observations[2] * 100.0
             rt = self.observations[3] * 100.0
