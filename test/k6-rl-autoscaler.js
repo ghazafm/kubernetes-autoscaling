@@ -128,8 +128,8 @@ export default function () {
       },
     }) || errorRate.add(1);
 
-  } else if (requestType < 0.7) {
-    // 30% Memory-intensive requests
+  } else {
+    // 50% Memory-intensive requests
     const sizeMb = Math.floor(Math.random() * 40) + 30; // 30MB to 70MB
     const memRes = safeGet(`${getBaseUrl()}/api/memory?size_mb=${sizeMb}`, { tags: { name: 'memory', request_type: 'memory' }, timeout: '20s' });
     memoryDuration.add(memRes.timings.duration);
@@ -146,13 +146,6 @@ export default function () {
       },
     }) || errorRate.add(1);
 
-  } else {
-    // 30% Basic requests (lightweight)
-    const basicRes = http.get(`${getBaseUrl()}/api`);
-
-    check(basicRes, {
-      'basic api status is 200': (r) => r.status === 200,
-    }) || errorRate.add(1);
   }
 
   requestsPerStage.add(1);

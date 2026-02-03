@@ -25,8 +25,8 @@ const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // request mix (proporsi) -> selaras dengan Gambar request mix di skripsi
-const P_CPU = parseFloat(__ENV.P_CPU || '0.45');
-const P_MEM = parseFloat(__ENV.P_MEM || '0.45'); // basic = 1 - (P_CPU + P_MEM)
+const P_CPU = parseFloat(__ENV.P_CPU || '0.5');
+const P_MEM = parseFloat(__ENV.P_MEM || '0.5'); // CPU and memory only
 
 // payload sederhana (konstan) agar kode ringkas
 const CPU_ITERATIONS = parseInt(__ENV.CPU_ITERATIONS || '400000');
@@ -154,10 +154,8 @@ export default function () {
 
   if (r < P_CPU) {
     url = `${baseUrl}/api/cpu?iterations=${CPU_ITERATIONS}`;
-  } else if (r < P_CPU + P_MEM) {
-    url = `${baseUrl}/api/memory?size_mb=${MEM_SIZE_MB}`;
   } else {
-    url = `${baseUrl}/api`;
+    url = `${baseUrl}/api/memory?size_mb=${MEM_SIZE_MB}`;
   }
 
   http.get(url, { timeout: REQ_TIMEOUT });

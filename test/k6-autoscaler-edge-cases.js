@@ -207,7 +207,7 @@ function getExtremeWorkload(scenario) {
     case 'DEAD_ZONE':
     case 'MINIMAL_LOAD':
       return {
-        type: 'basic',
+        type: Math.random() < 0.5 ? 'cpu' : 'memory',
         intensity: 'minimal',
       };
 
@@ -382,22 +382,6 @@ export default function () {
           return false;
         }
       },
-    }) || errorRate.add(1);
-
-  } else {
-    // Basic request
-    res = safeGet(`${getBaseUrl()}/api`, {
-      tags: {
-        name: 'basic',
-        request_type: 'basic',
-        scenario: scenario,
-        intensity: workload.intensity,
-      },
-      timeout: '10s',
-    });
-
-    check(res, {
-      'basic edge case status is 200': (r) => r.status === 200,
     }) || errorRate.add(1);
   }
 

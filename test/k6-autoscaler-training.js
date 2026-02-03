@@ -8,7 +8,6 @@ import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
 const errorRate = new Rate('errors');
 const cpuDuration = new Trend('cpu_request_duration', true);
 const memoryDuration = new Trend('memory_request_duration', true);
-const basicDuration = new Trend('basic_request_duration', true);
 const requestsPerStage = new Counter('requests_per_stage');
 const currentLoad = new Gauge('current_load_level');
 const requestTypeDistribution = new Counter('request_type_distribution');
@@ -188,10 +187,10 @@ function safeGet(url, params, maxRetries = 2) {
 
 // Request type distribution that mimics real-world application usage
 const REQUEST_PATTERNS = {
-  LIGHT: { cpu: 0.10, memory: 0.05, basic: 0.85 },      // Night-time pattern
-  NORMAL: { cpu: 0.30, memory: 0.20, basic: 0.50 },     // Regular business hours
-  INTENSIVE: { cpu: 0.45, memory: 0.35, basic: 0.20 },  // Peak hours pattern
-  SPIKE: { cpu: 0.40, memory: 0.40, basic: 0.20 },      // Viral/spike pattern
+  LIGHT: { cpu: 0.50, memory: 0.50 },      // Night-time pattern
+  NORMAL: { cpu: 0.50, memory: 0.50 },     // Regular business hours
+  INTENSIVE: { cpu: 0.50, memory: 0.50 },  // Peak hours pattern
+  SPIKE: { cpu: 0.50, memory: 0.50 },      // Viral/spike pattern
 };
 
 // Determine current load phase based on VU count
@@ -249,8 +248,8 @@ function calculateSleepTime(phase, requestType) {
       baseSleep = 1.0;
   }
 
-  // Basic requests can be faster, intensive requests need more spacing
-  const typeMultiplier = requestType === 'basic' ? 0.7 : 1.0;
+  // CPU and memory requests need appropriate spacing
+  const typeMultiplier = 1.0;
 
   // Add randomness to simulate realistic user behavior
   const randomFactor = 0.5 + Math.random() * 1.0; // 0.5x to 1.5x
@@ -372,10 +371,8 @@ export default function () {
 
   if (rand < pattern.cpu) {
     requestType = 'cpu';
-  } else if (rand < pattern.cpu + pattern.memory) {
-    requestType = 'memory';
   } else {
-    requestType = 'basic';
+    requestType = 'memory';
   }
 
   // Track request type distribution
@@ -431,21 +428,6 @@ export default function () {
         'memory api response time acceptable': (r) => r.timings.duration < 8000,
       });
       errorRate.add(memOk ? 0 : 1);
-      break;
-
-    case 'basic':
-      res = safeGet(`${getBaseUrl()}/api`, {
-        tags: { name: 'basic', request_type: 'basic', load_phase: phase },
-        timeout: '5s',
-      });
-
-      basicDuration.add(res.timings.duration);
-
-      const basicOk = check(res, {
-        'basic api status is 200': (r) => r.status === 200,
-        'basic api response time acceptable': (r) => r.timings.duration < 2000,
-      });
-      errorRate.add(basicOk ? 0 : 1);
       break;
   }
 

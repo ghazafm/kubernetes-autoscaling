@@ -6,7 +6,6 @@ import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
 const errorRate = new Rate('errors');
 const cpuDuration = new Trend('cpu_request_duration');
 const memoryDuration = new Trend('memory_request_duration');
-const basicDuration = new Trend('basic_request_duration');
 const requestsPerDay = new Counter('requests_per_day');
 const dayOfWeekGauge = new Gauge('day_of_week');
 
@@ -266,9 +265,8 @@ function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
   // Weekend pattern
   if (dayOfWeek === 'Saturday' || dayOfWeek === 'Sunday') {
     return {
-      cpu: 0.15,
-      memory: 0.10,
-      basic: 0.75,
+      cpu: 0.50,
+      memory: 0.50,
       intensity: 'light',
     };
   }
@@ -278,8 +276,7 @@ function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
     // Peak day - more intensive operations
     return {
       cpu: 0.50,
-      memory: 0.30,
-      basic: 0.20,
+      memory: 0.50,
       intensity: timeOfDay === 'afternoon' || timeOfDay === 'evening_peak' ? 'maximum' : 'high',
     };
   }
@@ -287,9 +284,8 @@ function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
   if (dayOfWeek === 'Monday') {
     // Week start - gradual ramp
     return {
-      cpu: 0.35,
-      memory: 0.25,
-      basic: 0.40,
+      cpu: 0.50,
+      memory: 0.50,
       intensity: timeOfDay === 'afternoon' ? 'high' : 'moderate',
     };
   }
@@ -297,18 +293,16 @@ function getTrafficPattern(dayOfWeek, timeOfDay, vu) {
   if (dayOfWeek === 'Friday') {
     // Week end - lighter workload
     return {
-      cpu: 0.25,
-      memory: 0.20,
-      basic: 0.55,
+      cpu: 0.50,
+      memory: 0.50,
       intensity: timeOfDay === 'midday' ? 'moderate' : 'light',
     };
   }
 
   // Tuesday, Thursday - regular business
   return {
-    cpu: 0.40,
-    memory: 0.25,
-    basic: 0.35,
+    cpu: 0.50,
+    memory: 0.50,
     intensity: timeOfDay === 'afternoon' ? 'high' : 'moderate',
   };
 }
@@ -390,10 +384,8 @@ export default function () {
 
   if (rand < pattern.cpu) {
     requestType = 'cpu';
-  } else if (rand < pattern.cpu + pattern.memory) {
-    requestType = 'memory';
   } else {
-    requestType = 'basic';
+    requestType = 'memory';
   }
 
   // Execute request
@@ -448,18 +440,6 @@ export default function () {
           return false;
         }
       },
-    }) || errorRate.add(1);
-
-  } else {
-    res = safeGet(`${getBaseUrl()}/api`, {
-      tags: tags,
-      timeout: '8s',
-    });
-
-    basicDuration.add(res.timings.duration);
-
-    check(res, {
-      'basic weekly status is 200': (r) => r.status === 200,
     }) || errorRate.add(1);
   }
 

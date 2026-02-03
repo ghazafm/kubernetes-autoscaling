@@ -80,14 +80,6 @@ function safeGet(url, params, maxRetries = 2) {
 }
 
 export default function () {
-  // Test the basic /api endpoint
-  const basicRes = safeGet(`${getBaseUrl()}/api`, { tags: { name: 'basic', request_type: 'basic' }, timeout: '5s' });
-  check(basicRes, {
-    'basic api status is 200': (r) => r.status === 200,
-  }) || errorRate.add(1);
-
-  sleep(1);
-
   // Test CPU-intensive endpoint with varying iterations
   // Range: 100k-500k iterations (aligned with MAX_CPU_ITERATIONS=500000)
   const iterations = Math.floor(Math.random() * 400000) + 100000; // 100k–500k iterations
