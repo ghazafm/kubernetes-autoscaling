@@ -12,6 +12,68 @@ from utils import TransitionLogger, get_metrics, get_replica, wait_for_pods_read
 from database import InfluxDB
 
 
+def calculate_reward(
+    action: int,
+    response_time: float,
+    weight_response_time: float = 1.0,
+    weight_cost: float = 1.0,
+) -> tuple[float, dict]:
+    """Calculate reward based on action and response time.
+
+    Args:
+        action: Action value (0-99)
+        response_time: Response time as percentage of max (0-100+)
+        weight_response_time: Weight for response time penalty
+        weight_cost: Weight for cost penalty
+
+    Returns:
+        Tuple of (reward, details_dict)
+    """
+    RESPONSE_TIME_HIGH_THRESHOLD = 50.0
+    RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
+
+    if response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
+        response_time_penalty = 0.0
+    elif response_time <= RESPONSE_TIME_VIOLATION_THRESHOLD:
+        response_time_penalty = (response_time - RESPONSE_TIME_HIGH_THRESHOLD) / (
+            RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
+        )
+    else:
+        over = (
+            response_time - RESPONSE_TIME_VIOLATION_THRESHOLD
+        ) / RESPONSE_TIME_VIOLATION_THRESHOLD
+        response_time_penalty = 1.0 + over
+
+    cost_penalty_raw = action / 99.0
+
+    if response_time > RESPONSE_TIME_VIOLATION_THRESHOLD:
+        cost_weight_multiplier = 0.0
+    elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
+        cost_weight_multiplier = 1.0
+    else:
+        cost_weight_multiplier = 1.0 - response_time_penalty
+
+    effective_cost_penalty = cost_penalty_raw * cost_weight_multiplier
+
+    total_penalty = (
+        weight_response_time * response_time_penalty
+        + weight_cost * effective_cost_penalty
+    )
+    reward = 1.0 - total_penalty
+
+    details = {
+        "action": action,
+        "response_time": response_time,
+        "rt_penalty": response_time_penalty,
+        "cost_raw": cost_penalty_raw,
+        "cost_mult": cost_weight_multiplier,
+        "cost_eff": effective_cost_penalty,
+        "total_penalty": total_penalty,
+        "reward": reward,
+    }
+    return reward, details
+
+
 class KubernetesEnv(Env):
     metadata = {"render_modes": ["human", "ansi"], "render_fps": 1}
 
@@ -156,6 +218,11 @@ class KubernetesEnv(Env):
             "response_time": response_time,
             "replicas": replica,
             "action": action,
+            "reward": reward,
+            "rt_penalty": self.last_reward_details.get("rt_penalty", 0.0),
+            "cost_penalty": self.last_reward_details.get("cost_eff", 0.0),
+            "total_penalty": self.last_reward_details.get("total_penalty", 0.0),
+            "iteration": self.iteration,
         }
 
         self.csv_logger.log_transition(
@@ -279,88 +346,21 @@ class KubernetesEnv(Env):
         action: int,
         response_time: float,
     ) -> float:
-        RESPONSE_TIME_HIGH_THRESHOLD = 50.0
-        RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
-
-        """
-        Kenapa menetapkan HIGH 50?
-        Agar penalti sudah mulai terakumulasi sejak response time 50% mendekati batas
-        """
-
-        """
-        Kenapa menetapkan VIOLATION 80? bukan tepat 100?
-        Karena agar agen tidak terlalu mentolerir penalti dengan response time
-        yang mendekati batas SLO.
-        Dengan adanya ini agen akan mendapatkan penalti lebih dari -1 jika response
-        time mulai melebihi 80%,
-        """
-
-        """
-        Kedua parameter diatas bisa disesuaikan lagi tergantung kebutuhan
-        dan kasus pelatihan.
-        (Tunning).
-        """
-
-        if response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
-            response_time_penalty = 0.0
-        elif response_time <= RESPONSE_TIME_VIOLATION_THRESHOLD:
-            """
-            #  Perhitungan ini agar penalti mulai dari -+0.0 pada saat melewati HIGH
-            # threshold dan -1.0 pada saat berada tepat di VIOLATION threshold
-            """
-            response_time_penalty = (response_time - RESPONSE_TIME_HIGH_THRESHOLD) / (
-                RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
-            )
-        else:
-            """
-            Setelah sebelumnya penalti -0.0 hingga -1.0
-            pada perhitungan ini akan diberlakukan penalti yang menghitung
-            seberapa jauh response time melebihi VIOLATION threshold.
-            oleh karena itu penalti
-            dimulai dari 1(penalti sebelumnya yang melewati violation)
-            lalu bertambah sesuai dengan seberapa jauh response time melebihi
-            VIOLATION threshold.
-            """
-            over = (
-                response_time - RESPONSE_TIME_VIOLATION_THRESHOLD
-            ) / RESPONSE_TIME_VIOLATION_THRESHOLD
-            response_time_penalty = 1.0 + over
-
-        cost_penalty_raw = action / 99.0
-
-        if response_time > RESPONSE_TIME_VIOLATION_THRESHOLD:
-            cost_weight_multiplier = 0.0
-        elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
-            cost_weight_multiplier = 1.0
-        else:
-            cost_weight_multiplier = 1.0 - response_time_penalty
-
-        effective_cost_penalty = cost_penalty_raw * cost_weight_multiplier
-
-        total_penalty = (
-            self.weight_response_time * response_time_penalty
-            + self.weight_cost * effective_cost_penalty
+        reward, details = calculate_reward(
+            action=action,
+            response_time=response_time,
+            weight_response_time=self.weight_response_time,
+            weight_cost=self.weight_cost,
         )
-        reward = 1.0 - total_penalty
 
-        # Store details for render function
-        self.last_reward_details = {
-            "action": action,
-            "response_time": response_time,
-            "rt_penalty": response_time_penalty,
-            "cost_raw": cost_penalty_raw,
-            "cost_mult": cost_weight_multiplier,
-            "cost_eff": effective_cost_penalty,
-            "total_penalty": total_penalty,
-            "reward": reward,
-        }
+        self.last_reward_details = details
 
         if action > 50 and reward > 0.9:  # noqa: PLR2004
             self.logger.warning(
                 f"⚠️ SUSPICIOUS REWARD: action={action}, rt={response_time:.1f}%, "
-                f"rt_penalty={response_time_penalty:.3f}, "
-                f"cost_penalty={effective_cost_penalty:.3f}, "
-                f"total_penalty={total_penalty:.3f}, "
+                f"rt_penalty={details['rt_penalty']:.3f}, "
+                f"cost_penalty={details['cost_eff']:.3f}, "
+                f"total_penalty={details['total_penalty']:.3f}, "
                 f"reward={reward:.3f}, "
                 f"weight_rt={self.weight_response_time}, "
                 f"weight_cost={self.weight_cost}"

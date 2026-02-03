@@ -193,34 +193,9 @@ if __name__ == "__main__":
         model = DQN(
             policy="MlpPolicy",
             env=env,
-            policy_kwargs={"net_arch": [256, 256, 128]},
-            learning_rate=1e-4,
-            gamma=0.99,
-            buffer_size=100_000,
-            # Buffer size diperkecil karena jumlah pelatihan yang lebih sedikit
-            learning_starts=iteration * 3,
-            batch_size=256,
-            # Ukuran batch diperbesar untuk stabilitas
-            # (lebih banyak sampel setiap pelatihan)
-            train_freq=1,
-            # Pelatihan dilakukan di setiap langkah agar mempercepat pembelajaran
-            gradient_steps=1,
-            target_update_interval=iteration,
-            # Nilai default 10000, yang mana terlalu besar untuk jumlah pelatihan yang
-            # lebih sedikit
-            exploration_fraction=0.4,
-            # Eksplorasi lebih lama dibandingkan dengan defaultnya yaitu 0.1,
-            # hal ini dilakukan agar agen mendapatkan pengalaman yang lebih beragam,
-            # dan tidak terjebak dalam eksploitasi awal.
-            exploration_initial_eps=1.0,
-            exploration_final_eps=0.1,
-            # Eksplorasi tetap lebih tinggi di akhir fraksi, hal ini dikarenakan proses
-            # pelatihan yang lebih singkat, sehingga jika menggunakan nilai
-            # default 0.05, agen akan membutuhkan iterasi yang lebih banyak untuk
-            # mengeksplorasi lingkungan secara efektif.
-            max_grad_norm=1,
-            # Dikarenakan beberapa parameter sebelumnya memiliki sifat yang agresif,
-            # maka pembatasan gradien ini ditambahkan untuk menjaga stabilitas pelatihan
+            target_update_interval=iteration,  # Nilai default 10000, yang mana terlalu besar untuk jumlah pelatihan yang lebih sedikit
+            exploration_fraction=0.4,  # Eksplorasi lebih lama dibandingkan dengan defaultnya yaitu 0.1, hal ini dilakukan agar agen mendapatkan pengalaman yang lebih beragam, dan tidak terjebak dalam eksploitasi awal.
+            exploration_final_eps=0.1,  # Eksplorasi tetap lebih tinggi di akhir fraksi, hal ini dikarenakan proses pelatihan yang lebih singkat, sehingga jika menggunakan nilai default 0.05, agen akan membutuhkan iterasi yang lebih banyak untuk mengeksplorasi lingkungan secara efektif.
             verbose=1,
             tensorboard_log=log_dir,
             seed=42,

@@ -3,6 +3,7 @@ import ast
 import os
 
 from dotenv import load_dotenv
+from environment import calculate_reward
 from prometheus_api_client import PrometheusConnect
 from utils import (
     get_metrics,
@@ -23,6 +24,7 @@ if args.test:
 else:
     load_dotenv()
 
+
 logger, log_dir = setup_logger(
     "monitoring_kubernetes", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
 )
@@ -34,6 +36,15 @@ deployment_name = args.deployment or os.getenv("DEPLOYMENT_NAME", "my-deployment
 metrics_interval = int(os.getenv("METRICS_INTERVAL"))
 metrics_quantile = float(os.getenv("METRICS_QUANTILE"))
 max_response_time = float(os.getenv("MAX_RESPONSE_TIME"))
+
+# Scaling range for action calculation
+min_replicas = int(os.getenv("MIN_REPLICAS", "1"))
+max_replicas = int(os.getenv("MAX_REPLICAS", "10"))
+range_replicas = max(1, max_replicas - min_replicas)
+
+# Reward weights
+weight_response_time = float(os.getenv("WEIGHT_RESPONSE_TIME", "1.0"))
+weight_cost = float(os.getenv("WEIGHT_COST", "1.0"))
 
 influxdb = InfluxDB(
     logger=logger,
@@ -48,7 +59,6 @@ prometheus = PrometheusConnect(
 )
 
 logger.info("Starting Kubernetes cluster monitoring...")
-
 while True:
     cpu, memory, response_time = get_metrics(
         prometheus=prometheus,
@@ -75,6 +85,17 @@ while True:
         wait_time=0.5,
     )
 
+    # Calculate action from replica (reverse of environment logic)
+    action = int((replica - min_replicas) * 99 / range_replicas)
+    action = max(0, min(99, action))
+
+    reward, reward_details = calculate_reward(
+        action=action,
+        response_time=response_time,
+        weight_response_time=weight_response_time,
+        weight_cost=weight_cost,
+    )
+
     info = {
         "cpu": cpu,
         "memory": memory,
@@ -86,6 +107,11 @@ while True:
         "memory_limit": memory_limit,
         "replicas": replica,
         "desired_replicas": desired_replica,
+        "action": action,
+        "reward": reward,
+        "rt_penalty": reward_details["rt_penalty"],
+        "cost_penalty": reward_details["cost_eff"],
+        "total_penalty": reward_details["total_penalty"],
     }
 
     influxdb.write_point(

@@ -50,7 +50,7 @@ def _metrics_query(
     cpu_limits_query = f"""
         quantile({quantile},
             sum by (pod) (
-                kube_pod_container_resource_limits{{
+                kube_pod_container_resource_requests{{
                     namespace="{namespace}",
                     pod=~"{deployment_name}-.*",
                     resource="cpu",
@@ -64,7 +64,7 @@ def _metrics_query(
     memory_limits_query = f"""
         quantile({quantile},
             sum by (pod) (
-                kube_pod_container_resource_limits{{
+                kube_pod_container_resource_requests{{
                     namespace="{namespace}",
                     pod=~"{deployment_name}-.*",
                     resource="memory",

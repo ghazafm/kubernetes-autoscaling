@@ -93,7 +93,7 @@ Returns the **90th percentile** CPU limit across all ready pods.
 ```promql
 quantile(0.90,
     sum by (pod) (
-        kube_pod_container_resource_limits{
+        kube_pod_container_resource_requests{
             namespace="default",
             pod=~"flask-app-.*",
             resource="cpu",
@@ -121,7 +121,7 @@ Returns the **90th percentile** memory limit across all ready pods.
 ```promql
 quantile(0.90,
     sum by (pod) (
-        kube_pod_container_resource_limits{
+        kube_pod_container_resource_requests{
             namespace="default",
             pod=~"flask-app-.*",
             resource="memory",
@@ -505,16 +505,19 @@ print(f"Response time (P90): {rt} ms")
 ### Query Returns Empty Results
 
 1. **Check if pods exist**:
+
    ```promql
    kube_pod_info{namespace="default", pod=~"flask-app-.*"}
    ```
 
 2. **Check if pods are Ready**:
+
    ```promql
    kube_pod_status_ready{namespace="default", pod=~"flask-app-.*", condition="true"}
    ```
 
 3. **Check if metrics are being scraped**:
+
    ```promql
    up{job="flask-app"}
    ```
@@ -530,6 +533,7 @@ k6 run --vus 10 --duration 10m k6-autoscaler-training.js
 ### CPU/Memory Returns 0
 
 1. **Check if container metrics exist**:
+
    ```promql
    container_cpu_usage_seconds_total{namespace="default", pod=~"flask-app-.*"}
    ```
@@ -569,12 +573,14 @@ Make sure `path` and `method` labels match your queries.
 | **Network** | N values transferred | 1 value transferred |
 | **NaN Handling** | Complex per-pod logic | Simple scalar check |
 
-### Old Query (returned N pod values):
+### Old Query (returned N pod values)
+
 ```promql
 sum by (pod) (rate(...)) * on(pod) group_left() (ready_filter)
 ```
 
-### New Query (returns 1 scalar):
+### New Query (returns 1 scalar)
+
 ```promql
 quantile(0.90, sum by (pod) (rate(...)) * on(pod) group_left() (ready_filter))
 ```
