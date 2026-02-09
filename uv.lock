@@ -16,6 +16,7 @@ members = [
     "autoscaling",
     "autoscaling-scratch",
     "autoscaling-stable",
+    "autoscaling-stable-forecast",
     "old",
 ]
 
@@ -293,6 +294,37 @@ requires-dist = [
 name = "autoscaling-stable"
 version = "0.1.0"
 source = { virtual = "agent/stable" }
+dependencies = [
+    { name = "gymnasium" },
+    { name = "influxdb-client" },
+    { name = "kubernetes" },
+    { name = "numpy" },
+    { name = "prometheus-api-client" },
+    { name = "python-dotenv" },
+    { name = "stable-baselines3", extra = ["extra"] },
+    { name = "tensorflow" },
+    { name = "torch" },
+    { name = "torchvision" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "gymnasium", specifier = ">=1.2.2" },
+    { name = "influxdb-client", specifier = ">=1.49.0" },
+    { name = "kubernetes", specifier = ">=34.1.0" },
+    { name = "numpy", specifier = ">=2.3.5" },
+    { name = "prometheus-api-client", specifier = ">=0.6.0" },
+    { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "stable-baselines3", extras = ["extra"], specifier = ">=2.7.0" },
+    { name = "tensorflow", specifier = ">=2.20.0" },
+    { name = "torch", specifier = ">=2.9.1" },
+    { name = "torchvision", specifier = ">=0.24.1" },
+]
+
+[[package]]
+name = "autoscaling-stable-forecast"
+version = "0.1.0"
+source = { virtual = "agent/stable_forecast" }
 dependencies = [
     { name = "gymnasium" },
     { name = "influxdb-client" },

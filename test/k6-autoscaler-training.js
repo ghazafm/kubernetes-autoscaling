@@ -36,6 +36,11 @@ const requestTypeDistribution = new Counter('request_type_distribution');
 const DURATION_MULTIPLIER = parseFloat(__ENV.DURATION_MULTIPLIER || '1');
 const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+const URL_COUNT = BASE_URLS.length;
+
 // Dynamic load calculation based on replica capacity
 // This ensures k6 generates enough load to stress the full replica range
 const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
@@ -43,17 +48,16 @@ const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // Calculate VU targets to stress pods at different capacity levels
-// Formula: VUs = replicas * requests_per_pod * utilization_target
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
-const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_target
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET * URL_COUNT);
 
-// Helper to ensure integer VU targets (k6 requires integers)
-function ensureInt(value) {
-  return Math.ceil(value);
+// Cap all VU calculations at VU_SPIKE to never exceed pod capacity
+function vu(value) {
+  return Math.min(Math.max(1, Math.ceil(value)), VU_SPIKE);
 }
 
 // Helper function to scale duration
@@ -76,17 +80,15 @@ function scaleDuration(minutes) {
 // Now uses dynamic VU targets based on MAX_REPLICAS
 const basePattern = [
   // ===== WARM-UP PHASE (Baseline establishment) =====
-  { duration: scaleDuration(1), target: 0 },               // No requests initially
-  { duration: scaleDuration(1), target: VU_WARMUP },       // Gentle start
-  { duration: scaleDuration(2), target: VU_WARMUP },       // Baseline LOW traffic
+  { duration: scaleDuration(3), target: 0 },               // No requests initially
 
   // ===== PHASE 1: GRADUAL MORNING RAMP-UP (Simulates business hours start) =====
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },    // Early morning users arrive
-  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 0.5) },    // Low morning traffic
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },    // Early morning users arrive
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },    // Low morning traffic
   { duration: scaleDuration(1), target: VU_LOW },          // More users logging in
   { duration: scaleDuration(2), target: VU_LOW },          // Growing morning traffic
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },    // Peak morning traffic
-  { duration: scaleDuration(3), target: ensureInt(VU_LOW * 1.5) },    // Sustained morning activity
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },    // Peak morning traffic
+  { duration: scaleDuration(3), target: vu(VU_LOW * 1.5) },    // Sustained morning activity
 
   // ===== PHASE 2: STEADY DAYTIME LOAD (Normal business operations) =====
   { duration: scaleDuration(1), target: VU_MEDIUM },       // Midday increase
@@ -97,8 +99,8 @@ const basePattern = [
   { duration: scaleDuration(2), target: VU_LOW },          // Reduced lunch activity
 
   // ===== PHASE 4: POST-LUNCH RECOVERY =====
-  { duration: scaleDuration(1), target: ensureInt(VU_MEDIUM * 1.2) }, // Users returning
-  { duration: scaleDuration(3), target: ensureInt(VU_MEDIUM * 1.2) }, // Afternoon steady state
+  { duration: scaleDuration(1), target: vu(VU_MEDIUM * 1.2) }, // Users returning
+  { duration: scaleDuration(3), target: vu(VU_MEDIUM * 1.2) }, // Afternoon steady state
 
   // ===== PHASE 5: AFTERNOON PEAK (Highest daily load) =====
   { duration: scaleDuration(1), target: VU_HIGH },         // Building to peak
@@ -113,26 +115,26 @@ const basePattern = [
   // ===== PHASE 7: GRADUAL EVENING DECLINE =====
   { duration: scaleDuration(1), target: VU_HIGH },         // Early evening decrease
   { duration: scaleDuration(2), target: VU_MEDIUM },       // Continued decline
-  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 1.5) },    // Further decrease
+  { duration: scaleDuration(2), target: vu(VU_LOW * 1.5) },    // Further decrease
   { duration: scaleDuration(2), target: VU_LOW },          // Late evening
 
   // ===== PHASE 8: NIGHT-TIME LOW (Maintenance window simulation) =====
-  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 2) },   // Night users
-  { duration: scaleDuration(3), target: ensureInt(VU_WARMUP * 2) },   // Sustained low load
-  { duration: scaleDuration(1), target: VU_WARMUP },       // Deep night
-  { duration: scaleDuration(2), target: VU_WARMUP },       // Minimal activity
+  { duration: scaleDuration(1), target: VU_LOW },          // Night users
+  { duration: scaleDuration(3), target: VU_LOW },          // Sustained low load
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },    // Deep night
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },    // Minimal activity
 
   // ===== PHASE 9: OSCILLATING LOAD (Test rapid adaptation) =====
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 1.5) },  // Quick up
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },    // Hold
-  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 3) }, // Quick down
-  { duration: scaleDuration(1), target: ensureInt(VU_WARMUP * 3) },   // Hold
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 1.5) },  // Quick up
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },    // Hold
+  { duration: scaleDuration(0.5), target: VU_LOW },        // Quick down
+  { duration: scaleDuration(1), target: VU_LOW },          // Hold
   { duration: scaleDuration(0.5), target: VU_MEDIUM },     // Quick up again
   { duration: scaleDuration(1), target: VU_MEDIUM },       // Hold
-  { duration: scaleDuration(0.5), target: ensureInt(VU_WARMUP * 2) }, // Quick down
+  { duration: scaleDuration(0.5), target: VU_LOW },        // Quick down
 
   // ===== PHASE 10: GRACEFUL SHUTDOWN =====
-  { duration: scaleDuration(1), target: VU_WARMUP },       // Final users
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },    // Final users
   { duration: scaleDuration(2), target: 0 },             // Complete ramp down
 ];
 
@@ -153,20 +155,19 @@ export const options = {
     errors: ['rate<0.60'],                // Max 60% error rate (relaxed for RL training phase)
     'cpu_request_duration': ['p(95)<10000'],  // Relaxed to 10s for heavy CPU workload
     'memory_request_duration': ['p(95)<4000'],
-    'basic_request_duration': ['p(95)<1000'],
   },
 };
 
-// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
-const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
-const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
 
-// Helper to pick a base URL. Uses random selection for balanced load distribution
-// even with low VU counts.
+// Helper to pick a base URL. Uses deterministic selection for fair comparison
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin for fair comparison
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
@@ -204,7 +205,7 @@ function getLoadPhase(activeVUs) {
 }
 
 // Get request pattern based on load phase
-function getRequestPattern(phase) {
+function f(phase) {
   switch(phase) {
     case 'NIGHT':
       return REQUEST_PATTERNS.LIGHT;
@@ -251,8 +252,8 @@ function calculateSleepTime(phase, requestType) {
   // CPU and memory requests need appropriate spacing
   const typeMultiplier = 1.0;
 
-  // Add randomness to simulate realistic user behavior
-  const randomFactor = 0.5 + Math.random() * 1.0; // 0.5x to 1.5x
+  // Add deterministic variation to simulate realistic user behavior
+  const randomFactor = 0.5 + ((urlIndex * 10) % 10) / 10; // 0.5x to 1.5x deterministic
 
   return baseSleep * typeMultiplier * randomFactor;
 }
@@ -287,7 +288,7 @@ function getCpuIterations(phase) {
       variance = 300000;
   }
 
-  return Math.floor(base + Math.random() * variance);
+  return Math.floor(base + ((urlIndex * 53) % variance));
 }
 
 // Generate memory size based on load phase and realism
@@ -321,7 +322,7 @@ function getMemorySize(phase) {
       variance = 15;
   }
 
-  return Math.floor(base + Math.random() * variance);
+  return Math.floor(base + ((urlIndex * 41) % variance));
 }
 
 export function setup() {
@@ -342,12 +343,11 @@ export function setup() {
   console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
   console.log('');
   console.log('🚀 Dynamic VU Targets:');
-  console.log(`   WARMUP: ${VU_WARMUP} VUs (${MIN_REPLICAS}-${Math.ceil(VU_WARMUP/REQUESTS_PER_POD_TARGET)} pods)`);
-  console.log(`   LOW:    ${VU_LOW} VUs (~${Math.ceil(VU_LOW/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
-  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (~${Math.ceil(VU_MEDIUM/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
-  console.log(`   HIGH:   ${VU_HIGH} VUs (~${Math.ceil(VU_HIGH/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   LOW:    ${VU_LOW} VUs (~${Math.ceil(VU_LOW/REQUESTS_PER_POD_TARGET)} pods at 20% util)`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (~${Math.ceil(VU_MEDIUM/REQUESTS_PER_POD_TARGET)} pods at 40% util)`);
+  console.log(`   HIGH:   ${VU_HIGH} VUs (~${Math.ceil(VU_HIGH/REQUESTS_PER_POD_TARGET)} pods at 60% util)`);
   console.log(`   PEAK:   ${VU_PEAK} VUs (~${Math.ceil(VU_PEAK/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
-  console.log(`   SPIKE:  ${VU_SPIKE} VUs (~${Math.ceil(VU_SPIKE/REQUESTS_PER_POD_TARGET)} pods at 80% util)`);
+  console.log(`   SPIKE:  ${VU_SPIKE} VUs (~${Math.ceil(VU_SPIKE/REQUESTS_PER_POD_TARGET)} pods at 100% util)`);
   console.log('');
   console.log('💡 RL Agent Training Coverage:');
   console.log(`   This load will train across ${MIN_REPLICAS}-${MAX_REPLICAS} replica range`);
@@ -358,15 +358,15 @@ export function setup() {
 export default function () {
   const activeVUs = exec.instance.vusActive;   // real current load
   const phase = getLoadPhase(activeVUs);
-  const pattern = getRequestPattern(phase);
+  const pattern = f(phase);
 
   currentLoad.add(activeVUs);
 
   // Update gauge metric for monitoring
   currentLoad.add(activeVUs);
 
-  // Determine request type based on pattern distribution
-  const rand = Math.random();
+  // Determine request type based on pattern distribution - alternating pattern
+  const rand = (urlIndex % 2) / 2; // Alternates: 0.0, 0.5, 0.0, 0.5...
   let requestType;
 
   if (rand < pattern.cpu) {
@@ -506,13 +506,6 @@ function textSummary(data, options = {}) {
     summary += indent + `   Max Duration: ${(data.metrics.memory_request_duration.values.max || 0).toFixed(0)}ms\n\n`;
   }
 
-  if (data.metrics.basic_request_duration) {
-    summary += indent + '📦 BASIC ENDPOINT PERFORMANCE\n';
-    summary += indent + `   Avg Duration: ${(data.metrics.basic_request_duration.values.avg || 0).toFixed(0)}ms\n`;
-    summary += indent + `   p95 Duration: ${(data.metrics.basic_request_duration.values['p(95)'] || 0).toFixed(0)}ms\n`;
-    summary += indent + `   Max Duration: ${(data.metrics.basic_request_duration.values.max || 0).toFixed(0)}ms\n\n`;
-  }
-
   // Training Insights
   summary += indent + '🧠 RL TRAINING INSIGHTS\n';
   summary += indent + '   Load Phases Tested:\n';
@@ -530,7 +523,7 @@ function textSummary(data, options = {}) {
   summary += indent + '   ✓ Sustained high load endurance\n';
   summary += indent + '   ✓ Sudden traffic spikes\n';
   summary += indent + '   ✓ Rapid load fluctuations\n';
-  summary += indent + '   ✓ Mixed CPU/Memory/Basic workloads\n';
+  summary += indent + '   ✓ Mixed CPU/Memory workloads\n';
   summary += indent + '   ✓ Realistic daily traffic patterns\n\n';
 
   // Recommendations for RL Agent

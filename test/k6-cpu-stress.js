@@ -6,18 +6,23 @@ import { Rate, Trend } from 'k6/metrics';
 const errorRate = new Rate('errors');
 const cpuDuration = new Trend('cpu_request_duration');
 
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+const URL_COUNT = BASE_URLS.length;
+
 // Dynamic load calculation based on replica capacity
 const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
 const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // Calculate VU targets to stress pods at different capacity levels
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
-const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_target
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET * URL_COUNT);
 
 // CPU Stress Test Configuration - Dynamic VU based on MAX_REPLICAS
 export const options = {
@@ -34,15 +39,15 @@ export const options = {
   },
 };
 
-// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
-const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
-const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
 
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  // This ensures balanced distribution even with low VU counts
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin for fair comparison
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
@@ -82,8 +87,8 @@ function safeGet(url, params, maxRetries = 2) {
 }
 
 export default function () {
-  // Heavy CPU load - high iteration count
-  const iterations = Math.floor(Math.random() * 600000) + 200000; // 200k to 800k iterations
+  // Deterministic CPU load - cycles through range
+  const iterations = 200000 + ((urlIndex * 67) % 600000); // 200k to 800k deterministic
   const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
   const cpuRes = safeGet(`${getBaseUrl()}/api/cpu?iterations=${safeIterations}`, {
     tags: { name: 'cpu', request_type: 'cpu' },

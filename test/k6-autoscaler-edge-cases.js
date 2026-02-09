@@ -23,6 +23,11 @@ const CYCLE_COUNT = parseInt(__ENV.CYCLE_COUNT || '1');
 // Allow k6 to respect the app's configured CPU cap if provided
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+const URL_COUNT = BASE_URLS.length;
+
 // Dynamic load calculation based on replica capacity
 // This ensures k6 generates enough load to stress the full replica range
 const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
@@ -30,16 +35,16 @@ const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // Calculate VU targets to stress pods at different capacity levels
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
-const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET);  // 100% capacity
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_target
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET * URL_COUNT);
 
-// Helper to ensure integer VU targets (k6 requires integers)
-function ensureInt(value) {
-  return Math.ceil(value);
+// Cap all VU calculations at VU_SPIKE to never exceed pod capacity
+function vu(value) {
+  return Math.min(Math.max(1, Math.ceil(value)), VU_SPIKE);
 }
 
 // Helper function to scale duration
@@ -63,65 +68,65 @@ function scaleDuration(minutes) {
 const basePattern = [
   // ===== SCENARIO 1: COLD START (from 0 to moderate load) =====
   { duration: scaleDuration(0.5), target: 0 },                         // Ensure cold start
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Rapid cold start ramp
-  { duration: scaleDuration(2), target: ensureInt(VU_LOW * 0.5) },     // Sustain to test stability
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Rapid cold start ramp
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },     // Sustain to test stability
 
   // ===== SCENARIO 2: THUNDERING HERD (extreme sudden spike) =====
-  { duration: scaleDuration(0.33), target: VU_WARMUP },                // Very low baseline
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.5) },  // Very low baseline
   { duration: scaleDuration(0.33), target: VU_SPIKE },                 // Massive instant spike
   { duration: scaleDuration(2), target: VU_SPIKE },                    // Sustain extreme load
-  { duration: scaleDuration(0.5), target: VU_WARMUP },                 // Rapid drop (test scale-down)
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Rapid drop (test scale-down)
 
   // ===== SCENARIO 3: SAWTOOTH PATTERN (repeated spikes) =====
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Baseline
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Baseline
   { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 1
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Drop
   { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 2
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Drop
   { duration: scaleDuration(0.5), target: VU_MEDIUM },                 // Spike 3
-  { duration: scaleDuration(0.5), target: ensureInt(VU_LOW * 0.5) },   // Drop
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Drop
 
   // ===== SCENARIO 4: SLOW LEAK (gradual sustained increase) =====
-  { duration: scaleDuration(1), target: VU_WARMUP },                   // Start low
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },     // Start low
   { duration: scaleDuration(5), target: VU_HIGH },                     // Very gradual increase
   { duration: scaleDuration(2), target: VU_HIGH },                     // Hold at high
 
   // ===== SCENARIO 5: STAIRCASE PATTERN (discrete load levels) =====
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },     // Step 1
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },     // Step 1
   { duration: scaleDuration(1), target: VU_LOW },                      // Step 2
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },     // Step 3
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },     // Step 3
   { duration: scaleDuration(1), target: VU_MEDIUM },                   // Step 4
   { duration: scaleDuration(1), target: VU_HIGH },                     // Step 5 (peak)
   { duration: scaleDuration(1), target: VU_MEDIUM },                   // Step down
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 1.5) },     // Step down
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },     // Step down
   { duration: scaleDuration(1), target: VU_LOW },                      // Step down
-  { duration: scaleDuration(1), target: ensureInt(VU_LOW * 0.5) },     // Step down
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },     // Step down
 
   // ===== SCENARIO 6: JITTER PATTERN (noisy load) =====
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.75) }, // Base
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.75) }, // Base
   { duration: scaleDuration(0.33), target: VU_LOW },                   // Jitter up
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.6) },  // Jitter down
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.9) },  // Jitter up
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.7) },  // Jitter down
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 1.1) },  // Jitter up
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.8) },  // Jitter down
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.6) },  // Jitter down
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.9) },  // Jitter up
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.7) },  // Jitter down
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 1.1) },  // Jitter up
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.8) },  // Jitter down
 
   // ===== SCENARIO 7: SUSTAINED MAXIMUM (endurance test) =====
   { duration: scaleDuration(1), target: VU_PEAK },                     // Ramp to maximum
   { duration: scaleDuration(4), target: VU_PEAK },                     // Sustain maximum load
 
   // ===== SCENARIO 8: RAPID OSCILLATION (high frequency changes) =====
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
-  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
-  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
-  { duration: scaleDuration(0.33), target: ensureInt(VU_LOW * 0.5) },  // Low
-  { duration: scaleDuration(0.33), target: ensureInt(VU_MEDIUM * 0.75) }, // High
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: vu(VU_MEDIUM * 0.75) }, // High
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: vu(VU_MEDIUM * 0.75) }, // High
+  { duration: scaleDuration(0.33), target: vu(VU_LOW * 0.5) },  // Low
+  { duration: scaleDuration(0.33), target: vu(VU_MEDIUM * 0.75) }, // High
 
   // ===== SCENARIO 9: ASYMMETRIC RAMP (slow up, fast down) =====
-  { duration: scaleDuration(3), target: ensureInt(VU_MEDIUM * 0.9) },  // Slow ramp up
-  { duration: scaleDuration(0.5), target: VU_WARMUP },                 // Rapid drop
-  { duration: scaleDuration(1), target: VU_WARMUP },                   // Hold low
+  { duration: scaleDuration(3), target: vu(VU_MEDIUM * 0.9) },  // Slow ramp up
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 0.5) },   // Rapid drop
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },     // Hold low
 
   // ===== SCENARIO 10: DEAD ZONE (minimal load) =====
   { duration: scaleDuration(0.5), target: 1 },                         // Near zero
@@ -148,15 +153,15 @@ export const options = {
   },
 };
 
-// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
-const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
-const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
 
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  // This ensures balanced distribution even with low VU counts
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin for fair comparison
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 
 export function setup() {
@@ -177,7 +182,6 @@ export function setup() {
   console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
   console.log('');
   console.log('🚀 Dynamic VU Targets:');
-  console.log(`   WARMUP: ${VU_WARMUP} VUs`);
   console.log(`   LOW:    ${VU_LOW} VUs`);
   console.log(`   MEDIUM: ${VU_MEDIUM} VUs`);
   console.log(`   HIGH:   ${VU_HIGH} VUs`);
@@ -191,7 +195,7 @@ function getEdgeCaseScenario(vu) {
   if (vu === 0 || vu === 1) return 'DEAD_ZONE';
   if (vu >= VU_PEAK) return 'EXTREME_LOAD';
   if (vu >= VU_HIGH) return 'HIGH_PRESSURE';
-  if (vu <= VU_WARMUP) return 'MINIMAL_LOAD';
+  if (vu <= Math.ceil(VU_LOW * 0.5)) return 'MINIMAL_LOAD';
 
   // Check for rapid changes (oscillation patterns)
   const oscillationCheck = Math.floor(__ITER / 10) % 2;
@@ -207,37 +211,37 @@ function getExtremeWorkload(scenario) {
     case 'DEAD_ZONE':
     case 'MINIMAL_LOAD':
       return {
-        type: Math.random() < 0.5 ? 'cpu' : 'memory',
+        type: (urlIndex % 2 === 0) ? 'cpu' : 'memory',
         intensity: 'minimal',
       };
 
     case 'EXTREME_LOAD':
       return {
-        type: Math.random() < 0.6 ? 'cpu' : 'memory',
+        type: (urlIndex % 10 < 6) ? 'cpu' : 'memory',
         intensity: 'maximum',
       };
 
     case 'HIGH_PRESSURE':
       return {
-        type: Math.random() < 0.7 ? 'cpu' : 'memory',
+        type: (urlIndex % 10 < 7) ? 'cpu' : 'memory',
         intensity: 'high',
       };
 
     case 'OSCILLATING_HIGH':
       return {
-        type: Math.random() < 0.5 ? 'cpu' : 'memory',
+        type: (urlIndex % 2 === 0) ? 'cpu' : 'memory',
         intensity: 'burst',
       };
 
     case 'OSCILLATING_LOW':
       return {
-        type: Math.random() < 0.7 ? 'basic' : 'cpu',
+        type: (urlIndex % 2 === 0) ? 'cpu' : 'memory',
         intensity: 'light',
       };
 
     default:
       return {
-        type: Math.random() < 0.4 ? 'cpu' : (Math.random() < 0.5 ? 'memory' : 'basic'),
+        type: (urlIndex % 2 === 0) ? 'cpu' : 'memory',
         intensity: 'moderate',
       };
   }
@@ -251,23 +255,23 @@ function getWorkloadParams(type, intensity) {
     // All ranges capped to MAX_CPU_ITERATIONS (500000)
     switch(intensity) {
       case 'minimal':
-        params = { iterations: 50000 + Math.floor(Math.random() * 50000) };  // 50k-100k
+        params = { iterations: 50000 + ((urlIndex * 13) % 50000) };  // 50k-100k deterministic
         break;
       case 'light':
-        params = { iterations: 100000 + Math.floor(Math.random() * 100000) }; // 100k-200k
+        params = { iterations: 100000 + ((urlIndex * 17) % 100000) }; // 100k-200k deterministic
         break;
       case 'moderate':
-        params = { iterations: 200000 + Math.floor(Math.random() * 150000) }; // 200k-350k
+        params = { iterations: 200000 + ((urlIndex * 23) % 150000) }; // 200k-350k deterministic
         break;
       case 'high':
-        params = { iterations: 300000 + Math.floor(Math.random() * 150000) }; // 300k-450k
+        params = { iterations: 300000 + ((urlIndex * 29) % 150000) }; // 300k-450k deterministic
         break;
       case 'burst':
-        params = { iterations: 350000 + Math.floor(Math.random() * 100000) }; // 350k-450k
+        params = { iterations: 350000 + ((urlIndex * 31) % 100000) }; // 350k-450k deterministic
         break;
       case 'maximum':
         // Cap to MAX_CPU_ITERATIONS (provided via environment/config)
-        params = { iterations: Math.min(400000 + Math.floor(Math.random() * 100000), MAX_CPU_ITERATIONS) }; // 400k-500k
+        params = { iterations: Math.min(400000 + ((urlIndex * 37) % 100000), MAX_CPU_ITERATIONS) }; // 400k-500k deterministic
         break;
       default:
         params = { iterations: 250000 };
@@ -276,22 +280,22 @@ function getWorkloadParams(type, intensity) {
     // FIXED: Reduced all values to max 70 MB for concurrency safety
     switch(intensity) {
       case 'minimal':
-        params = { size_mb: 10 + Math.floor(Math.random() * 10) }; // 10-20 MB
+        params = { size_mb: 10 + ((urlIndex * 7) % 10) }; // 10-20 MB deterministic
         break;
       case 'light':
-        params = { size_mb: 20 + Math.floor(Math.random() * 15) }; // 20-35 MB
+        params = { size_mb: 20 + ((urlIndex * 11) % 15) }; // 20-35 MB deterministic
         break;
       case 'moderate':
-        params = { size_mb: 30 + Math.floor(Math.random() * 15) }; // 30-45 MB
+        params = { size_mb: 30 + ((urlIndex * 13) % 15) }; // 30-45 MB deterministic
         break;
       case 'high':
-        params = { size_mb: 40 + Math.floor(Math.random() * 15) }; // 40-55 MB
+        params = { size_mb: 40 + ((urlIndex * 17) % 15) }; // 40-55 MB deterministic
         break;
       case 'burst':
-        params = { size_mb: 45 + Math.floor(Math.random() * 15) }; // 45-60 MB
+        params = { size_mb: 45 + ((urlIndex * 19) % 15) }; // 45-60 MB deterministic
         break;
       case 'maximum':
-        params = { size_mb: 50 + Math.floor(Math.random() * 20) }; // 50-70 MB (safe max)
+        params = { size_mb: 50 + ((urlIndex * 23) % 20) }; // 50-70 MB (safe max) deterministic
         break;
       default:
         params = { size_mb: 35 };
@@ -390,22 +394,22 @@ export default function () {
   switch(scenario) {
     case 'DEAD_ZONE':
     case 'MINIMAL_LOAD':
-      sleepTime = 3 + Math.random() * 2; // 3-5 seconds
+      sleepTime = 3 + ((urlIndex * 3) % 20) / 10; // 3-5 seconds deterministic
       break;
     case 'EXTREME_LOAD':
-      sleepTime = 0.1 + Math.random() * 0.2; // 0.1-0.3 seconds (very high pressure)
+      sleepTime = 0.1 + ((urlIndex * 2) % 20) / 100; // 0.1-0.3 seconds (very high pressure) deterministic
       break;
     case 'HIGH_PRESSURE':
-      sleepTime = 0.3 + Math.random() * 0.3; // 0.3-0.6 seconds
+      sleepTime = 0.3 + ((urlIndex * 3) % 30) / 100; // 0.3-0.6 seconds deterministic
       break;
     case 'OSCILLATING_HIGH':
-      sleepTime = 0.2 + Math.random() * 0.3; // 0.2-0.5 seconds
+      sleepTime = 0.2 + ((urlIndex * 3) % 30) / 100; // 0.2-0.5 seconds deterministic
       break;
     case 'OSCILLATING_LOW':
-      sleepTime = 1.5 + Math.random() * 1.0; // 1.5-2.5 seconds
+      sleepTime = 1.5 + ((urlIndex * 5) % 20) / 20; // 1.5-2.5 seconds deterministic
       break;
     default:
-      sleepTime = 0.8 + Math.random() * 0.8; // 0.8-1.6 seconds
+      sleepTime = 0.8 + ((urlIndex * 4) % 20) / 25; // 0.8-1.6 seconds deterministic
   }
 
   sleep(sleepTime);

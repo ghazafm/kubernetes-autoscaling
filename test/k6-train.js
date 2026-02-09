@@ -4,7 +4,7 @@ import http from 'k6/http';
 /*
   Skrip k6 ini merealisasikan:
   1) Pola beban harian melalui stages (target VU vs waktu)
-  2) Heterogenitas permintaan melalui request mix: basic / CPU-intensif / memori-intensif
+  2) Heterogenitas permintaan melalui request mix: CPU-intensif / memori-intensif
 
   Parameter utama dikontrol via environment variables (__ENV) agar eksperimen replikatif.
 */
@@ -36,11 +36,15 @@ const REQ_TIMEOUT = __ENV.REQ_TIMEOUT || '10s';
 // =====================
 // 2) Helper
 // =====================
-function pickBaseUrl() {
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
+
+function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  // This ensures balanced distribution even with low VU counts
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin for fair comparison
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 
 function scaleDuration(minutes) {
@@ -56,32 +60,31 @@ function scaleDuration(minutes) {
 // =====================
 // 3) Dynamic VU target (tetap sama logika)
 // =====================
-// Formula ringkas: VUs = replicas * (util_factor) * requests_per_pod
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD);
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD);
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD);
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD);
-const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD);
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_factor
+const URL_COUNT = BASE_URLS.length;
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD * URL_COUNT);
 
-const ceil = (v) => Math.ceil(v);
+// Cap all VU calculations at VU_SPIKE to never exceed pod capacity
+const vu = (v) => Math.min(Math.max(1, Math.ceil(v)), VU_SPIKE);
 
 // =====================
 // 4) Stages: duration & target SAMA seperti skrip kamu
 // =====================
 const basePattern = [
   // Warm-up
-  { duration: scaleDuration(1), target: 0 },
-  { duration: scaleDuration(1), target: VU_WARMUP },
-  { duration: scaleDuration(2), target: VU_WARMUP },
+  { duration: scaleDuration(3), target: 0 },
 
   // Phase 1: Morning ramp-up
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 0.5) },
-  { duration: scaleDuration(2), target: ceil(VU_LOW * 0.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },
   { duration: scaleDuration(1), target: VU_LOW },
   { duration: scaleDuration(2), target: VU_LOW },
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(3), target: ceil(VU_LOW * 1.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(3), target: vu(VU_LOW * 1.5) },
 
   // Phase 2: Steady daytime
   { duration: scaleDuration(1), target: VU_MEDIUM },
@@ -92,8 +95,8 @@ const basePattern = [
   { duration: scaleDuration(2), target: VU_LOW },
 
   // Phase 4: Post-lunch recovery
-  { duration: scaleDuration(1), target: ceil(VU_MEDIUM * 1.2) },
-  { duration: scaleDuration(3), target: ceil(VU_MEDIUM * 1.2) },
+  { duration: scaleDuration(1), target: vu(VU_MEDIUM * 1.2) },
+  { duration: scaleDuration(3), target: vu(VU_MEDIUM * 1.2) },
 
   // Phase 5: Afternoon peak
   { duration: scaleDuration(1), target: VU_HIGH },
@@ -108,26 +111,26 @@ const basePattern = [
   // Phase 7: Evening decline
   { duration: scaleDuration(1), target: VU_HIGH },
   { duration: scaleDuration(2), target: VU_MEDIUM },
-  { duration: scaleDuration(2), target: ceil(VU_LOW * 1.5) },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 1.5) },
   { duration: scaleDuration(2), target: VU_LOW },
 
   // Phase 8: Night-time low
-  { duration: scaleDuration(1), target: ceil(VU_WARMUP * 2) },
-  { duration: scaleDuration(3), target: ceil(VU_WARMUP * 2) },
-  { duration: scaleDuration(1), target: VU_WARMUP },
-  { duration: scaleDuration(2), target: VU_WARMUP },
+  { duration: scaleDuration(1), target: VU_LOW },
+  { duration: scaleDuration(3), target: VU_LOW },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },
 
   // Phase 9: Oscillating load
-  { duration: scaleDuration(0.5), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(0.5), target: ceil(VU_WARMUP * 3) },
-  { duration: scaleDuration(1), target: ceil(VU_WARMUP * 3) },
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(0.5), target: VU_LOW },
+  { duration: scaleDuration(1), target: VU_LOW },
   { duration: scaleDuration(0.5), target: VU_MEDIUM },
   { duration: scaleDuration(1), target: VU_MEDIUM },
-  { duration: scaleDuration(0.5), target: ceil(VU_WARMUP * 2) },
+  { duration: scaleDuration(0.5), target: VU_LOW },
 
   // Shutdown
-  { duration: scaleDuration(1), target: VU_WARMUP },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
   { duration: scaleDuration(2), target: 0 },
 ];
 
@@ -143,13 +146,14 @@ export const options = {
 };
 
 // =====================
-// 5) Default function: request mix (basic/cpu/memory)
+// 5) Default function: request mix (cpu/memory)
 // =====================
 export default function () {
   const baseUrl = pickBaseUrl();
 
   // pilih tipe request sesuai proporsi (request mix)
-  const r = Math.random();
+  // Deterministic alternating pattern: CPU, Memory, CPU, Memory...
+  const r = (urlIndex % 2) / 2; // Alternates: 0.0, 0.5, 0.0, 0.5...
   let url;
 
   if (r < P_CPU) {

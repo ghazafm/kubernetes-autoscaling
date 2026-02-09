@@ -2,6 +2,7 @@ exclude = [
     ".venv/*",
     "trash/*",
     "lab/*",
+    "result/*",
     ]
 
 # Mininal python version we support is 3.8

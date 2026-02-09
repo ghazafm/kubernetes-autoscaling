@@ -8,17 +8,26 @@ const cpuDuration = new Trend('cpu_request_duration');
 const memoryDuration = new Trend('memory_request_duration');
 const requestsPerStage = new Counter('requests_per_stage');
 
+// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
+const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
+const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+const URL_COUNT = BASE_URLS.length;
+
 // Dynamic load calculation based on replica capacity
 const MAX_REPLICAS = parseInt(__ENV.MAX_REPLICAS || '50');
 const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD_TARGET = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // Calculate VU targets to stress pods at different capacity levels
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);  // Minimal load
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET);  // 20% capacity
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET);  // 40% capacity
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET);  // 60% capacity
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET);  // 80% capacity
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_target
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD_TARGET * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD_TARGET * URL_COUNT);
+
+// Cap all VU calculations at VU_SPIKE to never exceed pod capacity
+const vu = (v) => Math.min(Math.max(1, Math.ceil(v)), VU_SPIKE);
 
 // RL Autoscaler Test Configuration - Dynamic VU based on MAX_REPLICAS
 // Scenario: Low → Medium → High → Low (to test RL agent's scaling decisions)
@@ -28,23 +37,23 @@ export const options = {
     { duration: '1m', target: 1 },
 
     // Phase 1: LOW LOAD (baseline)
-    { duration: '2m', target: VU_WARMUP },     // Ramp up to warmup
-    { duration: '3m', target: VU_WARMUP },     // Hold at warmup (LOW)
+    { duration: '2m', target: vu(VU_LOW * 0.5) },  // Ramp up slowly
+    { duration: '3m', target: vu(VU_LOW * 0.5) },  // Hold at half low
 
     // Phase 2: MEDIUM LOAD
-    { duration: '1m', target: VU_LOW },        // Ramp up to low
-    { duration: '4m', target: VU_LOW },        // Hold at low (MEDIUM)
+    { duration: '1m', target: VU_LOW },         // Ramp up to low
+    { duration: '4m', target: VU_LOW },         // Hold at low (MEDIUM)
 
     // Phase 3: HIGH LOAD
-    { duration: '1m', target: VU_MEDIUM },     // Ramp up to medium
-    { duration: '5m', target: VU_MEDIUM },     // Hold at medium (HIGH)
+    { duration: '1m', target: VU_MEDIUM },      // Ramp up to medium
+    { duration: '5m', target: VU_MEDIUM },      // Hold at medium (HIGH)
 
     // Phase 4: BACK TO LOW (scale down test)
-    { duration: '1m', target: VU_WARMUP },     // Ramp down to warmup
-    { duration: '3m', target: VU_WARMUP },     // Hold at warmup (LOW)
+    { duration: '1m', target: vu(VU_LOW * 0.5) },  // Ramp down
+    { duration: '3m', target: vu(VU_LOW * 0.5) },  // Hold at half low
 
     // Graceful shutdown
-    { duration: '30s', target: 0 },            // Ramp down to 0
+    { duration: '30s', target: 0 },             // Ramp down to 0
   ],
   thresholds: {
     http_req_duration: ['p(95)<5000'], // 95% of requests should be below 5s
@@ -52,15 +61,15 @@ export const options = {
   },
 };
 
-// Support multiple target URLs via BASE_URLS (comma-separated) or single BASE_URL
-const BASE_URLS_RAW = __ENV.BASE_URLS || __ENV.BASE_URL || 'http://localhost:5000';
-const BASE_URLS = BASE_URLS_RAW.split(',').map(s => s.trim()).filter(Boolean);
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
 
 function getBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  // This ensures balanced distribution even with low VU counts
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin for fair comparison
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 const MAX_CPU_ITERATIONS = parseInt(__ENV.MAX_CPU_ITERATIONS || '500000');
 
@@ -80,9 +89,10 @@ export function setup() {
   console.log(`   Target Requests/Pod: ${REQUESTS_PER_POD_TARGET}`);
   console.log('');
   console.log('🚀 Dynamic VU Targets:');
-  console.log(`   WARMUP: ${VU_WARMUP} VUs (LOW phase)`);
-  console.log(`   LOW:    ${VU_LOW} VUs (MEDIUM phase)`);
-  console.log(`   MEDIUM: ${VU_MEDIUM} VUs (HIGH phase)`);
+  console.log(`   LOW:    ${VU_LOW} VUs`);
+  console.log(`   MEDIUM: ${VU_MEDIUM} VUs`);
+  console.log(`   HIGH:   ${VU_HIGH} VUs`);
+  console.log(`   PEAK:   ${VU_PEAK} VUs`);
   console.log('');
   console.log('📈 Test Pattern: LOW → MEDIUM → HIGH → LOW');
   console.log('═══════════════════════════════════════════════════════\n');
@@ -105,13 +115,14 @@ function safeGet(url, params, maxRetries = 2) {
 export default function () {
   const currentStage = getCurrentStage(__ITER, __VU);
 
-  // Mix of CPU and memory intensive requests
-  const requestType = Math.random();
+  // Mix of CPU and memory intensive requests (40% CPU, 60% Memory)
+  // Deterministic pattern: CPU, CPU, MEM, MEM, MEM (repeats)
+  const requestType = (urlIndex % 5) / 5; // Pattern: 0.0, 0.2, 0.4, 0.6, 0.8
 
   if (requestType < 0.4) {
     // 40% CPU-intensive requests
     // Range: 100k-500k iterations (aligned with MAX_CPU_ITERATIONS=500000)
-    const iterations = Math.floor(Math.random() * 400000) + 100000; // 100k to 500k iterations
+    const iterations = 100000 + ((urlIndex * 71) % 400000); // 100k to 500k deterministic
     const safeIterations = Math.min(iterations, MAX_CPU_ITERATIONS);
     const cpuRes = safeGet(`${getBaseUrl()}/api/cpu?iterations=${safeIterations}`, { tags: { name: 'cpu', request_type: 'cpu' }, timeout: '20s' });
     cpuDuration.add(cpuRes.timings.duration);
@@ -130,7 +141,7 @@ export default function () {
 
   } else {
     // 50% Memory-intensive requests
-    const sizeMb = Math.floor(Math.random() * 40) + 30; // 30MB to 70MB
+    const sizeMb = 30 + ((urlIndex * 19) % 40); // 30MB to 70MB deterministic
     const memRes = safeGet(`${getBaseUrl()}/api/memory?size_mb=${sizeMb}`, { tags: { name: 'memory', request_type: 'memory' }, timeout: '20s' });
     memoryDuration.add(memRes.timings.duration);
 
@@ -157,7 +168,7 @@ export default function () {
 
 function getCurrentStage(iteration, vu) {
   // Approximate which stage we're in based on VU count (dynamic thresholds)
-  if (vu <= VU_WARMUP) return 'LOW';
+  if (vu <= Math.ceil(VU_LOW * 0.5)) return 'LOW';
   if (vu <= VU_LOW) return 'MEDIUM';
   if (vu <= VU_MEDIUM) return 'HIGH';
   return 'UNKNOWN';
@@ -167,11 +178,11 @@ function getSleepTime(stage) {
   // Adjust sleep time based on load phase
   switch(stage) {
     case 'LOW':
-      return 2 + Math.random() * 2; // 2-4 seconds
+      return 2 + ((urlIndex * 2) % 20) / 10; // 2-4 seconds deterministic
     case 'MEDIUM':
-      return 1 + Math.random() * 1; // 1-2 seconds
+      return 1 + ((urlIndex * 1) % 10) / 10; // 1-2 seconds deterministic
     case 'HIGH':
-      return 0.5 + Math.random() * 0.5; // 0.5-1 seconds
+      return 0.5 + ((urlIndex * 5) % 10) / 20; // 0.5-1 seconds deterministic
     default:
       return 1;
   }

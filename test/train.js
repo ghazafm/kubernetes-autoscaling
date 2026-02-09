@@ -3,13 +3,21 @@ import exec from 'k6/execution';
 import http from 'k6/http';
 
 /*
-  Enhanced k6 script for testing memory-optimized Flask application
+  Enhanced k6 script for fair comparison testing between RL Agent and HPA
 
-  Key improvements:
-  1) Tests both cached and non-cached memory allocations
-  2) Periodically triggers manual cleanup to test malloc_trim
-  3) Monitors memory stats endpoint
-  4) Configurable cache behavior for testing
+  CRITICAL: This script uses DETERMINISTIC load patterns for fair comparison
+
+  Key features for fairness:
+  1) Deterministic round-robin URL selection - ensures both deployments get identical load
+  2) Deterministic request type selection - based on iteration number, not random
+  3) Deterministic cache behavior - predictable pattern for memory testing
+  4) Both systems receive EXACTLY the same request sequence
+
+  Additional features:
+  - Tests both cached and non-cached memory allocations
+  - Periodically triggers manual cleanup to test malloc_trim
+  - Monitors memory stats endpoint
+  - Configurable cache behavior for testing
 */
 
 // =====================
@@ -28,8 +36,8 @@ const MIN_REPLICAS = parseInt(__ENV.MIN_REPLICAS || '1');
 const REQUESTS_PER_POD = parseFloat(__ENV.REQUESTS_PER_POD || '8');
 
 // Request mix (proportions)
-const P_CPU = parseFloat(__ENV.P_CPU || '0.45');
-const P_MEM = parseFloat(__ENV.P_MEM || '0.45'); // basic = 1 - (P_CPU + P_MEM)
+const P_CPU = parseFloat(__ENV.P_CPU || '0.5');
+const P_MEM = parseFloat(__ENV.P_MEM || '0.5');
 
 // Payload configuration
 const CPU_ITERATIONS = parseInt(__ENV.CPU_ITERATIONS || '400000');
@@ -54,11 +62,16 @@ const ENABLE_MEMORY_TESTING = (__ENV.ENABLE_MEMORY_TESTING || 'true') === 'true'
 // =====================
 // 2) Helper functions
 // =====================
+// Counter for deterministic round-robin load balancing
+let urlIndex = 0;
+
 function pickBaseUrl() {
   if (BASE_URLS.length === 1) return BASE_URLS[0];
-  // Use random selection per request for immediate load balancing
-  // This ensures balanced distribution even with low VU counts
-  return BASE_URLS[Math.floor(Math.random() * BASE_URLS.length)];
+  // Use deterministic round-robin to ensure IDENTICAL load distribution
+  // This is CRITICAL for fair comparison between HPA and RL Agent
+  const url = BASE_URLS[urlIndex % BASE_URLS.length];
+  urlIndex++;
+  return url;
 }
 
 function scaleDuration(minutes) {
@@ -74,78 +87,84 @@ function scaleDuration(minutes) {
 // =====================
 // 3) Dynamic VU targets
 // =====================
-const VU_WARMUP = Math.ceil(MIN_REPLICAS * 2);
-const VU_LOW = Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD);
-const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD);
-const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD);
-const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD);
-const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD);
+// Formula: VUs = replicas * requests_per_pod * url_count * utilization_factor
+const URL_COUNT = BASE_URLS.length;
+const VU_LOW = Math.max(1, Math.ceil(MAX_REPLICAS * 0.2 * REQUESTS_PER_POD * URL_COUNT));
+const VU_MEDIUM = Math.ceil(MAX_REPLICAS * 0.4 * REQUESTS_PER_POD * URL_COUNT);
+const VU_HIGH = Math.ceil(MAX_REPLICAS * 0.6 * REQUESTS_PER_POD * URL_COUNT);
+const VU_PEAK = Math.ceil(MAX_REPLICAS * 0.8 * REQUESTS_PER_POD * URL_COUNT);
+const VU_SPIKE = Math.ceil(MAX_REPLICAS * 1.0 * REQUESTS_PER_POD * URL_COUNT);
 
-const ceil = (v) => Math.ceil(v);
+// Cap all VU calculations at VU_SPIKE to never exceed pod capacity
+const vu = (v) => Math.min(Math.max(1, Math.ceil(v)), VU_SPIKE);
 
 // =====================
 // 4) Stages configuration
 // =====================
+// Total duration: exactly 60 minutes (1 hour)
+// Warm-up: 5min, Phase1: 8min, Phase2: 5min, Phase3: 3min, Phase4: 3min,
+// Phase5: 6min, Phase6: 3min, Phase7: 6min, Phase8: 6min, Phase9: 5min, Shutdown: 10min = 60min
 const basePattern = [
-  // Warm-up
-  { duration: scaleDuration(1), target: 0 },
-  { duration: scaleDuration(1), target: VU_WARMUP },
-  { duration: scaleDuration(2), target: VU_WARMUP },
+  // Warm-up with extended 0 VU (let agent scale to minimum) - 5 min
+  { duration: scaleDuration(3), target: 0 },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
 
-  // Phase 1: Morning ramp-up
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 0.5) },
-  { duration: scaleDuration(2), target: ceil(VU_LOW * 0.5) },
+  // Phase 1: Morning ramp-up - 8 min
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
   { duration: scaleDuration(1), target: VU_LOW },
   { duration: scaleDuration(2), target: VU_LOW },
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(3), target: ceil(VU_LOW * 1.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 1.5) },
 
-  // Phase 2: Steady daytime
+  // Phase 2: Steady daytime - 5 min
   { duration: scaleDuration(1), target: VU_MEDIUM },
   { duration: scaleDuration(4), target: VU_MEDIUM },
 
-  // Phase 3: Lunch dip
+  // Phase 3: Lunch dip - 3 min
   { duration: scaleDuration(1), target: VU_LOW },
   { duration: scaleDuration(2), target: VU_LOW },
 
-  // Phase 4: Post-lunch recovery
-  { duration: scaleDuration(1), target: ceil(VU_MEDIUM * 1.2) },
-  { duration: scaleDuration(3), target: ceil(VU_MEDIUM * 1.2) },
+  // Phase 4: Post-lunch recovery - 3 min
+  { duration: scaleDuration(1), target: vu(VU_MEDIUM * 1.2) },
+  { duration: scaleDuration(2), target: vu(VU_MEDIUM * 1.2) },
 
-  // Phase 5: Afternoon peak
+  // Phase 5: Afternoon peak - 6 min
   { duration: scaleDuration(1), target: VU_HIGH },
   { duration: scaleDuration(2), target: VU_PEAK },
-  { duration: scaleDuration(4), target: VU_PEAK },
+  { duration: scaleDuration(3), target: VU_PEAK },
 
-  // Phase 6: Flash spike
+  // Phase 6: Flash spike - 3 min
   { duration: scaleDuration(0.5), target: VU_SPIKE },
-  { duration: scaleDuration(2), target: VU_SPIKE },
+  { duration: scaleDuration(1.5), target: VU_SPIKE },
   { duration: scaleDuration(1), target: VU_PEAK },
 
-  // Phase 7: Evening decline
+  // Phase 7: Evening decline - 6 min
   { duration: scaleDuration(1), target: VU_HIGH },
-  { duration: scaleDuration(2), target: VU_MEDIUM },
-  { duration: scaleDuration(2), target: ceil(VU_LOW * 1.5) },
+  { duration: scaleDuration(1), target: VU_MEDIUM },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 1.5) },
   { duration: scaleDuration(2), target: VU_LOW },
 
-  // Phase 8: Night-time low
-  { duration: scaleDuration(1), target: ceil(VU_WARMUP * 2) },
-  { duration: scaleDuration(3), target: ceil(VU_WARMUP * 2) },
-  { duration: scaleDuration(1), target: VU_WARMUP },
-  { duration: scaleDuration(2), target: VU_WARMUP },
+  // Phase 8: Night-time low - 6 min
+  { duration: scaleDuration(1), target: VU_LOW },
+  { duration: scaleDuration(2), target: VU_LOW },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(2), target: vu(VU_LOW * 0.5) },
 
-  // Phase 9: Oscillating load
-  { duration: scaleDuration(0.5), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(1), target: ceil(VU_LOW * 1.5) },
-  { duration: scaleDuration(0.5), target: ceil(VU_WARMUP * 3) },
-  { duration: scaleDuration(1), target: ceil(VU_WARMUP * 3) },
+  // Phase 9: Oscillating load - 5 min
+  { duration: scaleDuration(0.5), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 1.5) },
+  { duration: scaleDuration(0.5), target: VU_LOW },
+  { duration: scaleDuration(1), target: VU_LOW },
   { duration: scaleDuration(0.5), target: VU_MEDIUM },
   { duration: scaleDuration(1), target: VU_MEDIUM },
-  { duration: scaleDuration(0.5), target: ceil(VU_WARMUP * 2) },
+  { duration: scaleDuration(0.5), target: VU_LOW },
 
-  // Shutdown
-  { duration: scaleDuration(1), target: VU_WARMUP },
-  { duration: scaleDuration(2), target: 0 },
+  // Shutdown with extended 0 VU (let agent scale to minimum) - 10 min
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.5) },
+  { duration: scaleDuration(1), target: vu(VU_LOW * 0.25) },
+  { duration: scaleDuration(8), target: 0 },
 ];
 
 function generateStages() {
@@ -168,15 +187,17 @@ export const options = {
 // 5) Setup function (runs once per VU)
 // =====================
 export function setup() {
-  console.log('=== k6 Memory Management Test Configuration ===');
+  console.log('=== k6 Fair Comparison Test Configuration ===');
   console.log(`Base URLs: ${BASE_URLS.join(', ')}`);
+  console.log(`Load balancing: DETERMINISTIC round-robin (fair comparison)`);
+  console.log(`Request pattern: DETERMINISTIC based on iteration (no randomness)`);
   console.log(`Memory allocation: ${MEM_SIZE_MB}MB`);
   console.log(`CPU iterations: ${CPU_ITERATIONS}`);
-  console.log(`Request mix: ${P_CPU * 100}% CPU, ${P_MEM * 100}% Memory, ${(1 - P_CPU - P_MEM) * 100}% Basic`);
-  console.log(`Memory no-cache rate: ${P_MEMORY_NO_CACHE * 100}%`);
+  console.log(`Request mix: ${P_CPU * 100}% CPU, ${P_MEM * 100}% Memory`);
+  console.log(`Memory no-cache rate: ${P_MEMORY_NO_CACHE * 100}% (deterministic pattern)`);
   console.log(`Cleanup interval: every ${CLEANUP_INTERVAL} iterations`);
   console.log(`Memory stats check: every ${MEMORY_STATS_INTERVAL} iterations`);
-  console.log(`Max VUs: Warmup=${VU_WARMUP}, Low=${VU_LOW}, Medium=${VU_MEDIUM}, High=${VU_HIGH}, Peak=${VU_PEAK}, Spike=${VU_SPIKE}`);
+  console.log(`Max VUs: Low=${VU_LOW}, Medium=${VU_MEDIUM}, High=${VU_HIGH}, Peak=${VU_PEAK}, Spike=${VU_SPIKE}`);
   console.log('=============================================');
 }
 
@@ -221,8 +242,9 @@ export default function () {
     }
   }
 
-  // Main request - choose type based on mix
-  const r = Math.random();
+  // Main request - choose type based on mix (50/50 CPU vs Memory)
+  // Use deterministic alternating pattern: CPU, Memory, CPU, Memory...
+  const r = (iterationInTest % 2) / 2; // Alternates: 0.0, 0.5, 0.0, 0.5...
   let url;
   let endpoint;
 
@@ -230,16 +252,12 @@ export default function () {
     // CPU-intensive request
     url = `${baseUrl}/api/cpu?iterations=${CPU_ITERATIONS}`;
     endpoint = 'cpu';
-  } else if (r < P_CPU + P_MEM) {
+  } else {
     // Memory-intensive request
-    // NEW: Vary between cached and non-cached to test malloc_trim
-    const useCache = Math.random() > P_MEMORY_NO_CACHE;
+    // Use deterministic cache pattern for fair comparison
+    const useCache = (iterationInTest % 10) >= 7; // 70% non-cached (0-6), 30% cached (7-9)
     url = `${baseUrl}/api/memory?size_mb=${MEM_SIZE_MB}&cache=${useCache}`;
     endpoint = 'memory';
-  } else {
-    // Basic request
-    url = `${baseUrl}/api`;
-    endpoint = 'basic';
   }
 
   http.get(url, {
@@ -249,27 +267,4 @@ export default function () {
 
   // Realistic pacing
   sleep(1);
-}
-
-// =====================
-// 7) Teardown function (runs once at end)
-// =====================
-export function teardown(data) {
-  console.log('=== k6 Test Complete ===');
-  console.log('Triggering final cleanup on all endpoints...');
-
-  // Trigger cleanup on all base URLs
-  for (const baseUrl of BASE_URLS) {
-    try {
-      const cleanRes = http.get(`${baseUrl}/clean`, { timeout: '5s' });
-      if (cleanRes.status === 200) {
-        const result = JSON.parse(cleanRes.body);
-        console.log(`Cleanup ${baseUrl}: cleared=${result.cleared_items}, gc=${result.gc_collected}, trim=${result.malloc_trim_result}`);
-      }
-    } catch (e) {
-      console.log(`Failed to cleanup ${baseUrl}: ${e}`);
-    }
-  }
-
-  console.log('========================');
 }
