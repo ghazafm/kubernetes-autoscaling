@@ -164,6 +164,7 @@ class KubernetesEnv(Env):
             self.logger.info(f"CSV logging enabled: {self.csv_logger.get_filepath()}")
 
         self.logger.info(f"max_replicas: {self.max_replicas}")
+        self.logger.info(f"min_replicas: {self.min_replicas}")
 
     def step(self, action: int):
         self.iteration -= 1

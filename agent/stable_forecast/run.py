@@ -78,6 +78,8 @@ if __name__ == "__main__":
     scale_down_attempts = 0
     min_scale_down_attempts = int(os.getenv("MIN_SCALE_DOWN_ATTEMPTS", "3"))
     max_scale_down_steps = int(os.getenv("MAX_SCALE_DOWN_STEPS", "5"))
+    logger.info(f"Minimum scaling down attempts set to: {min_scale_down_attempts}")
+    logger.info(f"Maximum scaling down steps set to: {max_scale_down_steps}")
     logger.info(
         f"Minimum scale-down attempts before scaling-down: {min_scale_down_attempts}"
     )

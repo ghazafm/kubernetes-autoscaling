@@ -212,13 +212,22 @@ run_test() {
 
     k6_cmd="$k6_cmd \"$test_file\""
 
+    # Log test start timestamp
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S %Z')
+    echo -e "${GREEN}Test started at: ${start_time}${NC}\n"
+
     eval $k6_cmd
 
     local exit_code=$?
+
+    # Log test end timestamp
+    local end_time=$(date '+%Y-%m-%d %H:%M:%S %Z')
+    echo -e "\n${GREEN}Test ended at: ${end_time}${NC}"
+
     if [ $exit_code -eq 0 ]; then
-        echo -e "\n${GREEN}✓ Test completed successfully: ${test_name}${NC}\n"
+        echo -e "${GREEN}✓ Test completed successfully: ${test_name}${NC}\n"
     else
-        echo -e "\n${RED}✗ Test failed: ${test_name} (exit code: $exit_code)${NC}\n"
+        echo -e "${RED}✗ Test failed: ${test_name} (exit code: $exit_code)${NC}\n"
     fi
 
     return $exit_code
