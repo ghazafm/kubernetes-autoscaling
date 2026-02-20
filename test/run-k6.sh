@@ -79,6 +79,13 @@ else
     BASE_URL="${BASE_URL:-http://localhost:5000}"
 fi
 
+# If caller overrode BASE_URL from CLI, also set BASE_URLS so k6 scripts
+# that prefer a comma-separated BASE_URLS list will respect the CLI override.
+if [ -n "$OVERRIDE_BASE_URL" ]; then
+    # keep compatibility: if caller passed a single URL, make BASE_URLS a single-item list
+    export BASE_URLS="$OVERRIDE_BASE_URL"
+fi
+
 # Set default BASE_URL if not set
 DURATION_MULTIPLIER=${DURATION_MULTIPLIER:-}
 CYCLE_COUNT=${CYCLE_COUNT:-}

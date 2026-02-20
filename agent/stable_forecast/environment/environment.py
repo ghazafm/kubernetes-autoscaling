@@ -15,50 +15,47 @@ from database import InfluxDB
 def calculate_reward(
     action: int,
     response_time: float,
-    weight_response_time: float = 1.0,
-    weight_cost: float = 1.0,
 ) -> tuple[float, dict]:
     """Calculate reward based on action and response time.
 
     Args:
         action: Action value (0-99)
         response_time: Response time as percentage of max (0-100+)
-        weight_response_time: Weight for response time penalty
-        weight_cost: Weight for cost penalty
-
     Returns:
         Tuple of (reward, details_dict)
     """
-    RESPONSE_TIME_HIGH_THRESHOLD = 50.0
-    RESPONSE_TIME_VIOLATION_THRESHOLD = 80.0
+    RESPONSE_TIME_MIDLE = 50.0
+    RESPONSE_TIME_HIGH = 80.0
 
-    if response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
+    if response_time <= RESPONSE_TIME_MIDLE:
+        # jika response time di bawah 50%, tidak ada penalti
         response_time_penalty = 0.0
-    elif response_time <= RESPONSE_TIME_VIOLATION_THRESHOLD:
-        response_time_penalty = (response_time - RESPONSE_TIME_HIGH_THRESHOLD) / (
-            RESPONSE_TIME_VIOLATION_THRESHOLD - RESPONSE_TIME_HIGH_THRESHOLD
+    elif response_time <= RESPONSE_TIME_HIGH:
+        # jika response time antara 50% dan 80%, penalti meningkat secara linear dari 0 ke 1
+        response_time_penalty = (response_time - RESPONSE_TIME_MIDLE) / (
+            RESPONSE_TIME_HIGH - RESPONSE_TIME_MIDLE
         )
     else:
-        over = (
-            response_time - RESPONSE_TIME_VIOLATION_THRESHOLD
-        ) / RESPONSE_TIME_VIOLATION_THRESHOLD
+        over = (response_time - RESPONSE_TIME_HIGH) / RESPONSE_TIME_HIGH
+        # jika response time di atas 80%, penalti meningkat secara linear mulai dari 1
         response_time_penalty = 1.0 + over
 
     cost_penalty_raw = action / 99.0
 
-    if response_time > RESPONSE_TIME_VIOLATION_THRESHOLD:
-        cost_weight_multiplier = 0.0
-    elif response_time <= RESPONSE_TIME_HIGH_THRESHOLD:
-        cost_weight_multiplier = 1.0
-    else:
-        cost_weight_multiplier = 1.0 - response_time_penalty
+    # if response_time > RESPONSE_TIME_HIGH:
+    #     cost_weight_multiplier = 0.0
+    # elif response_time <= RESPONSE_TIME_MIDLE:
+    #     cost_weight_multiplier = 1.0
+    # else:
+    #     cost_weight_multiplier = 1.0 - response_time_penalty
+
+    # simplifikasi ===============================
+    cost_weight_multiplier = max(0.0, 1.0 - response_time_penalty)
+    # ===========================================
 
     effective_cost_penalty = cost_penalty_raw * cost_weight_multiplier
 
-    total_penalty = (
-        weight_response_time * response_time_penalty
-        + weight_cost * effective_cost_penalty
-    )
+    total_penalty = response_time_penalty + effective_cost_penalty
     reward = 1.0 - total_penalty
 
     details = {
@@ -91,8 +88,6 @@ class KubernetesEnv(Env):
         metrics_interval: int,
         metrics_quantile: float,
         max_scaling_retries: int,
-        weight_response_time: float,
-        weight_cost: float,
         logger: Optional[logging.Logger],
         influxdb: Optional[InfluxDB] = None,
         metrics_endpoints_method: list[tuple[str, str]] = (
@@ -141,12 +136,6 @@ class KubernetesEnv(Env):
         self.max_response_time: float = max_response_time
         self.influxdb = influxdb
         self.max_scaling_retries = max_scaling_retries
-
-        self.weight_response_time = weight_response_time
-        self.weight_cost = weight_cost
-        self.logger.info(
-            f"Reward weights: RT={self.weight_response_time}, Cost={self.weight_cost}"
-        )
 
         self.observations = np.array(
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
@@ -350,8 +339,6 @@ class KubernetesEnv(Env):
         reward, details = calculate_reward(
             action=action,
             response_time=response_time,
-            weight_response_time=self.weight_response_time,
-            weight_cost=self.weight_cost,
         )
 
         self.last_reward_details = details
@@ -363,8 +350,6 @@ class KubernetesEnv(Env):
                 f"cost_penalty={details['cost_eff']:.3f}, "
                 f"total_penalty={details['total_penalty']:.3f}, "
                 f"reward={reward:.3f}, "
-                f"weight_rt={self.weight_response_time}, "
-                f"weight_cost={self.weight_cost}"
             )
         return reward
 

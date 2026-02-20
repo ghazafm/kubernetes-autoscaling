@@ -57,8 +57,6 @@ if __name__ == "__main__":
         metrics_interval=int(os.getenv("METRICS_INTERVAL", "60")),
         metrics_quantile=float(os.getenv("METRICS_QUANTILE", "0.9")),
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES", "3")),
-        weight_response_time=float(os.getenv("WEIGHT_RESPONSE_TIME", "0.7")),
-        weight_cost=float(os.getenv("WEIGHT_COST", "0.3")),
         render_mode="human",
         mode="prod",
     )
