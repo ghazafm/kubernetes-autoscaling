@@ -10,7 +10,7 @@ else
   exit 1
 fi
 
-# Number of repeats (default 10)
+# Number of repeats (default 3)
 REPEATS=${REPEATS:-3}
 
 OUTDIR="logs/step_${TAGS}_${MIN_SCALE_DOWN_ATTEMPTS}_${MAX_SCALE_DOWN_STEPS}"

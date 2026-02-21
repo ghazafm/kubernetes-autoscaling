@@ -42,10 +42,6 @@ min_replicas = int(os.getenv("MIN_REPLICAS", "1"))
 max_replicas = int(os.getenv("MAX_REPLICAS", "10"))
 range_replicas = max(1, max_replicas - min_replicas)
 
-# Reward weights
-weight_response_time = float(os.getenv("WEIGHT_RESPONSE_TIME", "1.0"))
-weight_cost = float(os.getenv("WEIGHT_COST", "1.0"))
-
 influxdb = InfluxDB(
     logger=logger,
     url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
@@ -92,8 +88,6 @@ while True:
     reward, reward_details = calculate_reward(
         action=action,
         response_time=response_time,
-        weight_response_time=weight_response_time,
-        weight_cost=weight_cost,
     )
 
     info = {
@@ -110,8 +104,9 @@ while True:
         "action": action,
         "reward": reward,
         "rt_penalty": reward_details["rt_penalty"],
-        "cost_penalty": reward_details["cost_eff"],
-        "total_penalty": reward_details["total_penalty"],
+        # Keep legacy log keys, but map them to the new reward details.
+        "cost_penalty": reward_details["cost"],
+        "total_penalty": 1.0 - reward_details["reward"],
     }
 
     influxdb.write_point(
@@ -123,4 +118,5 @@ while True:
         fields={**info},
     )
 
+    logger.info(f"Deployment: {deployment_name}")
     logger.info(f"Monitoring data written to InfluxDB: {info}")

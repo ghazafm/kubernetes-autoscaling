@@ -191,10 +191,10 @@ if __name__ == "__main__":
             env=env,
             target_update_interval=iteration,  # Nilai default 10000, yang mana terlalu besar untuk jumlah pelatihan yang lebih sedikit
             exploration_fraction=0.4,  # Eksplorasi lebih lama dibandingkan dengan defaultnya yaitu 0.1, hal ini dilakukan agar agen mendapatkan pengalaman yang lebih beragam, dan tidak terjebak dalam eksploitasi awal.
-            verbose=1,
-            tensorboard_log=log_dir,
             seed=42,
             device="auto",
+            tensorboard_log=log_dir,
+            verbose=1,
         )
 
     logger.info(
@@ -227,7 +227,7 @@ if __name__ == "__main__":
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback,
-        reset_num_timesteps=False,
+        reset_num_timesteps=False,  # buat resume train
         progress_bar=True,
         tb_log_name="DQN",
     )

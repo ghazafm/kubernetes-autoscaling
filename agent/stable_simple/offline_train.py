@@ -20,11 +20,6 @@ OBS_HIGH = np.array([1.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0], dtype=np.float32)
 
 
 class OfflineDatasetEnv(Env):
-    """
-    Minimal env used only to provide action/observation spaces to SB3.
-    Training data comes from CSV transitions, not from env.step rollouts.
-    """
-
     def __init__(self):
         self.action_space = Discrete(100)
         self.observation_space = Box(low=OBS_LOW, high=OBS_HIGH, dtype=np.float32)
@@ -49,12 +44,10 @@ def to_bool(value) -> bool:
 
 
 def to_float(value, default: float = 0.0) -> float:
-    try:
-        if pd.isna(value):
-            return default
-        return float(value)
-    except Exception:
+    number = pd.to_numeric(value, errors="coerce")
+    if pd.isna(number):
         return default
+    return float(number)
 
 
 def clip_obs(obs: np.ndarray) -> np.ndarray:
@@ -75,21 +68,6 @@ def row_to_obs(row: pd.Series, prefix: str) -> np.ndarray:
         dtype=np.float32,
     )
     return clip_obs(obs)
-
-
-def load_csv_data(csv_paths: list[str]) -> pd.DataFrame:
-    dfs = []
-    for p in csv_paths:
-        try:
-            df = pd.read_csv(p)
-            dfs.append(df)
-        except Exception as e:
-            print(f"Warning: Failed to load {p}: {e}")  # noqa: T201
-
-    if not dfs:
-        raise ValueError("No CSV files could be loaded")
-
-    return pd.concat(dfs, ignore_index=True)
 
 
 def add_transition_to_buffer(model: DQN, row: pd.Series):
@@ -120,37 +98,23 @@ def add_transition_to_buffer(model: DQN, row: pd.Series):
     )
 
 
-def prefill_replay_buffer(model: DQN, df: pd.DataFrame) -> int:
-    inserted = 0
-    for _, row in df.iterrows():
-        add_transition_to_buffer(model, row)
-        inserted += 1
-    return inserted
-
-
 if __name__ == "__main__":
     now = datetime.now().strftime("%Y-%m-%d-%H-%M")
     logger, log_dir = setup_logger(
         "offline_train", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
     )
 
-    csv_paths_str = os.getenv("CSV_PATHS", "")
-    if csv_paths_str:
-        csv_paths = [p.strip() for p in csv_paths_str.split(",")]
+    csv_paths_env = os.getenv("CSV_PATHS", "")
+    if csv_paths_env:
+        csv_paths = [path.strip() for path in csv_paths_env.split(",") if path.strip()]
     else:
-        data_dir = Path("data")
-        csv_paths = [str(p) for p in data_dir.glob("*.csv")]
+        csv_paths = [str(path) for path in Path("data").glob("*.csv")]
 
     if not csv_paths:
-        logger.error(
-            "No CSV files found. Please set CSV_PATHS or "
-            "place CSV files in 'data' directory"
-        )
+        logger.error("No CSV files found. Set CSV_PATHS or place CSVs in 'data'.")
         sys.exit(1)
 
-    logger.info(f"Loading {len(csv_paths)} CSV files: {csv_paths}")
-    df = load_csv_data(csv_paths)
-    logger.info(f"Loaded {len(df)} transitions")
+    df = pd.concat([pd.read_csv(path) for path in csv_paths], ignore_index=True)
 
     required_columns = [
         "obs_action",
@@ -172,37 +136,13 @@ if __name__ == "__main__":
     missing_columns = [col for col in required_columns if col not in df.columns]
     if missing_columns:
         logger.error(f"Missing required columns: {missing_columns}")
-        logger.info(f"Available columns: {list(df.columns)}")
+        sys.exit(1)
+    if "reward" not in df.columns and "response_time" not in df.columns:
+        logger.error("Need 'response_time' column to recompute reward")
         sys.exit(1)
 
-    if "reward" not in df.columns:
-        logger.warning(
-            "'reward' column not found. Reward will be recomputed from "
-            "action and response_time."
-        )
-        if "response_time" not in df.columns:
-            logger.error("Need 'response_time' column to recompute reward")
-            sys.exit(1)
-
-    logger.info("Data statistics:")
-    if "cpu" in df.columns:
-        logger.info(f"  CPU range: {df['cpu'].min():.2f}% - {df['cpu'].max():.2f}%")
-    if "memory" in df.columns:
-        logger.info(
-            f"  Memory range: {df['memory'].min():.2f}% - {df['memory'].max():.2f}%"
-        )
-    if "response_time" in df.columns:
-        logger.info(
-            f"  Response time range: {df['response_time'].min():.2f}% - "
-            f"{df['response_time'].max():.2f}%"
-        )
-    logger.info(f"  Actions: {df['action'].min()} - {df['action'].max()}")
-    logger.info(
-        f"  Episodes: {df['episode'].nunique() if 'episode' in df.columns else 'unknown'}"  # noqa: E501
-    )
-
-    num_epochs = max(1, int(os.getenv("EPOCHS", "1")))
     dataset_size = len(df)
+    num_epochs = max(1, int(os.getenv("EPOCHS", "1")))
     default_total_timesteps = dataset_size * num_epochs
     total_timesteps = max(
         1,
@@ -216,12 +156,11 @@ if __name__ == "__main__":
 
     note = os.getenv("NOTE", "offline")
     model_dir = Path(f"model/{now}_{note}")
-    model_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir = model_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     env = OfflineDatasetEnv()
-    model = DQN(policy="MlpPolicy", env=env, seed=42, tensorboard_log=log_dir)
+    model = DQN(policy="MlpPolicy", env=env, seed=1, tensorboard_log=log_dir)
 
     if model.train_freq.unit != TrainFrequencyUnit.STEP:
         logger.error(
@@ -239,23 +178,6 @@ if __name__ == "__main__":
     )
     callback.on_training_start(locals(), globals())
 
-    logger.info("=" * 80)
-    logger.info("Offline Training Configuration:")
-    logger.info(f"  Dataset transitions: {dataset_size:,}")
-    logger.info(f"  Replay epochs (update multiplier): {num_epochs}")
-    logger.info(f"  Replay buffer capacity (SB3 default): {int(model.buffer_size):,}")
-    logger.info(f"  Total timesteps (offline schedule): {total_timesteps:,}")
-    logger.info(f"  Batch size (SB3 default): {int(model.batch_size)}")
-    logger.info(
-        f"  Target update frequency (SB3 default): {int(model.target_update_interval)}"
-    )
-    logger.info(f"  Learning starts (SB3 default): {int(model.learning_starts)}")
-    logger.info(f"  Train frequency (SB3 default): {model.train_freq}")
-    logger.info(
-        f"  Gradient steps per train call (SB3 default): {int(model.gradient_steps)}"
-    )
-    logger.info("=" * 80)
-
     if dataset_size > int(model.buffer_size):
         logger.warning(
             "Dataset size exceeds replay capacity. Old transitions will be overwritten: "
@@ -263,7 +185,10 @@ if __name__ == "__main__":
         )
 
     logger.info("Prefilling replay buffer from CSV transitions...")
-    inserted = prefill_replay_buffer(model=model, df=df)
+    inserted = 0
+    for _, row in df.iterrows():
+        add_transition_to_buffer(model, row)
+        inserted += 1
     logger.info(f"Replay buffer filled with {inserted:,} transitions")
 
     if inserted < int(model.batch_size):
@@ -274,7 +199,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     checkpoint_freq = max(int(model.target_update_interval) * 2, 50000)
-    logger.info("Starting offline gradient updates (no env rollout)...")
+    train_freq = int(model.train_freq.frequency)
+    grad_steps = int(model.gradient_steps)
+    if grad_steps < 0:
+        grad_steps = train_freq
 
     update_calls = 0
     for step in range(1, total_timesteps + 1):
@@ -289,15 +217,7 @@ if __name__ == "__main__":
         )
         model._on_step()
 
-        if (
-            step % model.train_freq.frequency == 0
-            and model.num_timesteps > model.learning_starts
-        ):
-            grad_steps = (
-                int(model.gradient_steps)
-                if int(model.gradient_steps) >= 0
-                else int(model.train_freq.frequency)
-            )
+        if step % train_freq == 0 and model.num_timesteps > model.learning_starts:
             if grad_steps > 0:
                 model.train(gradient_steps=grad_steps, batch_size=int(model.batch_size))
                 update_calls += 1
@@ -310,14 +230,9 @@ if __name__ == "__main__":
             model.save(checkpoint_model_path)
             model.save_replay_buffer(checkpoint_buffer_path)
             logger.info(f"Checkpoint saved at step {step:,}: {checkpoint_model_path}")
-
-        if step % 1000 == 0 or step == total_timesteps:
             model.logger.dump(step=model.num_timesteps)
-            logger.info(
-                f"Offline update progress: {step:,}/{total_timesteps:,} | "
-                f"train_calls={update_calls:,}"
-            )
 
+    model.logger.dump(step=model.num_timesteps)
     callback.on_training_end()
 
     final_path = model_dir / "final" / "model"
@@ -330,9 +245,8 @@ if __name__ == "__main__":
     logger.info(f"Replay buffer saved to {buffer_path}")
 
     env.close()
-    logger.info("=" * 80)
     logger.info("Offline training completed successfully")
-    logger.info(f"Replay transitions used: {inserted:,}")
-    logger.info(f"Timesteps processed: {model.num_timesteps:,}")
-    logger.info(f"Train calls executed: {update_calls:,}")
-    logger.info("=" * 80)
+    logger.info(
+        f"Transitions={inserted:,}, timesteps={model.num_timesteps:,}, "
+        f"train_calls={update_calls:,}, replay_epochs={num_epochs}"
+    )

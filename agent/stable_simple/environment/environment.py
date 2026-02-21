@@ -16,23 +16,16 @@ def calculate_reward(
     action: int,
     response_time: float,
 ) -> tuple[float, dict]:
-    response_time_penalty = response_time / 100.0
+    rt_penalty = response_time / 100.0
     cost = action / 99.0
 
-    cost_weight = max(0.0, 1.0 - response_time_penalty)
-
-    cost_penalty = cost * cost_weight
-
-    reward = 1.0 - (response_time_penalty + cost_penalty)
+    reward = (1.0 - rt_penalty) * (1.0 - cost)
 
     details = {
         "action": action,
         "response_time": response_time,
-        "rt_penalty": response_time_penalty,
-        "cost_raw": cost,
-        "cost_mult": cost_weight,
-        "cost_eff": cost_penalty,
-        "total_penalty": response_time_penalty + cost_penalty,
+        "rt_penalty": rt_penalty,
+        "cost": cost,
         "reward": reward,
     }
     return reward, details
@@ -177,8 +170,9 @@ class KubernetesEnv(Env):
             "action": action,
             "reward": reward,
             "rt_penalty": self.last_reward_details.get("rt_penalty", 0.0),
-            "cost_penalty": self.last_reward_details.get("cost_eff", 0.0),
-            "total_penalty": self.last_reward_details.get("total_penalty", 0.0),
+            # Keep legacy log keys, but map them to new reward detail fields.
+            "cost_penalty": self.last_reward_details.get("cost", 0.0),
+            "total_penalty": 1.0 - self.last_reward_details.get("reward", reward),
             "iteration": self.iteration,
         }
 
@@ -314,8 +308,8 @@ class KubernetesEnv(Env):
             self.logger.warning(
                 f"⚠️ SUSPICIOUS REWARD: action={action}, rt={response_time:.1f}%, "
                 f"rt_penalty={details['rt_penalty']:.3f}, "
-                f"cost_penalty={details['cost_eff']:.3f}, "
-                f"total_penalty={details['total_penalty']:.3f}, "
+                f"cost_penalty={details['cost']:.3f}, "
+                f"total_penalty={1.0 - details['reward']:.3f}, "
                 f"reward={reward:.3f}, "
             )
         return reward
@@ -430,8 +424,8 @@ class KubernetesEnv(Env):
                 d = self.last_reward_details
                 details_str = (
                     f"{hdr}| rt_penalty={d['rt_penalty']:6.3f} | "
-                    f"cost_raw={d['cost_raw']:6.3f} cost_mult={d['cost_mult']:5.2f} "
-                    f"cost_eff={d['cost_eff']:6.3f} | penalty={d['total_penalty']:6.3f}"
+                    f"cost={d['cost']:6.3f} | "
+                    f"penalty={1.0 - d['reward']:6.3f}"
                 )
                 self.logger.info(details_str)
 
