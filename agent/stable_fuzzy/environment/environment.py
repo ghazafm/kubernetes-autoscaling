@@ -65,6 +65,7 @@ class KubernetesEnv(Env):
         csv_log_dir: Optional[str] = None,
         csv_log_prefix: str = "data",
         mode: str = "dev",
+        fuzzy_levels: int = 5,
     ):
         if render_mode is not None and render_mode not in self.metadata["render_modes"]:
             raise ValueError(
@@ -73,6 +74,7 @@ class KubernetesEnv(Env):
             )
         self.render_mode = render_mode
         self.mode = mode
+        self.fuzzy_levels = max(2, int(fuzzy_levels))
 
         config.load_kube_config()
         self.api = client.AppsV1Api()
@@ -121,6 +123,10 @@ class KubernetesEnv(Env):
 
         self.logger.info(f"max_replicas: {self.max_replicas}")
         self.logger.info(f"min_replicas: {self.min_replicas}")
+        self.logger.info(
+            "simple_fuzzy: levels=%d",
+            self.fuzzy_levels,
+        )
 
     def step(self, action: int):
         self.iteration -= 1
@@ -328,13 +334,17 @@ class KubernetesEnv(Env):
         cpu: float,
         memory: float,
     ) -> np.ndarray:
-        action = action / 99.0
-        cpu = float(np.clip(cpu / 100.0, 0.0, 1.0))
-        memory = float(np.clip(memory / 100.0, 0.0, 1.0))
-        response_time = float(np.clip(response_time / 100.0, 0.0, 3.0))
-        delta_cpu = cpu - last_observations[1]
-        delta_memory = memory - last_observations[2]
-        delta_response_time = response_time - last_observations[3]
+        action = float(np.clip(action / 99.0, 0.0, 1.0))
+        cpu = self.fuzzy_value(cpu / 100.0, 0.0, 1.0)
+        memory = self.fuzzy_value(memory / 100.0, 0.0, 1.0)
+        response_time = self.fuzzy_value(response_time / 100.0, 0.0, 3.0)
+        delta_cpu = self.fuzzy_value(cpu - last_observations[1], -1.0, 1.0)
+        delta_memory = self.fuzzy_value(memory - last_observations[2], -1.0, 1.0)
+        delta_response_time = self.fuzzy_value(
+            response_time - last_observations[3],
+            -3.0,
+            3.0,
+        )
 
         return np.array(
             [
@@ -348,6 +358,20 @@ class KubernetesEnv(Env):
             ],
             dtype=np.float32,
         )
+
+    def fuzzy_value(self, value: float, low: float, high: float) -> float:
+        value = float(np.clip(value, low, high))
+
+        # Very lightweight fuzzy approximation:
+        # map to the dominant triangular set over evenly spaced centers.
+        step = (high - low) / (self.fuzzy_levels - 1)
+        if step <= 0.0:
+            return value
+
+        center_idx = int(
+            np.clip(np.rint((value - low) / step), 0, self.fuzzy_levels - 1)
+        )
+        return float(low + center_idx * step)
 
     def render(self) -> None:
         def _color(v: float, warn: float, crit: float, reverse: bool = False) -> str:

@@ -39,6 +39,13 @@ if __name__ == "__main__":
         bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
     )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
+    fuzzy_enabled = os.getenv("FUZZY_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    fuzzy_levels = int(os.getenv("FUZZY_LEVELS", "5"))
 
     iteration = int(os.getenv("ITERATION", "100"))
     env = KubernetesEnv(
@@ -59,6 +66,8 @@ if __name__ == "__main__":
         max_scaling_retries=int(os.getenv("MAX_SCALING_RETRIES", "3")),
         render_mode="human",
         mode="prod",
+        fuzzy_enabled=fuzzy_enabled,
+        fuzzy_levels=fuzzy_levels,
     )
 
     logger.info("Loading model from %s", os.getenv("MODEL_PATH"))

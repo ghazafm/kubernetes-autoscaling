@@ -43,6 +43,13 @@ if __name__ == "__main__":
         bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
     )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
+    fuzzy_enabled = os.getenv("FUZZY_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
+    fuzzy_levels = int(os.getenv("FUZZY_LEVELS", "5"))
 
     iteration = int(os.getenv("ITERATION"))
     csv_log_dir = os.getenv("CSV_LOG_DIR", "data")
@@ -68,6 +75,8 @@ if __name__ == "__main__":
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}",
         mode="dev",
+        fuzzy_enabled=fuzzy_enabled,
+        fuzzy_levels=fuzzy_levels,
     )
 
     eval_env = KubernetesEnv(
@@ -90,6 +99,8 @@ if __name__ == "__main__":
         csv_log_dir=csv_log_dir,
         csv_log_prefix=f"{now}_{note}_eval",
         mode="prod",
+        fuzzy_enabled=fuzzy_enabled,
+        fuzzy_levels=fuzzy_levels,
     )
     eval_env = Monitor(eval_env)
 

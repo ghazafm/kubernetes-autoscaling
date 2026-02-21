@@ -54,7 +54,7 @@ wheels = [
 ]
 
 [[package]]
-name = "autoscaling-stable-simple"
+name = "autoscaling-stable-fuzzy"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
