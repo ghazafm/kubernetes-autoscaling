@@ -22,11 +22,26 @@ for i in $(seq 1 "$REPEATS"); do
   LOGFILE="$OUTDIR/log_test_run_${MAX_REPLICAS}_${i}.log"
 
   if command -v unbuffer >/dev/null 2>&1; then
+    # Run k6 and capture exit code even when piped to tee. Temporarily disable errexit.
+    set +e
     unbuffer ./run-k6.sh --test train 2>&1 | tee "$LOGFILE"
+    rc=${PIPESTATUS[0]}
+    set -e
   elif command -v stdbuf >/dev/null 2>&1; then
+    set +e
     stdbuf -oL ./run-k6.sh --test train 2>&1 | tee "$LOGFILE"
+    rc=${PIPESTATUS[0]}
+    set -e
   else
+    set +e
     ./run-k6.sh --test train 2>&1 | tee "$LOGFILE"
+    rc=${PIPESTATUS[0]}
+    set -e
+  fi
+
+  # Report k6/run-k6.sh exit code but continue the loop regardless.
+  if [ "${rc:-0}" -ne 0 ]; then
+    echo "=== Run $i returned non-zero exit code: ${rc} (continuing to next run) ==="
   fi
 
   if [ "$i" -lt "$REPEATS" ]; then

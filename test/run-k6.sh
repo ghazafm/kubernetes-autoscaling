@@ -223,9 +223,12 @@ run_test() {
     local start_time=$(date '+%Y-%m-%d %H:%M:%S %Z')
     echo -e "${GREEN}Test started at: ${start_time}${NC}\n"
 
+    # Run k6 but don't let 'set -e' abort the whole script when thresholds fail.
+    # Temporarily disable errexit, capture the exit code, then re-enable errexit.
+    set +e
     eval $k6_cmd
-
     local exit_code=$?
+    set -e
 
     # Log test end timestamp
     local end_time=$(date '+%Y-%m-%d %H:%M:%S %Z')

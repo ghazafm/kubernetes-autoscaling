@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from environment import calculate_reward
 from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from stable_baselines3 import DQN
+from stable_baselines3.common.type_aliases import TrainFrequencyUnit
 from utils import setup_logger
 
 load_dotenv()
@@ -74,10 +76,13 @@ def add_transition_to_buffer(model: DQN, row: pd.Series):
 
     action = int(np.clip(to_float(row.get("action", 0.0)), 0, 99))
 
-    reward, _ = calculate_reward(
-        action=action,
-        response_time=to_float(row.get("response_time", 0.0)),
-    )
+    if "reward" in row and not pd.isna(row["reward"]):
+        reward = float(row["reward"])
+    else:
+        reward, _ = calculate_reward(
+            action=action,
+            response_time=to_float(row.get("response_time", 0.0)),
+        )
 
     terminated = to_bool(row.get("terminated", False))
     truncated = to_bool(row.get("truncated", False))
@@ -105,10 +110,49 @@ if __name__ == "__main__":
     else:
         csv_paths = [str(path) for path in Path("data").glob("*.csv")]
 
+    if not csv_paths:
+        logger.error("No CSV files found. Set CSV_PATHS or place CSVs in 'data'.")
+        sys.exit(1)
+
     df = pd.concat([pd.read_csv(path) for path in csv_paths], ignore_index=True)
 
+    required_columns = [
+        "obs_action",
+        "obs_cpu",
+        "obs_memory",
+        "obs_response_time",
+        "obs_cpu_delta",
+        "obs_memory_delta",
+        "obs_rt_delta",
+        "next_obs_action",
+        "next_obs_cpu",
+        "next_obs_memory",
+        "next_obs_response_time",
+        "next_obs_cpu_delta",
+        "next_obs_memory_delta",
+        "next_obs_rt_delta",
+        "action",
+    ]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logger.error(f"Missing required columns: {missing_columns}")
+        sys.exit(1)
+    if "reward" not in df.columns and "response_time" not in df.columns:
+        logger.error("Need 'response_time' column to recompute reward")
+        sys.exit(1)
+
     dataset_size = len(df)
-    total_timesteps = dataset_size
+    num_epochs = max(1, int(os.getenv("EPOCHS", "1")))
+    default_total_timesteps = dataset_size * num_epochs
+    total_timesteps = max(
+        1,
+        int(
+            os.getenv(
+                "TOTAL_TIMESTEPS",
+                os.getenv("GRADIENT_STEPS", str(default_total_timesteps)),
+            )
+        ),
+    )
 
     note = os.getenv("NOTE", "offline")
     model_dir = Path(f"model/{now}_{note}")
@@ -117,6 +161,13 @@ if __name__ == "__main__":
 
     env = OfflineDatasetEnv()
     model = DQN(policy="MlpPolicy", env=env, seed=1, tensorboard_log=log_dir)
+
+    if model.train_freq.unit != TrainFrequencyUnit.STEP:
+        logger.error(
+            "Offline loop currently supports step-based train_freq only. "
+            f"Found train_freq={model.train_freq}."
+        )
+        sys.exit(1)
 
     total_timesteps, callback = model._setup_learn(
         total_timesteps=total_timesteps,
@@ -139,6 +190,13 @@ if __name__ == "__main__":
         add_transition_to_buffer(model, row)
         inserted += 1
     logger.info(f"Replay buffer filled with {inserted:,} transitions")
+
+    if inserted < int(model.batch_size):
+        logger.error(
+            "Not enough transitions for one batch: "
+            f"inserted={inserted}, batch_size={int(model.batch_size)}"
+        )
+        sys.exit(1)
 
     checkpoint_freq = max(int(model.target_update_interval) * 2, 50000)
     train_freq = int(model.train_freq.frequency)
@@ -190,5 +248,5 @@ if __name__ == "__main__":
     logger.info("Offline training completed successfully")
     logger.info(
         f"Transitions={inserted:,}, timesteps={model.num_timesteps:,}, "
-        f"train_calls={update_calls:,}"
+        f"train_calls={update_calls:,}, replay_epochs={num_epochs}"
     )
