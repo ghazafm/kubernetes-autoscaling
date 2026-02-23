@@ -127,15 +127,13 @@ class KubernetesEnv(Env):
         # kenapa digunakan response time sebelumnya?
         # karena ada kemungkinan response time sekarang
         # juga bernilai 0.0 karena pod belum siap atau tidak ada request masuk
-        RT_STALE_THRESHOLD = 0.3
         missing_cpu = cpu <= 0.0
         missing_mem = memory <= 0.0
-        is_broken = (missing_cpu or missing_mem) and prev_obs[3] >= RT_STALE_THRESHOLD
+        is_broken = (missing_cpu or missing_mem) and prev_obs[3] > 0.0
 
         if is_broken:
             cpu, memory, response_time = self.estimate_metrics(
                 prev_obs=prev_obs,
-                action=action,
                 cpu=cpu,
                 memory=memory,
                 response_time=response_time,
@@ -245,51 +243,17 @@ class KubernetesEnv(Env):
     def estimate_metrics(
         self,
         prev_obs,
-        action: int,
         cpu: float,
         memory: float,
         response_time: float,
     ) -> tuple[float, float, float]:
-        prev_action = prev_obs[0]
-        current_action = action / 99.0
-        action_change = current_action - prev_action
-
-        prev_cpu = float(prev_obs[1]) * 100.0
-        prev_mem = float(prev_obs[2]) * 100.0
-        prev_rt = float(prev_obs[3]) * 100.0
-
-        scale_factor = 0.5
-
-        missing_cpu = cpu <= 0.0
-        missing_mem = memory <= 0.0
-        missing_rt = response_time <= 0.0
-
-        if missing_cpu:
-            cpu = prev_cpu * (1 - action_change * scale_factor)
-            cpu = max(0.01, cpu)
-
-        if missing_mem:
-            memory = prev_mem * (1 - action_change * scale_factor)
-            memory = max(0.01, memory)
-
-        if missing_rt:
-            response_time = prev_rt * (1 - action_change * scale_factor)
-            response_time = float(np.clip(response_time, 0.01, 300.0))
-
-        if self.logger:
-            est_parts: list[str] = []
-            if missing_cpu:
-                est_parts.append(f"cpu={cpu:.1f}%")
-            if missing_mem:
-                est_parts.append(f"mem={memory:.1f}%")
-            if missing_rt:
-                est_parts.append(f"rt={response_time:.1f}%")
-
-            self.logger.info(
-                "Metrics missing — estimated: %s",
-                ", ".join(est_parts) if est_parts else "(none)",
-            )
-
+        # just reuse previous values without adjustment
+        if cpu <= 0.0:
+            cpu = float(prev_obs[1]) * 100.0
+        if memory <= 0.0:
+            memory = float(prev_obs[2]) * 100.0
+        if response_time <= 0.0:
+            response_time = float(prev_obs[3]) * 100.0
         return cpu, memory, response_time
 
     def calculate_reward(
@@ -303,15 +267,6 @@ class KubernetesEnv(Env):
         )
 
         self.last_reward_details = details
-
-        if action > 50 and reward > 0.9:  # noqa: PLR2004
-            self.logger.warning(
-                f"⚠️ SUSPICIOUS REWARD: action={action}, rt={response_time:.1f}%, "
-                f"rt_penalty={details['rt_penalty']:.3f}, "
-                f"cost_penalty={details['cost']:.3f}, "
-                f"total_penalty={1.0 - details['reward']:.3f}, "
-                f"reward={reward:.3f}, "
-            )
         return reward
 
     def observation(

@@ -15,6 +15,15 @@ load_dotenv()
 
 OBS_LOW = np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -3.0], dtype=np.float32)
 OBS_HIGH = np.array([1.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0], dtype=np.float32)
+OBS_KEYS = [
+    "action",
+    "cpu",
+    "memory",
+    "response_time",
+    "cpu_delta",
+    "memory_delta",
+    "rt_delta",
+]
 
 
 class OfflineDatasetEnv(Env):
@@ -31,57 +40,26 @@ class OfflineDatasetEnv(Env):
         return self._zero_obs.copy(), 0.0, True, False, {}
 
 
-def to_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "y"}
-    return False
-
-
-def to_float(value, default: float = 0.0) -> float:
-    number = pd.to_numeric(value, errors="coerce")
-    if pd.isna(number):
-        return default
-    return float(number)
-
-
-def clip_obs(obs: np.ndarray) -> np.ndarray:
-    return np.clip(obs, OBS_LOW, OBS_HIGH).astype(np.float32)
-
-
-def row_to_obs(row: pd.Series, prefix: str) -> np.ndarray:
-    obs = np.array(
-        [
-            to_float(row.get(f"{prefix}action", 0.0)),
-            to_float(row.get(f"{prefix}cpu", 0.0)),
-            to_float(row.get(f"{prefix}memory", 0.0)),
-            to_float(row.get(f"{prefix}response_time", 0.0)),
-            to_float(row.get(f"{prefix}cpu_delta", 0.0)),
-            to_float(row.get(f"{prefix}memory_delta", 0.0)),
-            to_float(row.get(f"{prefix}rt_delta", 0.0)),
-        ],
-        dtype=np.float32,
-    )
-    return clip_obs(obs)
-
-
 def add_transition_to_buffer(model: DQN, row: pd.Series):
-    obs = row_to_obs(row, prefix="obs_")
-    next_obs = row_to_obs(row, prefix="next_obs_")
+    obs = np.clip(
+        [row.get(f"obs_{k}", 0.0) for k in OBS_KEYS], OBS_LOW, OBS_HIGH
+    ).astype(np.float32)
+    next_obs = np.clip(
+        [row.get(f"next_obs_{k}", 0.0) for k in OBS_KEYS], OBS_LOW, OBS_HIGH
+    ).astype(np.float32)
 
-    action = int(np.clip(to_float(row.get("action", 0.0)), 0, 99))
+    action = int(
+        np.clip(pd.to_numeric(row.get("action", 0), errors="coerce") or 0, 0, 99)
+    )
 
     reward, _ = calculate_reward(
         action=action,
-        response_time=to_float(row.get("response_time", 0.0)),
+        response_time=float(
+            pd.to_numeric(row.get("response_time", 0.0), errors="coerce") or 0.0
+        ),
     )
 
-    terminated = to_bool(row.get("terminated", False))
-    truncated = to_bool(row.get("truncated", False))
-    done = terminated or truncated
+    done = bool(row.get("terminated", False)) or bool(row.get("truncated", False))
 
     model.replay_buffer.add(
         obs=obs.reshape(1, -1),
@@ -89,7 +67,7 @@ def add_transition_to_buffer(model: DQN, row: pd.Series):
         action=np.array([[action]], dtype=np.int64),
         reward=np.array([reward], dtype=np.float32),
         done=np.array([done], dtype=np.float32),
-        infos=[{"TimeLimit.truncated": bool(truncated)}],
+        infos=[{"TimeLimit.truncated": bool(row.get("truncated", False))}],
     )
 
 
@@ -99,54 +77,37 @@ if __name__ == "__main__":
         "offline_train", log_level=os.getenv("LOG_LEVEL", "INFO"), log_to_file=True
     )
 
-    csv_paths_env = os.getenv("CSV_PATHS", "")
-    if csv_paths_env:
-        csv_paths = [path.strip() for path in csv_paths_env.split(",") if path.strip()]
-    else:
-        csv_paths = [str(path) for path in Path("data").glob("*.csv")]
+    csv_paths = [
+        p.strip() for p in os.getenv("CSV_PATHS", "").split(",") if p.strip()
+    ] or [str(p) for p in Path("data").glob("*.csv")]
 
-    df = pd.concat([pd.read_csv(path) for path in csv_paths], ignore_index=True)
+    df = pd.concat([pd.read_csv(p) for p in csv_paths], ignore_index=True)
+    total_timesteps = len(df)
 
-    dataset_size = len(df)
-    total_timesteps = dataset_size
-
-    note = os.getenv("NOTE", "offline")
-    model_dir = Path(f"model/{now}_{note}")
+    model_dir = Path(f"model/{now}_{os.getenv('NOTE', 'offline')}")
     checkpoint_dir = model_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    env = OfflineDatasetEnv()
-    model = DQN(policy="MlpPolicy", env=env, seed=1, tensorboard_log=log_dir)
+    model = DQN(
+        policy="MlpPolicy", env=OfflineDatasetEnv(), seed=1, tensorboard_log=log_dir
+    )
 
     total_timesteps, callback = model._setup_learn(
         total_timesteps=total_timesteps,
         callback=None,
         reset_num_timesteps=True,
         tb_log_name="offline_dqn",
-        progress_bar=False,
     )
     callback.on_training_start(locals(), globals())
 
-    if dataset_size > int(model.buffer_size):
-        logger.warning(
-            "Dataset size exceeds replay capacity. Old transitions will be overwritten:"
-            f" dataset={dataset_size:,}, buffer={int(model.buffer_size):,}"
-        )
-
-    logger.info("Prefilling replay buffer from CSV transitions...")
-    inserted = 0
     for _, row in df.iterrows():
         add_transition_to_buffer(model, row)
-        inserted += 1
-    logger.info(f"Replay buffer filled with {inserted:,} transitions")
+    logger.info(f"Replay buffer filled with {len(df):,} transitions")
 
     checkpoint_freq = max(int(model.target_update_interval) * 2, 50000)
-    train_freq = int(model.train_freq.frequency)
-    grad_steps = int(model.gradient_steps)
-    if grad_steps < 0:
-        grad_steps = train_freq
+    train_freq = model.train_freq.frequency
+    grad_steps = model.gradient_steps if model.gradient_steps > 0 else train_freq
 
-    update_calls = 0
     for step in range(1, total_timesteps + 1):
         model.num_timesteps += 1
 
@@ -159,19 +120,18 @@ if __name__ == "__main__":
         )
         model._on_step()
 
-        if step % train_freq == 0 and model.num_timesteps > model.learning_starts:  # noqa: SIM102
-            if grad_steps > 0:
-                model.train(gradient_steps=grad_steps, batch_size=int(model.batch_size))
-                update_calls += 1
+        if (
+            step % train_freq == 0
+            and model.num_timesteps > model.learning_starts
+            and grad_steps > 0
+        ):
+            model.train(gradient_steps=grad_steps, batch_size=int(model.batch_size))
 
         if step % checkpoint_freq == 0:
-            checkpoint_model_path = checkpoint_dir / f"dqn_autoscaler_{step}_steps"
-            checkpoint_buffer_path = (
+            model.save(checkpoint_dir / f"dqn_autoscaler_{step}_steps")
+            model.save_replay_buffer(
                 checkpoint_dir / f"dqn_autoscaler_replay_buffer_{step}_steps.pkl"
             )
-            model.save(checkpoint_model_path)
-            model.save_replay_buffer(checkpoint_buffer_path)
-            logger.info(f"Checkpoint saved at step {step:,}: {checkpoint_model_path}")
             model.logger.dump(step=model.num_timesteps)
 
     model.logger.dump(step=model.num_timesteps)
@@ -180,15 +140,6 @@ if __name__ == "__main__":
     final_path = model_dir / "final" / "model"
     final_path.parent.mkdir(parents=True, exist_ok=True)
     model.save(final_path)
-    logger.info(f"Model saved to {final_path}")
-
-    buffer_path = model_dir / "final" / "replay_buffer.pkl"
-    model.save_replay_buffer(buffer_path)
-    logger.info(f"Replay buffer saved to {buffer_path}")
-
-    env.close()
+    model.save_replay_buffer(model_dir / "final" / "replay_buffer.pkl")
     logger.info("Offline training completed successfully")
-    logger.info(
-        f"Transitions={inserted:,}, timesteps={model.num_timesteps:,}, "
-        f"train_calls={update_calls:,}"
-    )
+    logger.info(f"Model saved to {final_path}")

@@ -18,10 +18,15 @@ INFLUX_TOKEN = os.environ["INFLUXDB_TOKEN"]
 BUCKET = os.environ.get("INFLUXDB_BUCKET")
 WINDOWS_FILE = os.environ.get("WINDOWS_FILE", "time_windows.csv")
 WINDOW_EVERY = os.environ.get("WINDOW_EVERY", "10s")
-DEPLOYMENT_FILTER = (
-    'r["deployment"] == "test-flask-app" or r["deployment"] == "hpa-flask-app"'
-)
+TYPE_TO_DEPLOYMENT = {
+    "rl": "test-flask-app",
+    "hpa": "hpa-flask-app",
+}
 WIB = timezone(timedelta(hours=7))
+
+
+def deployment_filter(test_type: str) -> str:
+    return f'r["deployment"] == "{TYPE_TO_DEPLOYMENT[test_type.strip().lower()]}"'
 
 
 def make_query(field: str, aggregate_fn: str, yield_name: str, namespace: str) -> str:
@@ -32,7 +37,7 @@ def make_query(field: str, aggregate_fn: str, yield_name: str, namespace: str) -
 from(bucket: "{BUCKET}")
   |> range(start: time(v: "{{start}}"), stop: time(v: "{{stop}}"))
   |> filter(fn: (r) => r["_measurement"] == "monitoring_cluster")
-  |> filter(fn: (r) => {DEPLOYMENT_FILTER})
+  |> filter(fn: (r) => {{deployment_filter}})
 {namespace_filter}  |> filter(fn: (r) => r["_field"] == "{field}")
   |> aggregateWindow(every: {WINDOW_EVERY}, fn: {aggregate_fn}, createEmpty: false)
   |> yield(name: "{yield_name}")
@@ -109,27 +114,34 @@ def to_influx_utc_time(time_value: str) -> str:
 
 def iter_windows(path: str):
     with open(path, newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
+        reader = csv.reader(handle)
+        next(reader)  # expected header: type,pod,run,start,stop
+
         for row in reader:
-            if not row.get("dataset"):
-                continue
-            yield row["dataset"], row["run"], row["start"], row["stop"]
+            test_type, pod, run, start, stop = [value.strip() for value in row]
+            yield test_type, pod, run, start, stop
 
 
 def main() -> None:
-    for dataset, run, start, stop in iter_windows(WINDOWS_FILE):
+    for test_type, pod, run, start, stop in iter_windows(WINDOWS_FILE):
         start_utc = to_influx_utc_time(start)
         stop_utc = to_influx_utc_time(stop)
+        dep_filter = deployment_filter(test_type)
+
         for metric, query_template in QUERY_BY_METRIC.items():
-            query = query_template.format(start=start_utc, stop=stop_utc)
+            query = query_template.format(
+                start=start_utc,
+                stop=stop_utc,
+                deployment_filter=dep_filter,
+            )
             csv_text = influx_query_csv(query)
 
-            output_path = Path("data") / dataset / metric / f"{run}.csv"
+            output_path = Path("data") / test_type / pod / metric / f"{run}.csv"
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(csv_text, encoding="utf-8")
 
             row_count = count_data_rows(csv_text)
-            print(f"{output_path}: {row_count} rows")
+            print(f"{output_path}: {row_count} rows ({test_type})")
 
 
 if __name__ == "__main__":
