@@ -16,7 +16,8 @@ def calculate_reward(
     action: int,
     response_time: float,
 ) -> tuple[float, dict]:
-    rt_penalty = response_time / 100.0
+    rt_clipped = max(0.0, min(response_time, 100.0))
+    rt_penalty = rt_clipped / 100.0
     cost = action / 99.0
 
     reward = (1.0 - rt_penalty) * (1.0 - cost)
@@ -24,6 +25,7 @@ def calculate_reward(
     details = {
         "action": action,
         "response_time": response_time,
+        "response_time_clipped": rt_clipped,
         "rt_penalty": rt_penalty,
         "cost": cost,
         "reward": reward,

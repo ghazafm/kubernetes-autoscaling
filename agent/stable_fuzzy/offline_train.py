@@ -9,28 +9,57 @@ from environment import calculate_reward
 from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from stable_baselines3 import DQN
-from utils import setup_logger
+from utils import Fuzzy, setup_logger
 
 load_dotenv()
 
-OBS_LOW = np.array([0.0, 0.0, 0.0, 0.0, -1.0, -1.0, -3.0], dtype=np.float32)
-OBS_HIGH = np.array([1.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0], dtype=np.float32)
-OBS_KEYS = [
-    "action",
-    "cpu",
-    "memory",
-    "response_time",
-    "cpu_delta",
-    "memory_delta",
-    "rt_delta",
-]
+# New fuzzy observation: 4 metrics x 3 membership labels = 12 dims
+OBS_LOW = np.zeros(12, dtype=np.float32)
+OBS_HIGH = np.ones(12, dtype=np.float32)
+
+
+def _row_to_fuzzy_obs(row, prefix: str, fuzzy):
+    """Convert a CSV row's obs or next_obs fields into the 12-dim fuzzy vector.
+
+    Handles legacy 7-dim CSVs by reconstructing cpu/memory/response_time/last_action
+    values and passing them through the project's Fuzzy.fuzzify().
+    - If obs_* values look like normalized (<=1.0), scale them to 0..100 for fuzzify.
+    - last_action is reconstructed to 0..99 scale.
+    """
+    # read raw values (may be missing)
+    raw_action = float(row.get(f"{prefix}_action", 0.0))
+    raw_cpu = float(row.get(f"{prefix}_cpu", 0.0))
+    raw_mem = float(row.get(f"{prefix}_memory", 0.0))
+    raw_rt = float(row.get(f"{prefix}_response_time", 0.0))
+
+    # Normalize/sanity: if values look like proportions (<=1), scale to percentage
+    cpu_for_fuzzy = raw_cpu * 100.0 if raw_cpu <= 1.0 else raw_cpu
+    mem_for_fuzzy = raw_mem * 100.0 if raw_mem <= 1.0 else raw_mem
+    rt_for_fuzzy = raw_rt * 100.0 if raw_rt <= 1.0 else raw_rt
+
+    # last_action: CSV stores normalized action (0..1) in obs_action for legacy logs
+    last_action = raw_action * 99.0 if raw_action <= 1.0 else raw_action
+
+    fuzzy_state = fuzzy.fuzzify(
+        {
+            "cpu_usage": float(np.clip(cpu_for_fuzzy, 0.0, 100.0)),
+            "memory_usage": float(np.clip(mem_for_fuzzy, 0.0, 100.0)),
+            "response_time": float(np.clip(rt_for_fuzzy, 0.0, 100.0)),
+            "last_action": float(last_action),
+        }
+    )
+
+    labels = ["low", "medium", "high"]
+    metrics = ["cpu_usage", "memory_usage", "response_time", "last_action"]
+    flat = [fuzzy_state[m][label] for m in metrics for label in labels]
+    return np.array(flat, dtype=np.float32)
 
 
 class OfflineDatasetEnv(Env):
     def __init__(self):
         self.action_space = Discrete(100)
         self.observation_space = Box(low=OBS_LOW, high=OBS_HIGH, dtype=np.float32)
-        self._zero_obs = np.zeros(7, dtype=np.float32)
+        self._zero_obs = np.zeros(12, dtype=np.float32)
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
@@ -41,12 +70,11 @@ class OfflineDatasetEnv(Env):
 
 
 def add_transition_to_buffer(model: DQN, row: pd.Series):
-    obs = np.clip(
-        [row.get(f"obs_{k}", 0.0) for k in OBS_KEYS], OBS_LOW, OBS_HIGH
-    ).astype(np.float32)
-    next_obs = np.clip(
-        [row.get(f"next_obs_{k}", 0.0) for k in OBS_KEYS], OBS_LOW, OBS_HIGH
-    ).astype(np.float32)
+    # Build fuzzy observations (12-dim). Support legacy 7-dim CSVs by reconstructing
+    # fuzzy features from obs_action, obs_cpu, obs_memory, obs_response_time.
+    fuzzy = Fuzzy()
+    obs = _row_to_fuzzy_obs(row, "obs", fuzzy)
+    next_obs = _row_to_fuzzy_obs(row, "next_obs", fuzzy)
 
     action = int(
         np.clip(pd.to_numeric(row.get("action", 0), errors="coerce") or 0, 0, 99)
