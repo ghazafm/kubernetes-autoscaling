@@ -11,15 +11,16 @@ else
 fi
 
 # Number of repeats (default 3)
+START=$(( ${START:-1} - 1 ))
 REPEATS=${REPEATS:-3}
 
-OUTDIR="logs/step_${TAGS}_${MIN_SCALE_DOWN_ATTEMPTS}_${MAX_SCALE_DOWN_STEPS}"
+OUTDIR="logs/step_${TAGS}_${REQUESTS_PER_POD}_replicas_${MAX_REPLICAS}"
 mkdir -p "$OUTDIR"
 
 for i in $(seq 1 "$REPEATS"); do
   echo "=== Run $i of $REPEATS starting at $(date) ==="
 
-  LOGFILE="$OUTDIR/log_test_run_${MAX_REPLICAS}_${i}.log"
+  LOGFILE="$OUTDIR/log_test_run_${MAX_REPLICAS}_$(( i + START )).log"
 
   if command -v unbuffer >/dev/null 2>&1; then
     # Run k6 and capture exit code even when piped to tee. Temporarily disable errexit.

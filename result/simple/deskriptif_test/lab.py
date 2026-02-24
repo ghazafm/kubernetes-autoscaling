@@ -286,10 +286,12 @@ def generate_latex_tables() -> None:
             )
 
         safe_metric = metric.replace("/", "_").replace(" ", "_")
+        label_metric = metric.replace("/", "-").replace(" ", "-").replace("_", "-")
+        caption_metric = latex_escape(metric)
         write_latex_table(
             path=TABLES_DIR / f"deskriptif_{safe_metric}.tex",
-            caption=f"Merged runs comparison for metric {metric}",
-            label=f"tab:deskriptif-{safe_metric}",
+            caption=f"Perbandingan gabungan metrik {caption_metric}",
+            label=f"tab:deskriptif-{label_metric}",
             columns=["Pod", "HPA", "RL", "Difference"],
             rows=rows,
         )
@@ -308,7 +310,7 @@ def generate_latex_tables() -> None:
 
     write_latex_table(
         path=TABLES_DIR / "deskriptif_all_metrics.tex",
-        caption="Merged runs comparison for all metrics",
+        caption="Perbandingan gabungan semua metrik",
         label="tab:deskriptif-all-metrics",
         columns=["Pod", "HPA", "RL", "Difference"],
         rows=all_rows,

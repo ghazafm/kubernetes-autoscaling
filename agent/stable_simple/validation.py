@@ -258,9 +258,9 @@ def main():
     replicas = action_to_replicas(start_action, min_replicas, max_replicas)
     prev_obs = np.zeros(7, dtype=np.float32)
 
-    init_cpu = get_env_float("SIM_INIT_CPU", 30.0)
-    init_memory = get_env_float("SIM_INIT_MEMORY", 25.0)
-    init_rt = get_env_float("SIM_INIT_RT", 25.0)
+    init_cpu = get_env_float("SIM_INIT_CPU", 1.0)
+    init_memory = get_env_float("SIM_INIT_MEMORY", 8.0)
+    init_rt = get_env_float("SIM_INIT_RT", 0.0)
 
     cpu, memory, response_time = simulate_metrics(
         load=float(workload_effective[0]),
