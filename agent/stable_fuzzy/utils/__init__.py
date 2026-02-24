@@ -1,10 +1,12 @@
 from .cluster import get_replica, wait_for_pods_ready
 from .csv_logger import TransitionLogger
+from .fuzzy import Fuzzy
 from .logger import setup_logger
 from .metrics import get_metrics, get_raw_metrics
 from .monitor import calculate_distance
 
 __all__ = [
+    "Fuzzy",
     "TransitionLogger",
     "calculate_distance",
     "get_metrics",
