@@ -7,7 +7,7 @@ from gymnasium import Env
 from gymnasium.spaces import Box, Discrete
 from kubernetes import client, config
 from prometheus_api_client import PrometheusConnect
-from utils import Fuzzy, TransitionLogger, get_metrics, get_replica, wait_for_pods_ready
+from utils import TransitionLogger, get_metrics, get_replica, wait_for_pods_ready
 
 from database import InfluxDB
 
@@ -16,8 +16,7 @@ def calculate_reward(
     action: int,
     response_time: float,
 ) -> tuple[float, dict]:
-    rt_clipped = max(0.0, min(response_time, 100.0))
-    rt_penalty = rt_clipped / 100.0
+    rt_penalty = response_time / 100.0
     cost = action / 99.0
 
     reward = (1.0 - rt_penalty) * (1.0 - cost)
@@ -25,7 +24,6 @@ def calculate_reward(
     details = {
         "action": action,
         "response_time": response_time,
-        "response_time_clipped": rt_clipped,
         "rt_penalty": rt_penalty,
         "cost": cost,
         "reward": reward,
@@ -84,15 +82,16 @@ class KubernetesEnv(Env):
         self.metrics_endpoints_method = metrics_endpoints_method
         self.logger = logger
         self.action_space = Discrete(100)
-        # Fuzzy state: 4 metrics x 3 membership labels = 12 floats in [0, 1]
-        self.fuzzy = Fuzzy(logger=logger, max_replicas=max_replicas)
+        # normalize observations so all entries are in [-1, 1]
+        # layout: [action, cpu, memory,
+        #          response_time, delta_cpu, delta_memory,
+        #          delta_response_time]
         self.observation_space = Box(
-            low=0.0,
+            low=-1.0,
             high=1.0,
-            shape=(12,),
+            shape=(7,),
             dtype=np.float32,
         )
-
         self.iteration = iteration
         self.iteration_init = iteration
         self.min_replicas: int = min_replicas
@@ -102,14 +101,12 @@ class KubernetesEnv(Env):
         self.influxdb = influxdb
         self.max_scaling_retries = max_scaling_retries
 
-        self.observations = np.zeros(12, dtype=np.float32)
+        self.observations = np.array(
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            dtype=np.float32,
+        )
         self.last_reward = 0.0
         self.last_reward_details = {}  # Store reward calculation details
-        # Cache raw metric values (0-100 scale) for estimate_metrics fallback
-        self._last_cpu: float = 0.0
-        self._last_memory: float = 0.0
-        self._last_response_time: float = 0.0
-        self._last_action: int = 0
 
         self.csv_logger = TransitionLogger(
             log_dir=csv_log_dir if csv_log_dir else "data",
@@ -136,10 +133,11 @@ class KubernetesEnv(Env):
         # juga bernilai 0.0 karena pod belum siap atau tidak ada request masuk
         missing_cpu = cpu <= 0.0
         missing_mem = memory <= 0.0
-        is_broken = (missing_cpu or missing_mem) and self._last_response_time > 0.0
+        is_broken = (missing_cpu or missing_mem) and prev_obs[3] > 0.0
 
         if is_broken:
             cpu, memory, response_time = self.estimate_metrics(
+                prev_obs=prev_obs,
                 cpu=cpu,
                 memory=memory,
                 response_time=response_time,
@@ -152,6 +150,7 @@ class KubernetesEnv(Env):
         self.last_reward = reward
 
         self.observations = self.observation(
+            last_observations=prev_obs,
             action=action,
             response_time=response_time,
             cpu=cpu,
@@ -247,17 +246,17 @@ class KubernetesEnv(Env):
 
     def estimate_metrics(
         self,
+        prev_obs,
         cpu: float,
         memory: float,
         response_time: float,
     ) -> tuple[float, float, float]:
-        # Reuse cached raw values (0-100 scale) when current readings are missing
         if cpu <= 0.0:
-            cpu = self._last_cpu
+            cpu = float((float(prev_obs[1]) + 1.0) / 2.0 * 100.0)
         if memory <= 0.0:
-            memory = self._last_memory
+            memory = float((float(prev_obs[2]) + 1.0) / 2.0 * 100.0)
         if response_time <= 0.0:
-            response_time = self._last_response_time
+            response_time = float((float(prev_obs[3]) + 1.0) / 2.0 * 100.0)
         return cpu, memory, response_time
 
     def calculate_reward(
@@ -275,33 +274,48 @@ class KubernetesEnv(Env):
 
     def observation(
         self,
+        last_observations: np.ndarray,
         action: int,
         response_time: float,
         cpu: float,
         memory: float,
     ) -> np.ndarray:
-        # Cache raw values for estimate_metrics fallback
-        self._last_cpu = cpu
-        self._last_memory = memory
-        self._last_response_time = response_time
-        self._last_action = action
+        # map action and metrics to [-1, 1]
+        action = float(action) / 99.0 * 2.0 - 1.0
 
-        fuzzy_state = self.fuzzy.fuzzify(
-            {
-                "cpu_usage": float(np.clip(cpu, 0.0, 100.0)),
-                "memory_usage": float(np.clip(memory, 0.0, 100.0)),
-                "response_time": float(np.clip(response_time, 0.0, 100.0)),
-                "last_action": float(action),
-            }
+        cpu_frac = float(np.clip(cpu / 100.0, 0.0, 1.0))
+        cpu = cpu_frac * 2.0 - 1.0
+
+        memory_frac = float(np.clip(memory / 100.0, 0.0, 1.0))
+        memory = memory_frac * 2.0 - 1.0
+
+        rt_frac = float(np.clip(response_time / 100.0, 0.0, 1.0))
+        response_time = rt_frac * 2.0 - 1.0
+
+        last_cpu_frac = (float(last_observations[1]) + 1.0) / 2.0
+        last_mem_frac = (float(last_observations[2]) + 1.0) / 2.0
+        last_rt_frac = (float(last_observations[3]) + 1.0) / 2.0
+
+        delta_cpu_frac = cpu_frac - last_cpu_frac
+        delta_memory_frac = memory_frac - last_mem_frac
+        delta_rt_frac = rt_frac - last_rt_frac
+
+        delta_cpu = float(np.clip(delta_cpu_frac, -1.0, 1.0))
+        delta_memory = float(np.clip(delta_memory_frac, -1.0, 1.0))
+        delta_response_time = float(np.clip(delta_rt_frac, -1.0, 1.0))
+
+        return np.array(
+            [
+                action,
+                cpu,
+                memory,
+                response_time,
+                delta_cpu,
+                delta_memory,
+                delta_response_time,
+            ],
+            dtype=np.float32,
         )
-
-        # Flatten in a fixed order: cpu_usage, memory_usage, response_time, last_action
-        # Each metric has 3 labels (low, medium, high) -> 12 values total
-        labels = ["low", "medium", "high"]
-        metrics = ["cpu_usage", "memory_usage", "response_time", "last_action"]
-        flat = [fuzzy_state[m][label] for m in metrics for label in labels]
-
-        return np.array(flat, dtype=np.float32)
 
     def render(self) -> None:
         def _color(v: float, warn: float, crit: float, reverse: bool = False) -> str:
@@ -344,14 +358,17 @@ class KubernetesEnv(Env):
             return f"{GREY}{val_str}{RESET}"
 
         if self.render_mode == "human":
-            # Use cached raw values (0-100 scale) for display
-            cpu = self._last_cpu
-            mem = self._last_memory
-            rt = self._last_response_time
-            action = self._last_action
+            action = round((self.observations[0] + 1.0) / 2.0 * 99)
+            cpu = (self.observations[1] + 1.0) / 2.0 * 100.0
+            mem = (self.observations[2] + 1.0) / 2.0 * 100.0
+            rt = (self.observations[3] + 1.0) / 2.0 * 100.0
+            d_cpu = self.observations[4] * 50.0
+            d_mem = self.observations[5] * 50.0
+            d_rt = self.observations[6] * 50.0
 
             self.logger.debug(
-                f"Render debug: action={action}, last_reward={self.last_reward:.3f}"
+                f"Render debug: obs[0]={self.observations[0]:.4f}, "
+                f"action={action}, last_reward={self.last_reward:.3f}"
             )
 
             rt_col = _color(rt, warn=80, crit=100)
@@ -361,11 +378,13 @@ class KubernetesEnv(Env):
             mem_bar = _bar(mem)
             rt_bar = _bar(min(rt, 200.0), width=12)
 
+            RESET = "\033[0m"
+
             # line 1: Metrics summary
             hdr = "▶ "
-            cpu_str = f"CPU {_fmt_pct(cpu)} {cpu_bar}"
-            mem_str = f"MEM {_fmt_pct(mem)} {mem_bar}"
-            rt_str = f"{rt_col}RT  {_fmt_pct(rt)} {rt_bar}{RESET}"
+            cpu_str = f"CPU {_fmt_pct(cpu)} {_fmt_delta(d_cpu)} {cpu_bar}"
+            mem_str = f"MEM {_fmt_pct(mem)} {_fmt_delta(d_mem)} {mem_bar}"
+            rt_str = f"{rt_col}RT  {_fmt_pct(rt)} {_fmt_delta(d_rt)} {rt_bar}{RESET}"
             act_str = f"ACT {action:3d}"
             reward_str = f"RWD {self.last_reward:+6.3f}"
 
@@ -409,8 +428,16 @@ class KubernetesEnv(Env):
         replica = min(replica, self.max_replicas)
 
         cpu, memory, response_time = self.scale(replica)
+        prev_obs = self.observation(
+            last_observations=self.observations,
+            action=action,
+            cpu=cpu,
+            memory=memory,
+            response_time=response_time,
+        )
 
         self.observations = self.observation(
+            last_observations=prev_obs,
             action=action,
             cpu=cpu,
             memory=memory,

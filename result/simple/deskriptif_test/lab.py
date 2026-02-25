@@ -292,7 +292,7 @@ def generate_latex_tables() -> None:
             path=TABLES_DIR / f"deskriptif_{safe_metric}.tex",
             caption=f"Perbandingan gabungan metrik {caption_metric}",
             label=f"tab:deskriptif-{label_metric}",
-            columns=["Pod", "HPA", "RL", "Difference"],
+            columns=["Pod", "HPA", "RL", "Perbedaan"],
             rows=rows,
         )
 
@@ -312,7 +312,7 @@ def generate_latex_tables() -> None:
         path=TABLES_DIR / "deskriptif_all_metrics.tex",
         caption="Perbandingan gabungan semua metrik",
         label="tab:deskriptif-all-metrics",
-        columns=["Pod", "HPA", "RL", "Difference"],
+        columns=["Pod", "HPA", "RL", "Perbedaan"],
         rows=all_rows,
     )
 

@@ -102,7 +102,7 @@ def build_observation(
     memory: float,
     response_time: float,
 ) -> np.ndarray:
-    # compute normalized fractions in [0,1]
+    # compute fractions in [0,1]
     action_frac = float(np.clip(action / 99.0, 0.0, 1.0))
     cpu_frac = float(np.clip(cpu / 100.0, 0.0, 1.0))
     mem_frac = float(np.clip(memory / 100.0, 0.0, 1.0))
@@ -119,14 +119,9 @@ def build_observation(
     last_mem_frac = (float(last_observation[2]) + 1.0) / 2.0
     last_rt_frac = (float(last_observation[3]) + 1.0) / 2.0
 
-    delta_cpu_frac = cpu_frac - last_cpu_frac
-    delta_mem_frac = mem_frac - last_mem_frac
-    delta_rt_frac = rt_frac - last_rt_frac
-
-    # deltas are in [-1,1]; clip for numeric safety
-    delta_cpu = float(np.clip(delta_cpu_frac, -1.0, 1.0))
-    delta_mem = float(np.clip(delta_mem_frac, -1.0, 1.0))
-    delta_rt = float(np.clip(delta_rt_frac, -1.0, 1.0))
+    delta_cpu = float(np.clip(cpu_frac - last_cpu_frac, -1.0, 1.0))
+    delta_mem = float(np.clip(mem_frac - last_mem_frac, -1.0, 1.0))
+    delta_rt = float(np.clip(rt_frac - last_rt_frac, -1.0, 1.0))
 
     obs = np.array(
         [
@@ -141,6 +136,26 @@ def build_observation(
         dtype=np.float32,
     )
     return np.clip(obs, OBS_LOW, OBS_HIGH)
+
+
+def adapt_obs_to_model(obs: np.ndarray, model: DQN) -> np.ndarray:
+    """Pad/truncate 1D obs to model.observation_space.shape (simple Box)"""
+    obs = np.asarray(obs, dtype=np.float32)
+    expected = getattr(model, "observation_space", None)
+    if expected is None:
+        return obs
+    exp_shape = expected.shape
+    if len(exp_shape) != 1:
+        return obs
+    exp_len = int(exp_shape[0])
+    if obs.shape == (exp_len,):
+        return obs
+    out = np.zeros((exp_len,), dtype=np.float32)
+    n = min(obs.shape[0], exp_len)
+    out[:n] = obs[:n]
+    if obs.shape[0] != exp_len:
+        print(f"Warning: adapting obs {obs.shape} -> {(exp_len,)}, padding/truncating")
+    return out
 
 
 def build_workload_pattern(
@@ -232,34 +247,6 @@ def top_q_actions(
     return entries, float(gap)
 
 
-def adapt_obs_to_model(obs: np.ndarray, model: DQN) -> np.ndarray:
-    """Ensure observation matches model.observation_space shape by padding with zeros.
-
-    If model expects a larger 1D observation, the first len(obs) entries are filled
-    and the remainder left as zeros. Returns a 1D array of the expected shape.
-    """
-    obs = np.asarray(obs, dtype=np.float32)
-    expected_shape = getattr(model, "observation_space", None)
-    if expected_shape is None:
-        return obs
-    exp_shape = expected_shape.shape
-    # Only handle simple Box with 1D shape
-    if len(exp_shape) != 1:
-        return obs
-    exp_len = int(exp_shape[0])
-    if obs.shape == (exp_len,):
-        return obs
-    # If obs is shorter, pad; if longer, truncate
-    out = np.zeros((exp_len,), dtype=np.float32)
-    n = min(obs.shape[0], exp_len)
-    out[:n] = obs[:n]
-    if obs.shape[0] != exp_len:
-        print(
-            f"Warning: adapting observation from shape {obs.shape} to model shape {(exp_len,)};"
-        )
-    return out
-
-
 def main():
     load_dotenv(".env.test")
 
@@ -307,9 +294,9 @@ def main():
     replicas = action_to_replicas(start_action, min_replicas, max_replicas)
     prev_obs = np.zeros(7, dtype=np.float32)
 
-    init_cpu = get_env_float("SIM_INIT_CPU", 30.0)
-    init_memory = get_env_float("SIM_INIT_MEMORY", 25.0)
-    init_rt = get_env_float("SIM_INIT_RT", 25.0)
+    init_cpu = get_env_float("SIM_INIT_CPU", 1.0)
+    init_memory = get_env_float("SIM_INIT_MEMORY", 8.0)
+    init_rt = get_env_float("SIM_INIT_RT", 0.0)
 
     cpu, memory, response_time = simulate_metrics(
         load=float(workload_effective[0]),
@@ -349,7 +336,6 @@ def main():
         action_raw, _ = model.predict(obs_for_model, deterministic=True)
         action = int(action_raw)
         action = int(np.clip(action, 0, 99))
-
         entries, q_gap = top_q_actions(model, obs_for_model, top_k=top_k)
         replicas = action_to_replicas(action, min_replicas, max_replicas)
 
