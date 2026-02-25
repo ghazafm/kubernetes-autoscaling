@@ -18,34 +18,25 @@ OBS_LOW = np.zeros(12, dtype=np.float32)
 OBS_HIGH = np.ones(12, dtype=np.float32)
 
 
-def _row_to_fuzzy_obs(row, prefix: str, fuzzy):
-    """Convert a CSV row's obs or next_obs fields into the 12-dim fuzzy vector.
-
-    Handles legacy 7-dim CSVs by reconstructing cpu/memory/response_time/last_action
-    values and passing them through the project's Fuzzy.fuzzify().
-    - If obs_* values look like normalized (<=1.0), scale them to 0..100 for fuzzify.
-    - last_action is reconstructed to 0..99 scale.
-    """
-    # read raw values (may be missing)
+def _row_to_fuzzy_obs(row, prefix: str, fuzzy: Fuzzy) -> np.ndarray:
     raw_action = float(row.get(f"{prefix}_action", 0.0))
     raw_cpu = float(row.get(f"{prefix}_cpu", 0.0))
     raw_mem = float(row.get(f"{prefix}_memory", 0.0))
     raw_rt = float(row.get(f"{prefix}_response_time", 0.0))
 
-    # Normalize/sanity: if values look like proportions (<=1), scale to percentage
     cpu_for_fuzzy = raw_cpu * 100.0 if raw_cpu <= 1.0 else raw_cpu
     mem_for_fuzzy = raw_mem * 100.0 if raw_mem <= 1.0 else raw_mem
-    rt_for_fuzzy = raw_rt * 100.0 if raw_rt <= 1.0 else raw_rt
+    rt_for_fuzzy = raw_rt * 100.0
 
-    # last_action: CSV stores normalized action (0..1) in obs_action for legacy logs
+    # last_action: stored as action/99 in obs, scale back to [0, 99]
     last_action = raw_action * 99.0 if raw_action <= 1.0 else raw_action
 
     fuzzy_state = fuzzy.fuzzify(
         {
             "cpu_usage": float(np.clip(cpu_for_fuzzy, 0.0, 100.0)),
             "memory_usage": float(np.clip(mem_for_fuzzy, 0.0, 100.0)),
-            "response_time": float(np.clip(rt_for_fuzzy, 0.0, 100.0)),
-            "last_action": float(last_action),
+            "response_time": float(np.clip(rt_for_fuzzy, 0.0, 300.0)),  # max 300%
+            "last_action": float(np.clip(last_action, 0.0, 99.0)),
         }
     )
 
@@ -69,10 +60,7 @@ class OfflineDatasetEnv(Env):
         return self._zero_obs.copy(), 0.0, True, False, {}
 
 
-def add_transition_to_buffer(model: DQN, row: pd.Series):
-    # Build fuzzy observations (12-dim). Support legacy 7-dim CSVs by reconstructing
-    # fuzzy features from obs_action, obs_cpu, obs_memory, obs_response_time.
-    fuzzy = Fuzzy()
+def add_transition_to_buffer(model: DQN, row: pd.Series, fuzzy: Fuzzy) -> None:
     obs = _row_to_fuzzy_obs(row, "obs", fuzzy)
     next_obs = _row_to_fuzzy_obs(row, "next_obs", fuzzy)
 
@@ -128,8 +116,11 @@ if __name__ == "__main__":
     )
     callback.on_training_start(locals(), globals())
 
+    # FIX: instantiate Fuzzy ONCE and reuse across all rows
+    fuzzy = Fuzzy()
+
     for _, row in df.iterrows():
-        add_transition_to_buffer(model, row)
+        add_transition_to_buffer(model, row, fuzzy)
     logger.info(f"Replay buffer filled with {len(df):,} transitions")
 
     checkpoint_freq = max(int(model.target_update_interval) * 2, 50000)

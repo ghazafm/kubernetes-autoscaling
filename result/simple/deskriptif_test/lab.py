@@ -27,18 +27,18 @@ def latex_escape(value: str) -> str:
 def format_num(value: float) -> str:
     if pd.isna(value):
         return "-"
-    return f"{float(value):.3f}"
+    return f"{float(value):.1f}"
 
 
 def format_difference(value: float, pct: float) -> str:
     if pd.isna(value):
         return "-"
     if pd.isna(pct):
-        return f"{float(value):.3f} (-)"
+        return f"{float(value):.1f} (-)"
     value_num = float(value)
-    value_str = f"+{value_num:.3f}" if value_num > 0 else f"{value_num:.3f}"
+    value_str = f"+{value_num:.1f}" if value_num > 0 else f"{value_num:.1f}"
     pct_value = float(pct)
-    pct_str = f"+{pct_value:.2f}" if pct_value > 0 else f"{pct_value:.2f}"
+    pct_str = f"+{pct_value:.1f}" if pct_value > 0 else f"{pct_value:.1f}"
     return f"{value_str} ({pct_str}\\%)"
 
 
@@ -287,10 +287,20 @@ def generate_latex_tables() -> None:
 
         safe_metric = metric.replace("/", "_").replace(" ", "_")
         label_metric = metric.replace("/", "-").replace(" ", "-").replace("_", "-")
-        caption_metric = latex_escape(metric)
+        if metric == "response_time":
+            caption_metric = "Waktu Respons"
+        elif metric == "replica":
+            caption_metric = "Jumlah Replika"
+        elif metric == "cpu":
+            caption_metric = "Penggunaan CPU"
+        elif metric == "memory":
+            caption_metric = "Penggunaan Memori"
+        else:
+            caption_metric = latex_escape(metric)
+
         write_latex_table(
             path=TABLES_DIR / f"deskriptif_{safe_metric}.tex",
-            caption=f"Perbandingan gabungan metrik {caption_metric}",
+            caption=f"Perbandingan rata-rata metrik {caption_metric}",
             label=f"tab:deskriptif-{label_metric}",
             columns=["Pod", "HPA", "RL", "Perbedaan"],
             rows=rows,
@@ -310,7 +320,7 @@ def generate_latex_tables() -> None:
 
     write_latex_table(
         path=TABLES_DIR / "deskriptif_all_metrics.tex",
-        caption="Perbandingan gabungan semua metrik",
+        caption="Perbandingan rata-rata semua metrik",
         label="tab:deskriptif-all-metrics",
         columns=["Pod", "HPA", "RL", "Perbedaan"],
         rows=all_rows,

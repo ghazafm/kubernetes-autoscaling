@@ -13,6 +13,7 @@ fi
 # Number of repeats (default 3)
 START=$(( ${START:-1} - 1 ))
 REPEATS=${REPEATS:-3}
+echo "Running test script with START=$(( START + 1 )), REPEATS=$REPEATS, MAX_REPLICAS=$MAX_REPLICAS, REQUESTS_PER_POD=$REQUESTS_PER_POD, TAGS=$TAGS"
 
 OUTDIR="logs/step_${TAGS}_${REQUESTS_PER_POD}_replicas_${MAX_REPLICAS}"
 mkdir -p "$OUTDIR"
