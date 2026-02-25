@@ -84,12 +84,14 @@ class KubernetesEnv(Env):
         self.metrics_endpoints_method = metrics_endpoints_method
         self.logger = logger
         self.action_space = Discrete(100)
-        # Fuzzy state: 4 metrics x 3 membership labels = 12 floats in [0, 1]
+        # Fuzzy state: 7 metrics x 3 membership labels = 21 floats in [0, 1]
+        # metrics: cpu_usage, memory_usage, response_time, last_action,
+        #          delta_cpu, delta_memory, delta_response_time
         self.fuzzy = Fuzzy(logger=logger, max_replicas=max_replicas)
         self.observation_space = Box(
             low=0.0,
             high=1.0,
-            shape=(12,),
+            shape=(21,),
             dtype=np.float32,
         )
 
@@ -102,7 +104,7 @@ class KubernetesEnv(Env):
         self.influxdb = influxdb
         self.max_scaling_retries = max_scaling_retries
 
-        self.observations = np.zeros(12, dtype=np.float32)
+        self.observations = np.zeros(21, dtype=np.float32)
         self.last_reward = 0.0
         self.last_reward_details = {}  # Store reward calculation details
         # Cache raw metric values (0-100 scale) for estimate_metrics fallback
@@ -280,26 +282,42 @@ class KubernetesEnv(Env):
         cpu: float,
         memory: float,
     ) -> np.ndarray:
-        # Cache raw values for estimate_metrics fallback
-        self._last_cpu = cpu
-        self._last_memory = memory
-        self._last_response_time = response_time
+        # Compute deltas from previously cached raw values (percentage points)
+        delta_cpu = float(np.clip(cpu, 0.0, 100.0)) - self._last_cpu
+        delta_memory = float(np.clip(memory, 0.0, 100.0)) - self._last_memory
+        delta_response_time = float(np.clip(response_time, 0.0, 300.0)) - self._last_response_time
+
+        # Update cache with new raw values
+        self._last_cpu = float(np.clip(cpu, 0.0, 100.0))
+        self._last_memory = float(np.clip(memory, 0.0, 100.0))
+        self._last_response_time = float(np.clip(response_time, 0.0, 300.0))
         self._last_action = action
 
         fuzzy_state = self.fuzzy.fuzzify(
             {
-                "cpu_usage": float(np.clip(cpu, 0.0, 100.0)),
-                "memory_usage": float(np.clip(memory, 0.0, 100.0)),
-                "response_time": float(np.clip(response_time, 0.0, 100.0)),
+                "cpu_usage": self._last_cpu,
+                "memory_usage": self._last_memory,
+                "response_time": self._last_response_time,
                 "last_action": float(action),
+                "delta_cpu": delta_cpu,
+                "delta_memory": delta_memory,
+                "delta_response_time": delta_response_time,
             }
         )
 
-        # Flatten in a fixed order: cpu_usage, memory_usage, response_time, last_action
-        # Each metric has 3 labels (low, medium, high) -> 12 values total
-        labels = ["low", "medium", "high"]
-        metrics = ["cpu_usage", "memory_usage", "response_time", "last_action"]
-        flat = [fuzzy_state[m][label] for m in metrics for label in labels]
+        # Flatten in fixed order: 7 metrics x 3 labels = 21 values
+        # cpu_usage, memory_usage, response_time, last_action -> labels: low/medium/high
+        # delta_cpu, delta_memory, delta_response_time -> labels: decreasing/stable/increasing
+        metrics_labels = [
+            ("cpu_usage", ["low", "medium", "high"]),
+            ("memory_usage", ["low", "medium", "high"]),
+            ("response_time", ["low", "medium", "high"]),
+            ("last_action", ["low", "medium", "high"]),
+            ("delta_cpu", ["decreasing", "stable", "increasing"]),
+            ("delta_memory", ["decreasing", "stable", "increasing"]),
+            ("delta_response_time", ["decreasing", "stable", "increasing"]),
+        ]
+        flat = [fuzzy_state[m][label] for m, labels in metrics_labels for label in labels]
 
         return np.array(flat, dtype=np.float32)
 
