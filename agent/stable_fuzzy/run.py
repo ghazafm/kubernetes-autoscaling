@@ -91,9 +91,21 @@ if __name__ == "__main__":
         while not shutdown_event.is_set():
             try:
                 action, _ = model.predict(obs, deterministic=True)
-
+                # observation layout (fuzzy):
+                # indices 0-2: cpu_usage (low, medium, high)
+                # indices 6-8: response_time (low, medium, high)
+                # consider idle when cpu low and response_time low
+                idle = obs[0][0] == 0.0 and obs[0][6] == 0.0
                 action = action[0]
-                action = max(action, last_action - max_scale_down_steps)
+                if action > last_action:
+                    scale_down_attempts = 0
+                else:
+                    scale_down_attempts += 1
+                    if scale_down_attempts >= min_scale_down_attempts or idle:
+                        action = max(action, last_action - max_scale_down_steps)
+                        scale_down_attempts = 0
+                    else:
+                        action = last_action
 
                 obs, rewards, dones, info = vec_env.step([action])
                 last_action = int(action)

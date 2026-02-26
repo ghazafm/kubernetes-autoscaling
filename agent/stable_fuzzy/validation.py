@@ -16,9 +16,6 @@ METRICS_LABELS = [
     ("memory_usage", ["low", "medium", "high"]),
     ("response_time", ["low", "medium", "high"]),
     ("last_action", ["low", "medium", "high"]),
-    ("delta_cpu", ["decreasing", "stable", "increasing"]),
-    ("delta_memory", ["decreasing", "stable", "increasing"]),
-    ("delta_response_time", ["decreasing", "stable", "increasing"]),
 ]
 OBS_DIM = sum(len(labels) for _, labels in METRICS_LABELS)  # = 21
 
@@ -127,29 +124,12 @@ def build_observation(
     mem_norm = mem_frac * 2.0 - 1.0
     rt_norm = rt_frac * 2.0 - 1.0
 
-    # compute deltas in fraction space [0,1] to preserve magnitude
-    last_cpu_frac = (float(last_observation[1]) + 1.0) / 2.0
-    last_mem_frac = (float(last_observation[2]) + 1.0) / 2.0
-    last_rt_frac = (float(last_observation[3]) + 1.0) / 2.0
-
-    delta_cpu_frac = cpu_frac - last_cpu_frac
-    delta_mem_frac = mem_frac - last_mem_frac
-    delta_rt_frac = rt_frac - last_rt_frac
-
-    # deltas are in [-1,1]; clip for numeric safety
-    delta_cpu = float(np.clip(delta_cpu_frac, -1.0, 1.0))
-    delta_mem = float(np.clip(delta_mem_frac, -1.0, 1.0))
-    delta_rt = float(np.clip(delta_rt_frac, -1.0, 1.0))
-
     obs = np.array(
         [
             action_norm,
             cpu_norm,
             mem_norm,
             rt_norm,
-            delta_cpu,
-            delta_mem,
-            delta_rt,
         ],
         dtype=np.float32,
     )
@@ -287,10 +267,6 @@ def build_fuzzy_observation(
 
     Parameters assume cpu/memory in 0..100 and response_time in 0..300 (same as simulate_metrics).
     """
-    # raw deltas in percentage points
-    delta_cpu = float(np.clip(cpu - last_cpu, -100.0, 100.0))
-    delta_memory = float(np.clip(memory - last_memory, -100.0, 100.0))
-    delta_rt = float(np.clip(response_time - last_rt, -300.0, 300.0))
 
     # last_action expected in 0..99
     last_action = float(np.clip(action, 0.0, 99.0))
@@ -301,9 +277,6 @@ def build_fuzzy_observation(
             "memory_usage": float(np.clip(memory, 0.0, 100.0)),
             "response_time": float(np.clip(response_time, 0.0, 300.0)),
             "last_action": last_action,
-            "delta_cpu": delta_cpu,
-            "delta_memory": delta_memory,
-            "delta_response_time": delta_rt,
         }
     )
 

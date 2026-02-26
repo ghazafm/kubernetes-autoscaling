@@ -18,9 +18,6 @@ METRICS_LABELS = [
     ("memory_usage", ["low", "medium", "high"]),
     ("response_time", ["low", "medium", "high"]),
     ("last_action", ["low", "medium", "high"]),
-    ("delta_cpu", ["decreasing", "stable", "increasing"]),
-    ("delta_memory", ["decreasing", "stable", "increasing"]),
-    ("delta_response_time", ["decreasing", "stable", "increasing"]),
 ]
 OBS_DIM = sum(len(labels) for _, labels in METRICS_LABELS)  # = 21
 OBS_LOW = np.zeros(OBS_DIM, dtype=np.float32)
@@ -35,19 +32,11 @@ def _row_to_fuzzy_obs(row: pd.Series, prefix: str, fuzzy: Fuzzy) -> np.ndarray:
     raw_mem = float(row.get(f"{p}_memory", 0.0))
     raw_rt = float(row.get(f"{p}_response_time", 0.0))
 
-    raw_dcpu = float(row.get(f"{p}_cpu_delta", row.get(f"{p}_delta_cpu", 0.0)))
-    raw_dmem = float(row.get(f"{p}_memory_delta", row.get(f"{p}_delta_memory", 0.0)))
-    raw_drt = float(row.get(f"{p}_rt_delta", row.get(f"{p}_delta_response_time", 0.0)))
-
     cpu_for_fuzzy = raw_cpu * 100.0 if raw_cpu <= 1.0 else raw_cpu
     mem_for_fuzzy = raw_mem * 100.0 if raw_mem <= 1.0 else raw_mem
     rt_for_fuzzy = raw_rt * 100.0
 
     last_action = raw_action * 99.0 if raw_action <= 1.0 else raw_action
-
-    dcpu_for_fuzzy = raw_dcpu * 100.0 if abs(raw_dcpu) <= 1.0 else raw_dcpu
-    dmem_for_fuzzy = raw_dmem * 100.0 if abs(raw_dmem) <= 1.0 else raw_dmem
-    drt_for_fuzzy = raw_drt * 100.0 if abs(raw_drt) <= 3.0 else raw_drt
 
     # ── Fuzzify ───────────────────────────────────────────────────────────────
     fuzzy_state = fuzzy.fuzzify(
@@ -56,9 +45,6 @@ def _row_to_fuzzy_obs(row: pd.Series, prefix: str, fuzzy: Fuzzy) -> np.ndarray:
             "memory_usage": float(np.clip(mem_for_fuzzy, 0.0, 100.0)),
             "response_time": float(np.clip(rt_for_fuzzy, 0.0, 300.0)),
             "last_action": float(np.clip(last_action, 0.0, 99.0)),
-            "delta_cpu": float(np.clip(dcpu_for_fuzzy, -100.0, 100.0)),
-            "delta_memory": float(np.clip(dmem_for_fuzzy, -100.0, 100.0)),
-            "delta_response_time": float(np.clip(drt_for_fuzzy, -300.0, 300.0)),
         }
     )
 
