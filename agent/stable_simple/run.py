@@ -72,18 +72,6 @@ if __name__ == "__main__":
     episode = 0
     episode_reward = 0.0
     step_count = 0
-    last_action = 0
-    scale_down_attempts = 0
-    min_scale_down_attempts = int(os.getenv("MIN_SCALE_DOWN_ATTEMPTS", "3"))
-    max_scale_down_steps = int(os.getenv("MAX_SCALE_DOWN_STEPS", "5"))
-    logger.info(f"Minimum scaling down attempts set to: {min_scale_down_attempts}")
-    logger.info(f"Maximum scaling down steps set to: {max_scale_down_steps}")
-    logger.info(
-        f"Minimum scale-down attempts before scaling-down: {min_scale_down_attempts}"
-    )
-    logger.info(
-        f"Maximum scale-down steps when forcing scaling-down: {max_scale_down_steps}"
-    )
 
     logger.info("Starting inference loop...")
 
@@ -95,7 +83,6 @@ if __name__ == "__main__":
                 action = action[0]
 
                 obs, rewards, dones, info = vec_env.step([action])
-                last_action = int(action)
 
                 episode_reward += rewards[0]
                 step_count += 1

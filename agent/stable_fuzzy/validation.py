@@ -5,9 +5,22 @@ import numpy as np
 import torch
 from dotenv import load_dotenv
 from stable_baselines3 import DQN
+from utils import Fuzzy
 
 OBS_LOW = np.array([-1.0] * 7, dtype=np.float32)
 OBS_HIGH = np.array([1.0] * 7, dtype=np.float32)
+
+# Fuzzy metric labels and expected observation dim (matches offline_train.py / environment)
+METRICS_LABELS = [
+    ("cpu_usage", ["low", "medium", "high"]),
+    ("memory_usage", ["low", "medium", "high"]),
+    ("response_time", ["low", "medium", "high"]),
+    ("last_action", ["low", "medium", "high"]),
+    ("delta_cpu", ["decreasing", "stable", "increasing"]),
+    ("delta_memory", ["decreasing", "stable", "increasing"]),
+    ("delta_response_time", ["decreasing", "stable", "increasing"]),
+]
+OBS_DIM = sum(len(labels) for _, labels in METRICS_LABELS)  # = 21
 
 DEFAULT_PHASES = [
     ("warmup", 0.15, 0.25, 0.45),
@@ -260,6 +273,44 @@ def adapt_obs_to_model(obs: np.ndarray, model: DQN) -> np.ndarray:
     return out
 
 
+def build_fuzzy_observation(
+    last_cpu: float,
+    last_memory: float,
+    last_rt: float,
+    action: int,
+    cpu: float,
+    memory: float,
+    response_time: float,
+    fuzzy: Fuzzy,
+) -> np.ndarray:
+    """Create a 21-D fuzzy observation compatible with the trained model.
+
+    Parameters assume cpu/memory in 0..100 and response_time in 0..300 (same as simulate_metrics).
+    """
+    # raw deltas in percentage points
+    delta_cpu = float(np.clip(cpu - last_cpu, -100.0, 100.0))
+    delta_memory = float(np.clip(memory - last_memory, -100.0, 100.0))
+    delta_rt = float(np.clip(response_time - last_rt, -300.0, 300.0))
+
+    # last_action expected in 0..99
+    last_action = float(np.clip(action, 0.0, 99.0))
+
+    fuzzy_state = fuzzy.fuzzify(
+        {
+            "cpu_usage": float(np.clip(cpu, 0.0, 100.0)),
+            "memory_usage": float(np.clip(memory, 0.0, 100.0)),
+            "response_time": float(np.clip(response_time, 0.0, 300.0)),
+            "last_action": last_action,
+            "delta_cpu": delta_cpu,
+            "delta_memory": delta_memory,
+            "delta_response_time": delta_rt,
+        }
+    )
+
+    flat = [fuzzy_state[m][label] for m, labels in METRICS_LABELS for label in labels]
+    return np.array(flat, dtype=np.float32)
+
+
 def main():
     load_dotenv(".env.test")
 
@@ -305,8 +356,8 @@ def main():
     )
 
     replicas = action_to_replicas(start_action, min_replicas, max_replicas)
-    prev_obs = np.zeros(7, dtype=np.float32)
 
+    # Initialize raw metric baselines (used to compute deltas)
     init_cpu = get_env_float("SIM_INIT_CPU", 30.0)
     init_memory = get_env_float("SIM_INIT_MEMORY", 25.0)
     init_rt = get_env_float("SIM_INIT_RT", 25.0)
@@ -320,12 +371,18 @@ def main():
         prev_rt=init_rt,
         rng=rng,
     )
-    obs = build_observation(
-        last_observation=prev_obs,
+
+    # Use fuzzy features (21-D) so validation matches offline training feature pipeline
+    fuzzy = Fuzzy()
+    obs = build_fuzzy_observation(
+        last_cpu=init_cpu,
+        last_memory=init_memory,
+        last_rt=init_rt,
         action=start_action,
         cpu=cpu,
         memory=memory,
         response_time=response_time,
+        fuzzy=fuzzy,
     )
 
     print(f"Model: {model_path}")
@@ -345,7 +402,8 @@ def main():
     phase_log: list[str] = []
 
     for step in range(sim_steps):
-        obs_for_model = adapt_obs_to_model(obs, model)
+        # obs is already in fuzzy 21-D form; pass directly to model
+        obs_for_model = obs
         action_raw, _ = model.predict(obs_for_model, deterministic=True)
         action = int(action_raw)
         action = int(np.clip(action, 0, 99))
@@ -365,12 +423,16 @@ def main():
         )
         reward, _ = calculate_reward(action=action, response_time=next_rt)
 
-        next_obs = build_observation(
-            last_observation=obs,
+        # build next fuzzy observation using raw metric values and deltas
+        next_obs = build_fuzzy_observation(
+            last_cpu=cpu,
+            last_memory=memory,
+            last_rt=response_time,
             action=action,
             cpu=next_cpu,
             memory=next_memory,
             response_time=next_rt,
+            fuzzy=fuzzy,
         )
 
         top_q_text = ", ".join([f"a{a}:{q:.3f}" for a, q in entries])

@@ -285,7 +285,9 @@ class KubernetesEnv(Env):
         # Compute deltas from previously cached raw values (percentage points)
         delta_cpu = float(np.clip(cpu, 0.0, 100.0)) - self._last_cpu
         delta_memory = float(np.clip(memory, 0.0, 100.0)) - self._last_memory
-        delta_response_time = float(np.clip(response_time, 0.0, 300.0)) - self._last_response_time
+        delta_response_time = (
+            float(np.clip(response_time, 0.0, 300.0)) - self._last_response_time
+        )
 
         # Update cache with new raw values
         self._last_cpu = float(np.clip(cpu, 0.0, 100.0))
@@ -317,7 +319,9 @@ class KubernetesEnv(Env):
             ("delta_memory", ["decreasing", "stable", "increasing"]),
             ("delta_response_time", ["decreasing", "stable", "increasing"]),
         ]
-        flat = [fuzzy_state[m][label] for m, labels in metrics_labels for label in labels]
+        flat = [
+            fuzzy_state[m][label] for m, labels in metrics_labels for label in labels
+        ]
 
         return np.array(flat, dtype=np.float32)
 

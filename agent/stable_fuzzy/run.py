@@ -93,6 +93,7 @@ if __name__ == "__main__":
                 action, _ = model.predict(obs, deterministic=True)
 
                 action = action[0]
+                action = max(action, last_action - max_scale_down_steps)
 
                 obs, rewards, dones, info = vec_env.step([action])
                 last_action = int(action)
