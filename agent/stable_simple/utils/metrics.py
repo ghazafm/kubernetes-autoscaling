@@ -1,7 +1,9 @@
 import logging
+import time
 
 import numpy as np
 from prometheus_api_client import PrometheusConnect
+from requests.exceptions import ConnectionError as RequestsConnectionError
 
 
 def _metrics_query(
@@ -135,6 +137,33 @@ def process_metrics(
     )
 
 
+def _query_with_retry(
+    prometheus: PrometheusConnect,
+    query: str,
+    max_retries: int = 5,
+    logger: logging.Logger | None = None,
+):
+    """Run a PromQL query with exponential backoff on ConnectionError."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return prometheus.custom_query(query)
+        except (RequestsConnectionError, Exception) as e:
+            if attempt >= max_retries:
+                if logger:
+                    logger.error(
+                        f"Prometheus query failed after {max_retries} attempts: {e}. "
+                        "Returning empty result."
+                    )
+                return []
+            delay = min(0.5 * (2 ** (attempt - 1)), 10)
+            if logger:
+                logger.warning(
+                    f"Prometheus query attempt {attempt}/{max_retries} failed: {e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+            time.sleep(delay)
+
+
 def get_metrics(
     prometheus: PrometheusConnect,
     namespace: str,
@@ -143,6 +172,8 @@ def get_metrics(
     max_response_time: float,
     quantile: float,
     endpoints_method: list[tuple[str, str]],
+    max_retries: int = 5,
+    logger: logging.Logger | None = None,
 ):
     (
         cpu_query,
@@ -158,14 +189,14 @@ def get_metrics(
         endpoints_method=endpoints_method,
     )
 
-    cpu_usage_results = prometheus.custom_query(cpu_query)
-    memory_usage_results = prometheus.custom_query(memory_query)
-    cpu_limits_results = prometheus.custom_query(cpu_limits_query)
-    memory_limits_results = prometheus.custom_query(memory_limits_query)
+    cpu_usage_results = _query_with_retry(prometheus, cpu_query, max_retries, logger)
+    memory_usage_results = _query_with_retry(prometheus, memory_query, max_retries, logger)
+    cpu_limits_results = _query_with_retry(prometheus, cpu_limits_query, max_retries, logger)
+    memory_limits_results = _query_with_retry(prometheus, memory_limits_query, max_retries, logger)
 
     response_time_results = []
     for query in response_time_query:
-        response = prometheus.custom_query(query)
+        response = _query_with_retry(prometheus, query, max_retries, logger)
         if not response:
             continue
 
@@ -224,10 +255,10 @@ def get_raw_metrics(
         endpoints_method=endpoints_method,
     )
 
-    cpu_usage_results = prometheus.custom_query(cpu_query)
-    memory_usage_results = prometheus.custom_query(memory_query)
-    cpu_limits_results = prometheus.custom_query(cpu_limits_query)
-    memory_limits_results = prometheus.custom_query(memory_limits_query)
+    cpu_usage_results = _query_with_retry(prometheus, cpu_query)
+    memory_usage_results = _query_with_retry(prometheus, memory_query)
+    cpu_limits_results = _query_with_retry(prometheus, cpu_limits_query)
+    memory_limits_results = _query_with_retry(prometheus, memory_limits_query)
 
     # Parse raw values (keep 0.0 when missing)
     cpu_value = float(cpu_usage_results[0]["value"][1]) if cpu_usage_results else 0.0
@@ -241,7 +272,7 @@ def get_raw_metrics(
 
     response_time_results = []
     for query in response_time_query:
-        response = prometheus.custom_query(query)
+        response = _query_with_retry(prometheus, query)
         if not response:
             continue
 

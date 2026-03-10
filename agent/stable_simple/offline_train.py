@@ -107,6 +107,7 @@ if __name__ == "__main__":
     checkpoint_freq = max(int(model.target_update_interval) * 2, 50000)
     train_freq = model.train_freq.frequency
     grad_steps = model.gradient_steps if model.gradient_steps > 0 else train_freq
+    log_freq = max(total_timesteps // 100, 100)
 
     for step in range(1, total_timesteps + 1):
         model.num_timesteps += 1
@@ -132,6 +133,8 @@ if __name__ == "__main__":
             model.save_replay_buffer(
                 checkpoint_dir / f"dqn_autoscaler_replay_buffer_{step}_steps.pkl"
             )
+            model.logger.dump(step=model.num_timesteps)
+        elif step % log_freq == 0:
             model.logger.dump(step=model.num_timesteps)
 
     model.logger.dump(step=model.num_timesteps)

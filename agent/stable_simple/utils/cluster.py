@@ -69,8 +69,12 @@ def wait_for_pods_ready(
         if np.isnan(ready):
             ready = 0.0
 
-        if int(desired) != replica:
-            return False, int(desired), int(ready), time.time() - start_time
+            logger.debug(
+                f"Prometheus desired={int(desired)} != requested={replica}, "
+                "waiting for scrape to catch up..."
+            )
+            time.sleep(1)
+            continue
 
         if ready == desired and desired > 0:
             time.sleep(wait_time)

@@ -11,7 +11,10 @@ CHARTS_DIR = SCRIPT_DIR / "charts"
 TABLES_DIR = SCRIPT_DIR / "tables"
 
 TYPE_LABELS = {"rl": "RL", "hpa": "HPA"}
-TYPE_COLORS = {"rl": "#D55E00", "hpa": "#0072B2"}
+# Neutral color for all lines — differentiation via linestyle + marker only
+LINE_COLOR = "black"
+TYPE_LINESTYLES = {"rl": "-", "hpa": "--"}
+TYPE_MARKERS = {"rl": "o", "hpa": "s"}  # circle vs square
 METRIC_YLABEL = {
     "response_time": "Response Time (ms)",
     "replica": "Replicas",
@@ -108,11 +111,16 @@ def plot_independent(test_type: str, pod: str, metric: str, run: str, csv_path: 
     df = load_series(csv_path)
 
     fig, ax = plt.subplots(figsize=(12, 6))
+    markevery = max(1, len(df) // 10)  # ~20 markers along the line
     ax.plot(
         df["elapsed_min"],
         df["_value"],
-        color=TYPE_COLORS[test_type],
-        linewidth=2,
+        color=LINE_COLOR,
+        linestyle=TYPE_LINESTYLES[test_type],
+        marker=TYPE_MARKERS[test_type],
+        markevery=markevery,
+        markersize=5,
+        linewidth=1.5,
         label=TYPE_LABELS[test_type],
     )
     ax.set_title(f"{TYPE_LABELS[test_type]} | {pod} | {metric} | run {run}")
@@ -134,18 +142,28 @@ def plot_compare(pod: str, metric: str, run: str, rl_csv: Path, hpa_csv: Path) -
     hpa_df = load_series(hpa_csv)
 
     fig, ax = plt.subplots(figsize=(12, 6))
+    rl_markevery = max(1, len(rl_df) // 10)
+    hpa_markevery = max(1, len(hpa_df) // 10)
     ax.plot(
         rl_df["elapsed_min"],
         rl_df["_value"],
-        color=TYPE_COLORS["rl"],
-        linewidth=2,
+        color=LINE_COLOR,
+        linestyle=TYPE_LINESTYLES["rl"],
+        marker=TYPE_MARKERS["rl"],
+        markevery=rl_markevery,
+        markersize=5,
+        linewidth=1.5,
         label=TYPE_LABELS["rl"],
     )
     ax.plot(
         hpa_df["elapsed_min"],
         hpa_df["_value"],
-        color=TYPE_COLORS["hpa"],
-        linewidth=2,
+        color=LINE_COLOR,
+        linestyle=TYPE_LINESTYLES["hpa"],
+        marker=TYPE_MARKERS["hpa"],
+        markevery=hpa_markevery,
+        markersize=5,
+        linewidth=1.5,
         label=TYPE_LABELS["hpa"],
     )
     ax.set_title(f"Compare RL vs HPA | {pod} | {metric} | run {run}")

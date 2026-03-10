@@ -66,6 +66,20 @@ if __name__ == "__main__":
         csv_log_prefix=f"{now}_{note}",
         mode="dev",
     )
+    logger.info(
+        "min_replicas: %d, max_replicas: %d", env.min_replicas, env.max_replicas
+    )
+    logger.info(
+        "namespace: %s, deployment_name: %s", env.namespace, env.deployment_name
+    )
+    logger.info("iteration: %d", env.iteration)
+    logger.info("timeout: %d seconds", env.timeout)
+    logger.info("wait_time: %d seconds", env.wait_time)
+    logger.info("max_response_time: %.2f seconds", env.max_response_time)
+    logger.info("metrics_endpoints_method: %s", metrics_endpoints_method)
+    logger.info("metrics_interval: %d seconds", env.metrics_interval)
+    logger.info("metrics_quantile: %.2f", env.metrics_quantile)
+    logger.info("max_scaling_retries: %d", env.max_scaling_retries)
 
     eval_env = KubernetesEnv(
         min_replicas=int(os.getenv("MIN_REPLICAS")),
@@ -88,6 +102,24 @@ if __name__ == "__main__":
         csv_log_prefix=f"{now}_{note}_eval",
         mode="prod",
     )
+    logger.info(
+        "min_replicas: %d, max_replicas: %d",
+        eval_env.min_replicas,
+        eval_env.max_replicas,
+    )
+    logger.info(
+        "namespace: %s, deployment_name: %s",
+        eval_env.namespace,
+        eval_env.deployment_name,
+    )
+    logger.info("iteration: %d", eval_env.iteration)
+    logger.info("timeout: %d seconds", eval_env.timeout)
+    logger.info("wait_time: %d seconds", eval_env.wait_time)
+    logger.info("max_response_time: %.2f seconds", eval_env.max_response_time)
+    logger.info("metrics_endpoints_method: %s", metrics_endpoints_method)
+    logger.info("metrics_interval: %d seconds", eval_env.metrics_interval)
+    logger.info("metrics_quantile: %.2f", eval_env.metrics_quantile)
+    logger.info("max_scaling_retries: %d", eval_env.max_scaling_retries)
     eval_env = Monitor(eval_env)
 
     # Training configuration
@@ -126,26 +158,42 @@ if __name__ == "__main__":
         except Exception as e:
             logger.warning(f"Could not restore VecNormalize: {e}")
 
-        try:
-            if checkpoints_dir.exists():
-                replay_candidates = list(checkpoints_dir.glob("*replay*"))
-            else:
-                replay_candidates = []
+        clear_replay = os.getenv("CLEAR_REPLAY_BUFFER", "false").lower() == "true"
 
-            if replay_candidates:
-                replay_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                replay_path = replay_candidates[0]
+        if clear_replay:
+            logger.info(
+                "CLEAR_REPLAY_BUFFER=true — skipping replay buffer load. "
+                "Buffer will start empty (reward function has changed)."
+            )
+        else:
+            try:
+                if checkpoints_dir.exists():
+                    replay_candidates = list(checkpoints_dir.glob("*replay*"))
+                else:
+                    replay_candidates = []
 
-                try:
-                    model.load_replay_buffer(str(replay_path))
-                    logger.info(f"Loaded replay buffer from {replay_path}")
-                except AttributeError:
-                    with Path(replay_path).open("rb") as fh:
-                        buf = pickle.load(fh)  # noqa: S301
-                    model.replay_buffer = buf
-                    logger.info(f"Assigned replay buffer from {replay_path}")
-        except Exception as e:
-            logger.warning(f"Could not load replay buffer: {e}")
+                if replay_candidates:
+                    replay_candidates.sort(
+                        key=lambda p: p.stat().st_mtime, reverse=True
+                    )
+                    replay_path = replay_candidates[0]
+
+                    try:
+                        model.load_replay_buffer(str(replay_path))
+                        logger.info(f"Loaded replay buffer from {replay_path}")
+                    except AttributeError:
+                        with Path(replay_path).open("rb") as fh:
+                            buf = pickle.load(fh)  # noqa: S301
+                        model.replay_buffer = buf
+                        logger.info(f"Assigned replay buffer from {replay_path}")
+
+                    logger.warning(
+                        "Replay buffer loaded from a previous run. If the reward "
+                        "function has changed, set CLEAR_REPLAY_BUFFER=true to "
+                        "discard stale transitions."
+                    )
+            except Exception as e:
+                logger.warning(f"Could not load replay buffer: {e}")
 
         old_timesteps = model.num_timesteps
         logger.info(f"Loaded model from timestep: {old_timesteps}")

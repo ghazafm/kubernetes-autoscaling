@@ -118,7 +118,6 @@ class KubernetesEnv(Env):
     def step(self, action: int):
         self.iteration -= 1
         replica = int(action * self.range_replicas // 99 + self.min_replicas)
-        replica = min(replica, self.max_replicas)
 
         prev_obs = self.observations.copy()
 
@@ -168,7 +167,6 @@ class KubernetesEnv(Env):
             "action": action,
             "reward": reward,
             "rt_penalty": self.last_reward_details.get("rt_penalty", 0.0),
-            # Keep legacy log keys, but map them to new reward detail fields.
             "cost_penalty": self.last_reward_details.get("cost", 0.0),
             "total_penalty": 1.0 - self.last_reward_details.get("reward", reward),
             "iteration": self.iteration,
@@ -237,6 +235,7 @@ class KubernetesEnv(Env):
             max_response_time=self.max_response_time,
             quantile=self.metrics_quantile,
             endpoints_method=self.metrics_endpoints_method,
+            logger=self.logger,
         )
         return cpu, memory, response_time
 
