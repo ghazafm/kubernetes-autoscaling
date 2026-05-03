@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -11,10 +13,7 @@ CHARTS_DIR = SCRIPT_DIR / "charts"
 TABLES_DIR = SCRIPT_DIR / "tables"
 
 TYPE_LABELS = {"rl": "RL", "hpa": "HPA"}
-# Neutral color for all lines — differentiation via linestyle + marker only
-LINE_COLOR = "black"
-TYPE_LINESTYLES = {"rl": "-", "hpa": "--"}
-TYPE_MARKERS = {"rl": "o", "hpa": "s"}  # circle vs square
+
 METRIC_YLABEL = {
     "response_time": "Response Time (ms)",
     "replica": "Replicas",
@@ -22,6 +21,63 @@ METRIC_YLABEL = {
     "memory": "Memory (%)",
 }
 
+
+# ---------------------------------------------------------------------------
+# Plot style configuration
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TypeStyle:
+    color: str
+    linestyle: str
+    marker: str
+    linewidth: float
+    markersize: float
+
+
+@dataclass
+class PlotStyle:
+    name: str          # "paper" or "presentation"
+    dpi: int
+    figsize: tuple
+    grid_alpha: float
+    threshold_color: str
+    types: dict        # {"rl": TypeStyle, "hpa": TypeStyle}
+    font_size: Optional[int] = None   # None = matplotlib default
+
+
+PAPER_STYLE = PlotStyle(
+    name="paper",
+    dpi=300,
+    figsize=(12, 6),
+    grid_alpha=0.3,
+    threshold_color="red",
+    types={
+        "rl":  TypeStyle(color="black", linestyle="-",  marker="o", linewidth=1.5, markersize=5),
+        "hpa": TypeStyle(color="black", linestyle="--", marker="s", linewidth=1.5, markersize=5),
+    },
+)
+
+PRESENTATION_STYLE = PlotStyle(
+    name="presentation",
+    dpi=150,
+    figsize=(14, 7),
+    grid_alpha=0.2,
+    threshold_color="#EF4444",   # vivid red
+    font_size=14,
+    types={
+        # Blue for RL, Orange for HPA — colorblind-friendly pair
+        "rl":  TypeStyle(color="#2196F3", linestyle="-",  marker="o", linewidth=2.5, markersize=7),
+        "hpa": TypeStyle(color="#9E9E9E", linestyle="--", marker="s", linewidth=2.5, markersize=7),
+    },
+)
+
+ALL_STYLES = [PAPER_STYLE, PRESENTATION_STYLE]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def latex_escape(value: str) -> str:
     return str(value).replace("_", "\\_")
@@ -80,18 +136,17 @@ def load_series(csv_path: Path) -> pd.DataFrame:
 
 
 def pod_max_replica(pod: str) -> int:
-    # expected format: pod_20
     return int(pod.split("_")[-1])
 
 
-def apply_metric_axis(ax, pod: str, metric: str, *dfs: pd.DataFrame) -> None:
+def apply_metric_axis(ax, pod: str, metric: str, style: PlotStyle, *dfs: pd.DataFrame) -> None:
     if metric in {"cpu", "memory"}:
         ax.set_ylim(0, 100)
     elif metric == "response_time":
         ax.set_ylim(0, 1500)
         ax.axhline(
             y=1000,
-            color="red",
+            color=style.threshold_color,
             linestyle="--",
             linewidth=2,
             label="Threshold 1000 ms",
@@ -107,77 +162,162 @@ def apply_metric_axis(ax, pod: str, metric: str, *dfs: pd.DataFrame) -> None:
             ax.set_ylim(0, int(max_replica) + 1)
 
 
-def plot_independent(test_type: str, pod: str, metric: str, run: str, csv_path: Path) -> None:
-    df = load_series(csv_path)
+def _apply_font(style: PlotStyle) -> None:
+    """Set global font size for presentation readability, or reset for paper."""
+    if style.font_size:
+        plt.rcParams.update({"font.size": style.font_size})
+    else:
+        plt.rcParams.update({"font.size": plt.rcParamsDefault["font.size"]})
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    markevery = max(1, len(df) // 10)  # ~20 markers along the line
+
+# ---------------------------------------------------------------------------
+# Core plot functions — style-aware
+# ---------------------------------------------------------------------------
+
+def plot_independent(
+    test_type: str, pod: str, metric: str, run: str, csv_path: Path, style: PlotStyle
+) -> None:
+    df = load_series(csv_path)
+    ts = style.types[test_type]
+    markevery = max(1, len(df) // 10)
+
+    _apply_font(style)
+    fig, ax = plt.subplots(figsize=style.figsize)
     ax.plot(
         df["elapsed_min"],
         df["_value"],
-        color=LINE_COLOR,
-        linestyle=TYPE_LINESTYLES[test_type],
-        marker=TYPE_MARKERS[test_type],
+        color=ts.color,
+        linestyle=ts.linestyle,
+        marker=ts.marker,
         markevery=markevery,
-        markersize=5,
-        linewidth=1.5,
+        markersize=ts.markersize,
+        linewidth=ts.linewidth,
         label=TYPE_LABELS[test_type],
     )
     ax.set_title(f"{TYPE_LABELS[test_type]} | {pod} | {metric} | run {run}")
     ax.set_xlabel("Elapsed Time (minutes)")
     ax.set_ylabel(METRIC_YLABEL.get(metric, metric))
-    apply_metric_axis(ax, pod, metric, df)
-    ax.grid(alpha=0.3)
+    apply_metric_axis(ax, pod, metric, style, df)
+    ax.grid(alpha=style.grid_alpha)
     ax.legend()
     fig.tight_layout()
 
-    out_path = CHARTS_DIR / test_type / pod / metric / f"{run}.png"
+    out_path = CHARTS_DIR / style.name / test_type / pod / metric / f"{run}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=style.dpi)
     plt.close(fig)
 
 
-def plot_compare(pod: str, metric: str, run: str, rl_csv: Path, hpa_csv: Path) -> None:
+def plot_compare(
+    pod: str, metric: str, run: str, rl_csv: Path, hpa_csv: Path, style: PlotStyle
+) -> None:
     rl_df = load_series(rl_csv)
     hpa_df = load_series(hpa_csv)
+    rl_ts = style.types["rl"]
+    hpa_ts = style.types["hpa"]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
     rl_markevery = max(1, len(rl_df) // 10)
     hpa_markevery = max(1, len(hpa_df) // 10)
+
+    _apply_font(style)
+    fig, ax = plt.subplots(figsize=style.figsize)
     ax.plot(
         rl_df["elapsed_min"],
         rl_df["_value"],
-        color=LINE_COLOR,
-        linestyle=TYPE_LINESTYLES["rl"],
-        marker=TYPE_MARKERS["rl"],
+        color=rl_ts.color,
+        linestyle=rl_ts.linestyle,
+        marker=rl_ts.marker,
         markevery=rl_markevery,
-        markersize=5,
-        linewidth=1.5,
+        markersize=rl_ts.markersize,
+        linewidth=rl_ts.linewidth,
         label=TYPE_LABELS["rl"],
     )
     ax.plot(
         hpa_df["elapsed_min"],
         hpa_df["_value"],
-        color=LINE_COLOR,
-        linestyle=TYPE_LINESTYLES["hpa"],
-        marker=TYPE_MARKERS["hpa"],
+        color=hpa_ts.color,
+        linestyle=hpa_ts.linestyle,
+        marker=hpa_ts.marker,
         markevery=hpa_markevery,
-        markersize=5,
-        linewidth=1.5,
+        markersize=hpa_ts.markersize,
+        linewidth=hpa_ts.linewidth,
         label=TYPE_LABELS["hpa"],
     )
     ax.set_title(f"Compare RL vs HPA | {pod} | {metric} | run {run}")
     ax.set_xlabel("Elapsed Time (minutes)")
     ax.set_ylabel(METRIC_YLABEL.get(metric, metric))
-    apply_metric_axis(ax, pod, metric, rl_df, hpa_df)
-    ax.grid(alpha=0.3)
+    apply_metric_axis(ax, pod, metric, style, rl_df, hpa_df)
+    ax.grid(alpha=style.grid_alpha)
     ax.legend()
     fig.tight_layout()
 
-    out_path = CHARTS_DIR / "compare" / pod / metric / f"{run}.png"
+    out_path = CHARTS_DIR / style.name / "compare" / pod / metric / f"{run}.png"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=300)
+    fig.savefig(out_path, dpi=style.dpi)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# Generation orchestrators
+# ---------------------------------------------------------------------------
+
+def generate_independent_charts() -> None:
+    for type_dir in sorted(DATA_DIR.glob("*")):
+        if not type_dir.is_dir():
+            continue
+        test_type = type_dir.name
+        if test_type not in TYPE_LABELS:
+            continue
+
+        for pod_dir in sorted(type_dir.glob("*")):
+            if not pod_dir.is_dir():
+                continue
+            pod = pod_dir.name
+
+            for metric_dir in sorted(pod_dir.glob("*")):
+                if not metric_dir.is_dir():
+                    continue
+                metric = metric_dir.name
+
+                for csv_file in sorted(metric_dir.glob("*.csv")):
+                    run = csv_file.stem
+                    for style in ALL_STYLES:
+                        plot_independent(test_type, pod, metric, run, csv_file, style)
+
+
+def generate_compare_charts() -> None:
+    rl_root = DATA_DIR / "rl"
+    hpa_root = DATA_DIR / "hpa"
+
+    for rl_pod_dir in sorted(rl_root.glob("*")):
+        if not rl_pod_dir.is_dir():
+            continue
+
+        pod = rl_pod_dir.name
+        hpa_pod_dir = hpa_root / pod
+        if not hpa_pod_dir.is_dir():
+            continue
+
+        rl_metrics = {p.name for p in rl_pod_dir.glob("*") if p.is_dir()}
+        hpa_metrics = {p.name for p in hpa_pod_dir.glob("*") if p.is_dir()}
+
+        for metric in sorted(rl_metrics & hpa_metrics):
+            rl_metric_dir = rl_pod_dir / metric
+            hpa_metric_dir = hpa_pod_dir / metric
+
+            rl_runs = {p.stem for p in rl_metric_dir.glob("*.csv")}
+            hpa_runs = {p.stem for p in hpa_metric_dir.glob("*.csv")}
+
+            for run in sorted(rl_runs & hpa_runs, key=lambda x: int(x)):
+                for style in ALL_STYLES:
+                    plot_compare(
+                        pod=pod,
+                        metric=metric,
+                        run=run,
+                        rl_csv=rl_metric_dir / f"{run}.csv",
+                        hpa_csv=hpa_metric_dir / f"{run}.csv",
+                        style=style,
+                    )
 
 
 def collect_merged_means() -> pd.DataFrame:
@@ -208,72 +348,9 @@ def collect_merged_means() -> pd.DataFrame:
                     continue
 
                 merged = pd.concat(merged_values, ignore_index=True)
-                rows.append(
-                    {
-                        "type": test_type,
-                        "pod": pod,
-                        "metric": metric,
-                        "mean": merged.mean(),
-                    }
-                )
+                rows.append({"type": test_type, "pod": pod, "metric": metric, "mean": merged.mean()})
 
     return pd.DataFrame(rows)
-
-
-def generate_independent_charts() -> None:
-    for type_dir in sorted(DATA_DIR.glob("*")):
-        if not type_dir.is_dir():
-            continue
-        test_type = type_dir.name
-        if test_type not in TYPE_LABELS:
-            continue
-
-        for pod_dir in sorted(type_dir.glob("*")):
-            if not pod_dir.is_dir():
-                continue
-            pod = pod_dir.name
-
-            for metric_dir in sorted(pod_dir.glob("*")):
-                if not metric_dir.is_dir():
-                    continue
-                metric = metric_dir.name
-
-                for csv_file in sorted(metric_dir.glob("*.csv")):
-                    run = csv_file.stem
-                    plot_independent(test_type, pod, metric, run, csv_file)
-
-
-def generate_compare_charts() -> None:
-    rl_root = DATA_DIR / "rl"
-    hpa_root = DATA_DIR / "hpa"
-
-    for rl_pod_dir in sorted(rl_root.glob("*")):
-        if not rl_pod_dir.is_dir():
-            continue
-
-        pod = rl_pod_dir.name
-        hpa_pod_dir = hpa_root / pod
-        if not hpa_pod_dir.is_dir():
-            continue
-
-        rl_metrics = {p.name for p in rl_pod_dir.glob("*") if p.is_dir()}
-        hpa_metrics = {p.name for p in hpa_pod_dir.glob("*") if p.is_dir()}
-
-        for metric in sorted(rl_metrics & hpa_metrics):
-            rl_metric_dir = rl_pod_dir / metric
-            hpa_metric_dir = hpa_pod_dir / metric
-
-            rl_runs = {p.stem for p in rl_metric_dir.glob("*.csv")}
-            hpa_runs = {p.stem for p in hpa_metric_dir.glob("*.csv")}
-
-            for run in sorted(rl_runs & hpa_runs, key=lambda x: int(x)):
-                plot_compare(
-                    pod=pod,
-                    metric=metric,
-                    run=run,
-                    rl_csv=rl_metric_dir / f"{run}.csv",
-                    hpa_csv=hpa_metric_dir / f"{run}.csv",
-                )
 
 
 def generate_latex_tables() -> None:
@@ -283,38 +360,30 @@ def generate_latex_tables() -> None:
         .reset_index()
         .sort_values(["metric", "pod"])
     )
-    pivot["hpa"] = pivot["hpa"]
-    pivot["rl"] = pivot["rl"]
     pivot["difference"] = pivot["rl"] - pivot["hpa"]
     pivot["difference_pct"] = ((pivot["rl"] - pivot["hpa"]) / pivot["hpa"]) * 100
     pivot.loc[pivot["hpa"] == 0, "difference_pct"] = pd.NA
 
-    # One table per metric: columns Pod, HPA, RL, Difference
     for metric in sorted(pivot["metric"].unique()):
         metric_df = pivot[pivot["metric"] == metric].sort_values("pod")
         rows = []
         for _, r in metric_df.iterrows():
-            rows.append(
-                [
-                    latex_escape(r["pod"]),
-                    format_num(r["hpa"]),
-                    format_num(r["rl"]),
-                    format_difference(r["difference"], r["difference_pct"]),
-                ]
-            )
+            rows.append([
+                latex_escape(r["pod"]),
+                format_num(r["hpa"]),
+                format_num(r["rl"]),
+                format_difference(r["difference"], r["difference_pct"]),
+            ])
 
         safe_metric = metric.replace("/", "_").replace(" ", "_")
         label_metric = metric.replace("/", "-").replace(" ", "-").replace("_", "-")
-        if metric == "response_time":
-            caption_metric = "Waktu Respons"
-        elif metric == "replica":
-            caption_metric = "Jumlah Replika"
-        elif metric == "cpu":
-            caption_metric = "Penggunaan CPU"
-        elif metric == "memory":
-            caption_metric = "Penggunaan Memori"
-        else:
-            caption_metric = latex_escape(metric)
+        caption_map = {
+            "response_time": "Waktu Respons",
+            "replica": "Jumlah Replika",
+            "cpu": "Penggunaan CPU",
+            "memory": "Penggunaan Memori",
+        }
+        caption_metric = caption_map.get(metric, latex_escape(metric))
 
         write_latex_table(
             path=TABLES_DIR / f"deskriptif_{safe_metric}.tex",
@@ -324,17 +393,14 @@ def generate_latex_tables() -> None:
             rows=rows,
         )
 
-    # One table for all metrics: columns stay Pod, HPA, RL, Difference.
     all_rows = []
     for _, r in pivot.iterrows():
-        all_rows.append(
-            [
-                f"{latex_escape(r['pod'])} ({latex_escape(r['metric'])})",
-                format_num(r["hpa"]),
-                format_num(r["rl"]),
-                format_difference(r["difference"], r["difference_pct"]),
-            ]
-        )
+        all_rows.append([
+            f"{latex_escape(r['pod'])} ({latex_escape(r['metric'])})",
+            format_num(r["hpa"]),
+            format_num(r["rl"]),
+            format_difference(r["difference"], r["difference_pct"]),
+        ])
 
     write_latex_table(
         path=TABLES_DIR / "deskriptif_all_metrics.tex",
