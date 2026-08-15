@@ -1,0 +1,2 @@
+timestamp,episode,step,obs_action,obs_cpu,obs_memory,obs_response_time,obs_cpu_delta,obs_memory_delta,obs_rt_delta,action,reward,next_obs_action,next_obs_cpu,next_obs_memory,next_obs_response_time,next_obs_cpu_delta,next_obs_memory_delta,next_obs_rt_delta,terminated,truncated,cpu,memory,response_time,replicas
+2026-02-02T23:53:23.958575,1,1,0.39393940567970276,1.0,1.0,0.8340939283370972,0.0,0.0,0.0,8,-0.5354504870129873,0.08080808073282242,1.0,1.0,1.2283604145050049,0.0,0.0,0.3942664861679077,False,False,499.44352267948136,203.94104003906253,122.83603896103898,2
