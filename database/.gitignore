@@ -1,0 +1,17 @@
+# InfluxDB credentials and Docker secrets
+/secrets/
+
+# Local environment files
+/.env
+/.env.*
+!/.env.example
+
+# Local database directories if named volumes are changed to bind mounts
+/influxdb2-data/
+/influxdb2-config/
+
+# Backups and temporary files
+/backups/
+*.backup
+*.bak
+*.log
