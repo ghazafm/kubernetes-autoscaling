@@ -29,15 +29,17 @@ const vu = (v) => Math.min(Math.max(1, Math.ceil(v)), VU_SPIKE);
 // Test configuration - Dynamic VU based on MAX_REPLICAS
 export const options = {
   stages: [
-    { duration: '30s', target: vu(VU_LOW * 0.5) },  // Ramp up slowly
-    { duration: '1m', target: vu(VU_LOW * 0.5) },   // Stay at half low
-    { duration: '30s', target: VU_LOW },       // Ramp up to low
-    { duration: '1m', target: VU_LOW },        // Stay at low
-    { duration: '30s', target: 0 },            // Ramp down to 0 users
+    { duration: '30s', target: vu(VU_LOW * 0.5) },
+    { duration: '1m',  target: VU_LOW },
+    { duration: '30s', target: VU_MEDIUM },
+    { duration: '1m',  target: VU_MEDIUM },
+    { duration: '30s', target: VU_SPIKE },
+    { duration: '1m',  target: VU_SPIKE },
+    { duration: '30s', target: 0 },
   ],
   thresholds: {
-    http_req_duration: ['p(95)<5000'], // 95% of requests should be below 5s
-    errors: ['rate<0.1'],               // Error rate should be below 10%
+    http_req_duration: ['p(95)<5000'],
+    errors: ['rate<0.1'],
   },
 };
 

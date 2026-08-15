@@ -150,7 +150,7 @@ run_test() {
     fi
 
     # place the --address flag before the subcommand 'run' so it's applied to k6 itself
-    local k6_cmd="k6 --address \"${k6_address}\" run --env BASE_URL=\"$BASE_URL\""
+    local k6_cmd="./k6 --address \"${k6_address}\" run --env BASE_URL=\"$BASE_URL\""
 
     if [ -n "$DURATION_MULTIPLIER" ]; then
         k6_cmd="$k6_cmd --env DURATION_MULTIPLIER=\"$DURATION_MULTIPLIER\""
@@ -179,7 +179,7 @@ run_test() {
         echo -e "${BLUE}Sending k6 metrics to InfluxDB v1 at ${INFLUXDB_URL}/${INFLUXDB_DB}${NC}"
         k6_cmd="$k6_cmd --out influxdb=${INFLUXDB_URL}/${INFLUXDB_DB}"
     elif [ "${INFLUXDB_V2:-}" = "true" ] || [ -n "${K6_INFLUXDB_TOKEN:-}" ] || [ -n "${INFLUXDB_TOKEN:-}" ]; then
-        echo ${INFLUXDB_TOKEN}
+        # echo ${INFLUXDB_TOKEN}
         # Prefer explicit K6_ vars if present, otherwise fall back to INFLUXDB_* aliases
         export K6_INFLUXDB_ADDR=${K6_INFLUXDB_ADDR:-${INFLUXDB_URL:-http://localhost:8086}}
         export K6_INFLUXDB_BUCKET=${K6_INFLUXDB_BUCKET:-${INFLUXDB_BUCKET:-}}
@@ -226,7 +226,7 @@ run_test() {
     # Run k6 but don't let 'set -e' abort the whole script when thresholds fail.
     # Temporarily disable errexit, capture the exit code, then re-enable errexit.
     set +e
-    eval $k6_cmd
+    eval "$k6_cmd"
     local exit_code=$?
     set -e
 

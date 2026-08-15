@@ -45,9 +45,9 @@ range_replicas = max(1, max_replicas - min_replicas)
 influxdb = InfluxDB(
     logger=logger,
     url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
-    token=os.getenv("INFLUXDB_TOKEN", "my-token"),
-    org=os.getenv("INFLUXDB_ORG", "my-org"),
-    bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
+    token=os.getenv("INFLUXDB_TOKEN", ""),
+    org=os.getenv("INFLUXDB_ORG", ""),
+    bucket=os.getenv("INFLUXDB_BUCKET", ""),
 )
 prometheus = PrometheusConnect(
     url=prometheus_url,

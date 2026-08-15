@@ -1,22 +1,78 @@
-name: "influxdb"
+name: influxdb3
 
 services:
-  influxdb2:
-    image: influxdb:2.7
-    container_name: influxdb2
-    ports:
-      - "8086:8086"
+  influxdb3-volume-init:
+    image: influxdb:3.11-core
+    user: "0:0"
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - chown -R 1500:1500 /var/lib/influxdb3/data /var/lib/influxdb3/plugins /db
+    restart: "no"
     volumes:
-      - influxdb2-data:/var/lib/influxdb2
-    env_file:
-      - .env
+      - influxdb3-data:/var/lib/influxdb3/data
+      - influxdb3-plugins:/var/lib/influxdb3/plugins
+      - influxdb3-explorer-data:/db
+
+  influxdb3-core:
+    image: influxdb:3.11-core
+    container_name: influxdb3-core
+    restart: unless-stopped
+    depends_on:
+      influxdb3-volume-init:
+        condition: service_completed_successfully
+    ports:
+      - "8181:8181"
+    command:
+      - influxdb3
+      - serve
+      - --node-id=node0
+      - --object-store=file
+      - --data-dir=/var/lib/influxdb3/data
+      - --plugin-dir=/var/lib/influxdb3/plugins
+      - --admin-token-file=/run/secrets/admin-token
+      - --disable-authz=health
+    secrets:
+      - admin-token
+    volumes:
+      - influxdb3-data:/var/lib/influxdb3/data
+      - influxdb3-plugins:/var/lib/influxdb3/plugins
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - http://localhost:8181/health
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  influxdb3-explorer:
+    image: influxdata/influxdb3-ui:1.9.0
+    container_name: influxdb3-explorer
+    command:
+      - --mode=admin
+    restart: unless-stopped
+    depends_on:
+      influxdb3-volume-init:
+        condition: service_completed_successfully
+      influxdb3-core:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8888:8080"
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=${INFLUX_INIT_MODE}
-      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUX_USERNAME}
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUX_PASSWORD}
-      - DOCKER_INFLUXDB_INIT_ORG=${INFLUX_ORG}
-      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUX_BUCKET}
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUX_TOKEN}
+      SESSION_SECRET_KEY: "${EXPLORER_SESSION_SECRET_KEY:?Set EXPLORER_SESSION_SECRET_KEY in .env}"
+    volumes:
+      - influxdb3-explorer-data:/db
+
+secrets:
+  admin-token:
+    file: ./secrets/admin-token.json
 
 volumes:
-  influxdb2-data:
+  influxdb3-data:
+  influxdb3-plugins:
+  influxdb3-explorer-data:

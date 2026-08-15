@@ -2,7 +2,6 @@ import ast
 import os
 import time
 
-from database import InfluxDB
 from dotenv import load_dotenv
 from environment import (
     KubernetesEnv,
@@ -12,6 +11,8 @@ from utils import (
     log_verbose_details,
     setup_logger,
 )
+
+from database import InfluxDB
 
 
 def _env_int(key: str, default=None):

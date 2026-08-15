@@ -190,9 +190,15 @@ def get_metrics(
     )
 
     cpu_usage_results = _query_with_retry(prometheus, cpu_query, max_retries, logger)
-    memory_usage_results = _query_with_retry(prometheus, memory_query, max_retries, logger)
-    cpu_limits_results = _query_with_retry(prometheus, cpu_limits_query, max_retries, logger)
-    memory_limits_results = _query_with_retry(prometheus, memory_limits_query, max_retries, logger)
+    memory_usage_results = _query_with_retry(
+        prometheus, memory_query, max_retries, logger
+    )
+    cpu_limits_results = _query_with_retry(
+        prometheus, cpu_limits_query, max_retries, logger
+    )
+    memory_limits_results = _query_with_retry(
+        prometheus, memory_limits_query, max_retries, logger
+    )
 
     response_time_results = []
     for query in response_time_query:

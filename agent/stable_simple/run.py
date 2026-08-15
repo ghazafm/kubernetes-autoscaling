@@ -34,9 +34,9 @@ if __name__ == "__main__":
     influxdb = InfluxDB(
         logger=logger,
         url=os.getenv("INFLUXDB_URL", "http://localhost:8086"),
-        token=os.getenv("INFLUXDB_TOKEN", "my-token"),
-        org=os.getenv("INFLUXDB_ORG", "my-org"),
-        bucket=os.getenv("INFLUXDB_BUCKET", "my-bucket"),
+        token=os.getenv("INFLUXDB_TOKEN", ""),
+        org=os.getenv("INFLUXDB_ORG", ""),
+        bucket=os.getenv("INFLUXDB_BUCKET", ""),
     )
     metrics_endpoints_method = ast.literal_eval(os.getenv("METRICS_ENDPOINTS_METHOD"))
 
